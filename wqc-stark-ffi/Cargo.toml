@@ -1,0 +1,11 @@
+[package]
+name = "wqc-stark-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "wqc_stark_verifier"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+wqc-stark-core = { path = "../wqc-stark-core" }
