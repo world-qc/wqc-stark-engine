@@ -15,7 +15,7 @@ pub struct StarkContext<'a> {
 /// Ultimate AIR Row supporting ALL universal quantum gates (X, Y, Z, H, S, T, CNOT, CZ, CCNOT, RX, RY, RZ)
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuantumAirRow {
-    pub step: Mersenne31,
+    pub gate_type: Mersenne31,
     // Gate Selectors
     pub sel_x: Mersenne31,
     pub sel_y: Mersenne31,
@@ -63,7 +63,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
     let chunks = execution_trace.chunks_exact(8);
     let num_rows = chunks.len();
 
-    for (step_idx, chunk) in chunks.enumerate() {
+    for (_step_idx, chunk) in chunks.enumerate() {
         let gate_type = chunk[0] as u32;
 
         // Absolute gate selector assignment mapping
@@ -79,7 +79,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
             _ => (Mersenne31::zero(), Mersenne31::zero(), Mersenne31::zero(), Mersenne31::zero(), Mersenne31::zero(), Mersenne31::zero(), Mersenne31::zero(), Mersenne31::zero()),
         };
 
-        flat_m31_data.push(Mersenne31::from_canonical_u32(step_idx as u32));
+        flat_m31_data.push(Mersenne31::from_canonical_u32(gate_type));
         flat_m31_data.push(sel_x);
         flat_m31_data.push(sel_y);
         flat_m31_data.push(sel_z);
@@ -108,12 +108,12 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
         let next_row: Vec<Mersenne31> = trace_matrix.row(r + 1).collect();
 
         let curr = QuantumAirRow {
-            step: curr_row[0], sel_x: curr_row[1], sel_y: curr_row[2], sel_z: curr_row[3], sel_h: curr_row[4], sel_s: curr_row[5], sel_t: curr_row[6],
+            gate_type: curr_row[0], sel_x: curr_row[1], sel_y: curr_row[2], sel_z: curr_row[3], sel_h: curr_row[4], sel_s: curr_row[5], sel_t: curr_row[6],
             sel_ctrl: curr_row[7], sel_rot: curr_row[8], ctrl_active: curr_row[9], p_cos: curr_row[10], p_sin: curr_row[11],
             v0_re: curr_row[12], v0_im: curr_row[13], v1_re: curr_row[14], v1_im: curr_row[15],
         };
         let next = QuantumAirRow {
-            step: next_row[0], sel_x: next_row[1], sel_y: next_row[2], sel_z: next_row[3], sel_h: next_row[4], sel_s: next_row[5], sel_t: next_row[6],
+            gate_type: next_row[0], sel_x: next_row[1], sel_y: next_row[2], sel_z: next_row[3], sel_h: next_row[4], sel_s: next_row[5], sel_t: next_row[6],
             sel_ctrl: next_row[7], sel_rot: next_row[8], ctrl_active: next_row[9], p_cos: next_row[10], p_sin: next_row[11],
             v0_re: next_row[12], v0_im: next_row[13], v1_re: next_row[14], v1_im: next_row[15],
         };
@@ -144,7 +144,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
 
         // --- 3. Gate::Z Constraints ---
         let z_3 = next.v1_im + curr.v1_im;
-        let z_2 = next.v1_re - curr.v1_re;
+        let z_2 = next.v1_re + curr.v1_re;
         let cost_z = base_v0_cost + z_2 * z_2 + z_3 * z_3;
 
         // --- 4. Gate::H Constraints ---
@@ -165,21 +165,32 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
         let cost_t = base_v0_cost + t_2 * t_2 + t_3 * t_3;
 
         // --- 7. Controlled Gates ---
-        let ctrl_x_0 = next.v0_re - curr.v1_re;
-        let ctrl_x_1 = next.v0_im - curr.v1_im;
-        let ctrl_x_2 = next.v1_re - curr.v0_re;
-        let ctrl_x_3 = next.v1_im - curr.v0_im;
-        let target_active_cost = ctrl_x_0 * ctrl_x_0 + ctrl_x_1 * ctrl_x_1 + ctrl_x_2 * ctrl_x_2 + ctrl_x_3 * ctrl_x_3;
-
-        let c_active = curr.ctrl_active;
-        let c_inactive = Mersenne31::one() - curr.ctrl_active;
-        let cost_ctrl = (c_active * target_active_cost) + (c_inactive * base_identity_cost);
+        let cost_ctrl = (curr.ctrl_active * cost_x) + ((Mersenne31::one() - curr.ctrl_active) * base_identity_cost);
 
         // --- 8. Arbitrary Rotation Gates ---
-        let rot_0 = (next.v0_re * fixed_point_scale) - (curr.v0_re * curr.p_cos - curr.v1_re * curr.p_sin);
-        let rot_1 = (next.v0_im * fixed_point_scale) - (curr.v0_im * curr.p_cos - curr.v1_im * curr.p_sin);
-        let rot_2 = (next.v1_re * fixed_point_scale) - (curr.v1_re * curr.p_cos + curr.v0_re * curr.p_sin);
-        let rot_3 = (next.v1_im * fixed_point_scale) - (curr.v1_im * curr.p_cos + curr.v0_im * curr.p_sin);
+        let gate_type_num = curr.gate_type.as_canonical_u32();
+        let (rot_0, rot_1, rot_2, rot_3) = if gate_type_num == 10 {
+            // RX Constraints
+            let r0 = (next.v0_re * fixed_point_scale) - (curr.v0_re * curr.p_cos + curr.v1_im * curr.p_sin);
+            let r1 = (next.v0_im * fixed_point_scale) - (curr.v0_im * curr.p_cos - curr.v1_re * curr.p_sin);
+            let r2 = (next.v1_re * fixed_point_scale) - (curr.v1_re * curr.p_cos + curr.v0_im * curr.p_sin);
+            let r3 = (next.v1_im * fixed_point_scale) - (curr.v1_im * curr.p_cos - curr.v0_re * curr.p_sin);
+            (r0, r1, r2, r3)
+        } else if gate_type_num == 12 {
+            // RZ Constraints
+            let r0 = (next.v0_re * fixed_point_scale) - (curr.v0_re * curr.p_cos + curr.v0_im * curr.p_sin);
+            let r1 = (next.v0_im * fixed_point_scale) - (curr.v0_im * curr.p_cos - curr.v0_re * curr.p_sin);
+            let r2 = (next.v1_re * fixed_point_scale) - (curr.v1_re * curr.p_cos - curr.v1_im * curr.p_sin);
+            let r3 = (next.v1_im * fixed_point_scale) - (curr.v1_im * curr.p_cos + curr.v1_re * curr.p_sin);
+            (r0, r1, r2, r3)
+        } else {
+            // RY Constraints (Default)
+            let r0 = (next.v0_re * fixed_point_scale) - (curr.v0_re * curr.p_cos - curr.v1_re * curr.p_sin);
+            let r1 = (next.v0_im * fixed_point_scale) - (curr.v0_im * curr.p_cos - curr.v1_im * curr.p_sin);
+            let r2 = (next.v1_re * fixed_point_scale) - (curr.v1_re * curr.p_cos + curr.v0_re * curr.p_sin);
+            let r3 = (next.v1_im * fixed_point_scale) - (curr.v1_im * curr.p_cos + curr.v0_im * curr.p_sin);
+            (r0, r1, r2, r3)
+        };
         let cost_rot = rot_0 * rot_0 + rot_1 * rot_1 + rot_2 * rot_2 + rot_3 * rot_3;
 
         // Aggregation of all selectors into the commitment ring
