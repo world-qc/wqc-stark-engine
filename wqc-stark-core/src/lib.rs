@@ -158,12 +158,34 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
         let cost_t = (next.v0_re - curr.v0_re).square() + (next.v0_im - curr.v0_im).square()
                    + (t_2 * scale_inverse).square() + (t_3 * scale_inverse).square();
 
-        // 7. Controlled Gates (CNOT/CZ): Conditional transition check using a single control bit
-        let cost_ctrl = (curr.ctrl_active * cost_x) + ((Mersenne31::one() - curr.ctrl_active) * base_identity_cost);
+        // 7. Controlled Gates (CNOT/CZ): Smooth algebraic target interpolation
+        // The subsequent real state MUST blend linearly based on the exact control token.
+        // next_v0 = (1 - c_active) * curr_v0 + c_active * curr_v1
+        // next_v1 = (1 - c_active) * curr_v1 + c_active * curr_v0
+        let ctrl_active = curr.ctrl_active;
+        let ctrl_inactive = Mersenne31::one() - ctrl_active;
 
-        // 8. CCNOT (Toffoli): Dual-control transition validation using algebraic product logic
+        let expected_c_v0_re = (ctrl_inactive * curr.v0_re) + (ctrl_active * curr.v1_re);
+        let expected_c_v0_im = (ctrl_inactive * curr.v0_im) + (ctrl_active * curr.v1_im);
+        let expected_c_v1_re = (ctrl_inactive * curr.v1_re) + (ctrl_active * curr.v0_re);
+        let expected_c_v1_im = (ctrl_inactive * curr.v1_im) + (ctrl_active * curr.v0_im);
+
+        let cost_ctrl = (next.v0_re - expected_c_v0_re).square() + (next.v0_im - expected_c_v0_im).square()
+                      + (next.v1_re - expected_c_v1_re).square() + (next.v1_im - expected_c_v1_im).square();
+
+        // 8. CCNOT (Toffoli): Dual-control seamless interpolation
+        // Joint activation is the product of both fields. The transition maps smoothly
+        // between identity and full bit-flip based strictly on `cc_active`.
         let cc_active = curr.ctrl_active * curr.ctrl_active_2;
-        let cost_ccnot = (cc_active * cost_x) + ((Mersenne31::one() - cc_active) * base_identity_cost);
+        let cc_inactive = Mersenne31::one() - cc_active;
+
+        let expected_cc_v0_re = (cc_inactive * curr.v0_re) + (cc_active * curr.v1_re);
+        let expected_cc_v0_im = (cc_inactive * curr.v0_im) + (cc_active * curr.v1_im);
+        let expected_cc_v1_re = (cc_inactive * curr.v1_re) + (cc_active * curr.v0_re);
+        let expected_cc_v1_im = (cc_inactive * curr.v1_im) + (cc_active * curr.v0_im);
+
+        let cost_ccnot = (next.v0_re - expected_cc_v0_re).square() + (next.v0_im - expected_cc_v0_im).square()
+                       + (next.v1_re - expected_cc_v1_re).square() + (next.v1_im - expected_cc_v1_im).square();
 
         // 9. Arbitrary Rotation Gates (RX, RY, RZ): High-precision trigonometric state transitions
         let rot_0 = (next.v0_re * scale_factor) - (curr.v0_re * curr.p_cos - curr.v1_re * curr.p_sin);
