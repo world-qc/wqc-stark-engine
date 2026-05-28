@@ -15,23 +15,30 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
     proof_bytes: *const u8,
     proof_len: u32,
 ) -> i32 {
+    eprintln!("[Rust FFI] ENTERED! pointers -> circuit: {:?}, sub_task: {:?}, proof: {:?}, len: {}",
+        circuit_id, sub_task_id, proof_bytes, proof_len);
+
     // Prevent Rust panics from crossing the FFI boundary into Go memory space.
     let result = catch_unwind(|| {
         if circuit_id.is_null() || sub_task_id.is_null() || node_id.is_null() || output_hash.is_null() || proof_bytes.is_null() {
+            eprintln!("[Rust FFI] something is wrong");
             return 0;
         }
 
-        // Convert raw C-strings securely into safe Rust string slices
-        let c_circuit = CStr::from_ptr(circuit_id).to_string_lossy();
-        let c_sub_task = CStr::from_ptr(sub_task_id).to_string_lossy();
-        let c_node = CStr::from_ptr(node_id).to_string_lossy();
-        let c_output = CStr::from_ptr(output_hash).to_string_lossy();
+        // Extract safe &str (immutable references) directly from C pointers.
+        let c_circuit = CStr::from_ptr(circuit_id).to_str().unwrap_or("");
+        let c_sub_task = CStr::from_ptr(sub_task_id).to_str().unwrap_or("");
+        let c_node = CStr::from_ptr(node_id).to_str().unwrap_or("");
+        let c_output = CStr::from_ptr(output_hash).to_str().unwrap_or("");
+
+        eprintln!("[Rust FFI] sub_task_id from Go: '{}' (len: {})", c_sub_task, c_sub_task.len());
+        eprintln!("[Rust FFI] proof_bytes len: {}", proof_len);
 
         let context = StarkContext {
-            circuit_id: &c_circuit,
-            sub_task_id: &c_sub_task,
-            node_id: &c_node,
-            output_hash: &c_output,
+            circuit_id: c_circuit,
+            sub_task_id: c_sub_task,
+            node_id: c_node,
+            output_hash: c_output,
         };
 
         // Safely map the raw byte array pointer passed from Go memory space
