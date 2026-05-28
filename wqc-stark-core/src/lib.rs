@@ -107,7 +107,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
         flat_m31_data.push(f64_to_m31(chunk[8])); // v1_im
     }
 
-    let width = 17; // Matrix footprint expanded to match the new struct field allocation
+    let width = 18; // Matrix footprint expanded to match the new struct field allocation
     let trace_matrix = RowMajorMatrix::new(flat_m31_data, width);
     let matrix_height = trace_matrix.height();
 
