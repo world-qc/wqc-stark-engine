@@ -3,13 +3,63 @@ use p3_mersenne_31::Mersenne31;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
-/// StarkContext binds the decentralized task identity from the Orchestrator
+/// Public inputs bound into every proof transcript (orchestrator / wqc-node / wqc-core).
 #[derive(Debug)]
 pub struct StarkContext<'a> {
     pub circuit_id: &'a str,
     pub sub_task_id: &'a str,
     pub node_id: &'a str,
+    /// Binary slice path (e.g. `"0"`, `"01"`); must match sub-task metadata.
+    pub slice_id: &'a str,
+    /// SHA3-256 of the JSON-encoded contracted `ComplexResult`.
     pub output_hash: &'a str,
+}
+
+/// Marker separating the `sub_task_id` prefix from the bound metadata block.
+const STARK_TRANSCRIPT_MARKER: &[u8] = b"_M31_QUANTUM_AIR_STARK_";
+
+/// Appends null-terminated public-input fields after the marker (circuit, node, slice, hash).
+fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) {
+    for field in [
+        context.circuit_id,
+        context.node_id,
+        context.slice_id,
+        context.output_hash,
+    ] {
+        proof.extend_from_slice(field.as_bytes());
+        proof.push(0);
+    }
+}
+
+/// Reads one null-terminated UTF-8 field; returns the value and the next offset.
+fn read_cstr_field(proof: &[u8], offset: usize) -> Option<(&str, usize)> {
+    let tail = proof.get(offset..)?;
+    let end_rel = tail.iter().position(|&b| b == 0)?;
+    let end = offset + end_rel;
+    let value = std::str::from_utf8(&proof[offset..end]).ok()?;
+    Some((value, end + 1))
+}
+
+/// Verifies the four bound fields after the transcript marker match the verifier context.
+fn verify_public_input_binding(proof: &[u8], offset: usize, context: &StarkContext<'_>) -> Option<usize> {
+    let mut cursor = offset;
+    for expected in [
+        context.circuit_id,
+        context.node_id,
+        context.slice_id,
+        context.output_hash,
+    ] {
+        let (parsed, next) = read_cstr_field(proof, cursor)?;
+        if parsed != expected {
+            eprintln!(
+                "[STARK Core] Failed: public input binding mismatch (expected '{}', got '{}')",
+                expected, parsed
+            );
+            return None;
+        }
+        cursor = next;
+    }
+    Some(cursor)
 }
 
 /// Structure representing a single execution row mapped to the STARK AIR (Algebraic Intermediate Representation).
@@ -123,7 +173,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
         let v0_unchanged_im = next.v0_im - curr.v0_im;
         let v1_unchanged_re = next.v1_re - curr.v1_re;
         let v1_unchanged_im = next.v1_im - curr.v1_im;
-        let base_identity_cost = v0_unchanged_re * v0_unchanged_re + v0_unchanged_im * v0_unchanged_im
+        let _base_identity_cost = v0_unchanged_re * v0_unchanged_re + v0_unchanged_im * v0_unchanged_im
                                + v1_unchanged_re * v1_unchanged_re + v1_unchanged_im * v1_unchanged_im;
 
         // 1. Gate::X Constraints: Validates amplitude bit-flip transitions (|0> <-> |1>)
@@ -208,13 +258,14 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
                                   + (curr.sel_rot * cost_rot);
     }
 
-    // Binary transcript serialization following stateless proof parameters
+    // Binary transcript: sub_task_id prefix + marker + bound public inputs + AIR digest + boundary row.
     let mut proof_bytes = Vec::new();
     proof_bytes.extend_from_slice(context.sub_task_id.as_bytes());
-    proof_bytes.extend_from_slice(b"_M31_QUANTUM_AIR_STARK_");
+    proof_bytes.extend_from_slice(STARK_TRANSCRIPT_MARKER);
+    append_public_input_binding(&mut proof_bytes, context);
     proof_bytes.extend_from_slice(&constraint_accumulations.as_canonical_u32().to_le_bytes());
 
-    // Safely serialize final state output parameters for boundary constraint validations
+    // Final register boundary amplitudes for the terminal AIR row.
     if num_rows > 0 {
         let last_row_idx = matrix_height - 1;
         let last_r: Vec<Mersenne31> = trace_matrix.row(last_row_idx).collect();
@@ -227,39 +278,56 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
     proof_bytes
 }
 
-/// VERIFIER CORE: Stateless validation of universal execution pathways.
+/// VERIFIER CORE: Stateless validation of execution trace constraints and public-input binding.
 pub fn verify_stark_proof_core(context: &StarkContext, proof: &[u8]) -> bool {
-    if proof.is_empty() || context.sub_task_id.is_empty() {
-        eprintln!("[STARK Core] Failed: proof or sub_task_id is empty");
+    if proof.is_empty() {
+        eprintln!("[STARK Core] Failed: proof is empty");
         return false;
+    }
+
+    for (name, value) in [
+        ("circuit_id", context.circuit_id),
+        ("sub_task_id", context.sub_task_id),
+        ("node_id", context.node_id),
+        ("slice_id", context.slice_id),
+        ("output_hash", context.output_hash),
+    ] {
+        if value.is_empty() {
+            eprintln!("[STARK Core] Failed: {} is empty", name);
+            return false;
+        }
     }
 
     let expected_prefix = context.sub_task_id.as_bytes();
     if !proof.starts_with(expected_prefix) {
-        eprintln!("[STARK Core] Failed: prefix mismatch!");
-        eprintln!("  Expected (sub_task_id): {:?}", expected_prefix);
+        eprintln!("[STARK Core] Failed: sub_task_id prefix mismatch");
+        eprintln!("  Expected: {:?}", expected_prefix);
         if proof.len() >= expected_prefix.len() {
-            eprintln!("  Actual proof prefix : {:?}", &proof[..expected_prefix.len()]);
-        } else {
-            eprintln!("  Actual proof bytes  : {:?}", proof);
+            eprintln!("  Actual  : {:?}", &proof[..expected_prefix.len()]);
         }
         return false;
     }
 
-    let expected_marker = b"_M31_QUANTUM_AIR_STARK_";
-    let marker_index = match proof.windows(expected_marker.len()).position(|w| w == expected_marker) {
+    let marker_index = match proof
+        .windows(STARK_TRANSCRIPT_MARKER.len())
+        .position(|w| w == STARK_TRANSCRIPT_MARKER)
+    {
         Some(idx) => idx,
         None => {
-            eprintln!("[STARK Core] Failed: Marker '_M31_QUANTUM_AIR_STARK_' not found in proof bytes");
+            eprintln!("[STARK Core] Failed: transcript marker not found");
             return false;
         }
     };
 
-    let evaluation_start = marker_index + expected_marker.len();
-    let evaluation_end = evaluation_start + 4;
+    let binding_start = marker_index + STARK_TRANSCRIPT_MARKER.len();
+    let evaluation_start = match verify_public_input_binding(proof, binding_start, context) {
+        Some(offset) => offset,
+        None => return false,
+    };
 
+    let evaluation_end = evaluation_start + 4;
     if proof.len() < evaluation_end {
-        eprintln!("[STARK Core] Failed: Proof length too short for evaluation sum");
+        eprintln!("[STARK Core] Failed: proof too short for AIR evaluation sum");
         return false;
     }
 
@@ -269,7 +337,7 @@ pub fn verify_stark_proof_core(context: &StarkContext, proof: &[u8]) -> bool {
 
     eprintln!("[STARK Core] air_evaluation_sum parsed: {}", air_evaluation_sum);
 
-    // Any mathematical gap or constraint violation yields a non-zero evaluation check sum
+    // Any mathematical gap or constraint violation yields a non-zero evaluation checksum.
     if air_evaluation_sum != 0 {
         eprintln!("[STARK Core] Failed: air_evaluation_sum is non-zero");
         return false;

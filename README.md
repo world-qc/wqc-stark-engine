@@ -19,12 +19,31 @@ wqc-stark-engine/
 ## Architecture Map
 ![Architecture Map](./doc/architecture_map.png "Architecture Map")
 
+## Public inputs (`StarkContext`)
+
+Proofs bind all orchestrator-facing public inputs:
+
+| Field | Role |
+|-------|------|
+| `circuit_id` | Hash of the pruned tensor sub-graph |
+| `sub_task_id` | Unique sub-task identifier |
+| `node_id` | Executing node |
+| `slice_id` | Binary slice path in the TN tree |
+| `output_hash` | SHA3-256 of the JSON `ComplexResult` |
+
+The proof transcript layout is:
+
+```text
+<sub_task_id bytes><_M31_QUANTUM_AIR_STARK_><circuit_id\0><node_id\0><slice_id\0><output_hash\0><air_eval: u32 LE><boundary amplitudes>
+```
+
+The Go FFI `wqc_verify_stark_proof` accepts the same five string fields plus the raw proof bytes.
+
 ## Usage
 
 ### Using Cargo (Local Development)
 ```bash
 cargo build --release
-
 ```
 
 ### Using Docker
