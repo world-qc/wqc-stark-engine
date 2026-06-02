@@ -2,6 +2,9 @@ use p3_field::{AbstractField, Field, PrimeField32};
 use p3_mersenne_31::Mersenne31;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use crate::trace_spec::{AIR_WIDTH, FIXED_POINT_SCALE, SELECTOR_COUNT, TRACE_WIDTH};
+
+pub mod trace_spec;
 
 /// Public inputs bound into every proof transcript (orchestrator / wqc-node / wqc-core).
 #[derive(Debug)]
@@ -90,8 +93,7 @@ pub struct QuantumAirRow {
 fn f64_to_m31(val: f64) -> Mersenne31 {
     // SCALE is optimized to 10000.0 (1e4). When squared, it yields 1e8,
     // which safely stays below the Mersenne31 modulus boundary (2,147,483,647).
-    const SCALE: f64 = 10000.0;
-    let scaled = (val * SCALE).round() as i64;
+    let scaled = (val * FIXED_POINT_SCALE).round() as i64;
 
     // Perform robust canonical mapping handles both positive and negative scaled values
     if scaled >= 0 {
@@ -118,7 +120,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
     let scale_inverse = scale_factor.inverse();
 
     let mut flat_m31_data = Vec::new();
-    let chunks = execution_trace.chunks_exact(10);
+    let chunks = execution_trace.chunks_exact(TRACE_WIDTH);
     let num_rows = chunks.len();
 
     // Ingest the flat execution trace and map rows directly to orthogonal field structures
@@ -127,7 +129,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
         flat_m31_data.push(Mersenne31::from_canonical_u32(gate_raw));
 
         // Generate binary orthogonal algebraic selectors to isolate specific gate validation pathways
-        let mut selectors = vec![Mersenne31::zero(); 9];
+        let mut selectors = vec![Mersenne31::zero(); SELECTOR_COUNT];
         if gate_raw >= 1 && gate_raw <= 9 {
             selectors[(gate_raw - 1) as usize] = Mersenne31::one();
         } else if gate_raw >= 10 && gate_raw <= 12 {
@@ -146,8 +148,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
     }
 
     // Matrix configuration mapping the expanded 18-column execution footprint
-    let width = 18;
-    let trace_matrix = RowMajorMatrix::new(flat_m31_data, width);
+    let trace_matrix = RowMajorMatrix::new(flat_m31_data, AIR_WIDTH);
     let matrix_height = trace_matrix.height();
     let mut constraint_accumulations = Mersenne31::zero();
 
