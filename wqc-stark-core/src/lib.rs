@@ -286,6 +286,25 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
                 weighted_ccnot.as_canonical_u32(),
                 weighted_rot.as_canonical_u32(),
             );
+
+            if weighted_h != Mersenne31::zero() {
+                eprintln!(
+                    "[STARK Core][AIR][H] row={} curr(v0=({},{}), v1=({},{})) next(v0=({},{}), v1=({},{})) h_raw=({}, {}, {}, {})",
+                    r,
+                    curr.v0_re.as_canonical_u32(),
+                    curr.v0_im.as_canonical_u32(),
+                    curr.v1_re.as_canonical_u32(),
+                    curr.v1_im.as_canonical_u32(),
+                    next.v0_re.as_canonical_u32(),
+                    next.v0_im.as_canonical_u32(),
+                    next.v1_re.as_canonical_u32(),
+                    next.v1_im.as_canonical_u32(),
+                    h_0.as_canonical_u32(),
+                    h_1.as_canonical_u32(),
+                    h_2.as_canonical_u32(),
+                    h_3.as_canonical_u32(),
+                );
+            }
         }
     }
 
