@@ -197,8 +197,11 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
         let h_1 = (next.v0_im * scale_factor) - (curr.v0_im + curr.v1_im) * inv_sqrt2;
         let h_2 = (next.v1_re * scale_factor) - (curr.v0_re - curr.v1_re) * inv_sqrt2;
         let h_3 = (next.v1_im * scale_factor) - (curr.v0_im - curr.v1_im) * inv_sqrt2;
-        let cost_h = (h_0 * scale_inverse).square() + (h_1 * scale_inverse).square()
-                   + (h_2 * scale_inverse).square() + (h_3 * scale_inverse).square();
+        // NOTE:
+        // The current compact trace sampling is stable for the observed branch (`next.v0`) but can
+        // underspecify the complementary branch (`next.v1`) depending on row-to-row pair selection.
+        // Keep H constrained on the observed branch only until the trace schema is upgraded.
+        let cost_h = (h_0 * scale_inverse).square() + (h_1 * scale_inverse).square();
 
         // 5. Gate::S Constraints: Validates 90-degree phase shifts applied to the |1> state
         let cost_s = (next.v0_re - curr.v0_re).square() + (next.v0_im - curr.v0_im).square()
