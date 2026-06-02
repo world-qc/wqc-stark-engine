@@ -151,6 +151,7 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
     let trace_matrix = RowMajorMatrix::new(flat_m31_data, AIR_WIDTH);
     let matrix_height = trace_matrix.height();
     let mut constraint_accumulations = Mersenne31::zero();
+    let debug_air = std::env::var("WQC_STARK_DEBUG_AIR").ok().as_deref() == Some("1");
 
     // Iterate across the trace execution boundaries to evaluate transition polynomials (AIR)
     for r in 0..(matrix_height - 1) {
@@ -248,15 +249,44 @@ pub fn generate_stark_proof(context: &StarkContext, execution_trace: &[f64]) -> 
 
         // Conditionally aggregate all mathematical constraint weights via orthogonal selectors.
         // If the execution trace is completely valid, `constraint_accumulations` evaluates strictly to 0.
-        constraint_accumulations += (curr.sel_x * cost_x)
-                                  + (curr.sel_y * cost_y)
-                                  + (curr.sel_z * cost_z)
-                                  + (curr.sel_h * cost_h)
-                                  + (curr.sel_s * cost_s)
-                                  + (curr.sel_t * cost_t)
-                                  + (curr.sel_ctrl * cost_ctrl)
-                                  + (curr.sel_ccnot * cost_ccnot)
-                                  + (curr.sel_rot * cost_rot);
+        let weighted_x = curr.sel_x * cost_x;
+        let weighted_y = curr.sel_y * cost_y;
+        let weighted_z = curr.sel_z * cost_z;
+        let weighted_h = curr.sel_h * cost_h;
+        let weighted_s = curr.sel_s * cost_s;
+        let weighted_t = curr.sel_t * cost_t;
+        let weighted_ctrl = curr.sel_ctrl * cost_ctrl;
+        let weighted_ccnot = curr.sel_ccnot * cost_ccnot;
+        let weighted_rot = curr.sel_rot * cost_rot;
+
+        let row_acc = weighted_x
+            + weighted_y
+            + weighted_z
+            + weighted_h
+            + weighted_s
+            + weighted_t
+            + weighted_ctrl
+            + weighted_ccnot
+            + weighted_rot;
+        constraint_accumulations += row_acc;
+
+        if debug_air && row_acc != Mersenne31::zero() {
+            eprintln!(
+                "[STARK Core][AIR] row={} gate={} nonzero row_acc={} | x={} y={} z={} h={} s={} t={} ctrl={} ccnot={} rot={}",
+                r,
+                curr.gate_type.as_canonical_u32(),
+                row_acc.as_canonical_u32(),
+                weighted_x.as_canonical_u32(),
+                weighted_y.as_canonical_u32(),
+                weighted_z.as_canonical_u32(),
+                weighted_h.as_canonical_u32(),
+                weighted_s.as_canonical_u32(),
+                weighted_t.as_canonical_u32(),
+                weighted_ctrl.as_canonical_u32(),
+                weighted_ccnot.as_canonical_u32(),
+                weighted_rot.as_canonical_u32(),
+            );
+        }
     }
 
     // Binary transcript: sub_task_id prefix + marker + bound public inputs + AIR digest + boundary row.
