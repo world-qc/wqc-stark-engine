@@ -3,12 +3,11 @@ name = "wqc-stark-core"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+plonky3-stark = []
+
 [dependencies]
 p3-field = "0.1.0"
 p3-mersenne-31 = "0.1.0"
-p3-symmetric = "0.1.0"
-p3-poseidon2 = "0.1.0"
 p3-matrix = "0.1.0"
-rand = "0.8"
-
-bytemuck = { version = "1.14", features = ["derive"] }
