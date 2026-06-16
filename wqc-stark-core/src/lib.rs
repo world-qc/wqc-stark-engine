@@ -165,4 +165,16 @@ mod integration_tests {
         proof[len - 20] ^= 0xFF;
         assert!(!verify_stark_proof_core(&ctx, &proof));
     }
+
+    #[test]
+    fn honest_h_trace_roundtrip() {
+        let ctx = context();
+        let inv_sqrt2 = 1.0 / 2.0f64.sqrt();
+        let trace = vec![
+            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0, inv_sqrt2, 0.0, inv_sqrt2, 0.0, 0.0,
+        ];
+        let proof = generate_stark_proof(&ctx, &trace);
+        assert!(verify_stark_proof_core(&ctx, &proof));
+    }
 }

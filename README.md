@@ -8,6 +8,7 @@ Cryptographic proof engine for the WQC decentralized quantum compute mesh. Provi
 wqc-stark-engine/
 ├── wqc-stark-core/     # AIR prover/verifier (Rust lib)
 ├── wqc-stark-ffi/      # CGO-compatible `libwqc_stark_verifier`
+├── docs/PHASE2_TRACE_ALIGNMENT.md
 └── docs/PHASE3_PLONKY3.md
 ```
 
@@ -63,9 +64,9 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
 
 | Phase | Status |
 |-------|--------|
-| 1 | AIR bugfixes, embedded trace, verifier re-eval |
-| 2 | Trace-spec alignment (`ctrl` discretization, 10 selectors) |
-| 3 | Plonky3 `p3-uni-stark` (feature `plonky3-stark`) |
+| 1 | Complete — AIR bugfixes, embedded trace, verifier re-eval |
+| 2 | Complete — trace-spec alignment, executor tests, cross-crate AIR checks |
+| 3 | Planned — Plonky3 `p3-uni-stark` (feature `plonky3-stark`) |
 
 ## License
 
