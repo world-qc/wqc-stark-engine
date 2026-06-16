@@ -1,41 +1,74 @@
 # Phase 3: Plonky3 uni-STARK migration
 
 Phase 1 delivers an **AIR commitment** proof (embedded trace + recomputed constraint sum).
-Phase 3 upgrades to a **real STARK** using Polygon Plonky3 `p3-uni-stark`.
+Phase 3 adds a **real STARK** using Polygon Plonky3 `p3-uni-stark` (Mersenne31 + Circle PCS).
 
-## Prerequisites
+## Status: Complete (devnet)
 
-1. Upgrade Plonky3 workspace deps from `0.1` → `0.5+` (Mersenne31 field + `p3-uni-stark`).
-2. Implement `p3_air::Air` for the 19-column quantum execution matrix (`AIR_WIDTH`).
-3. Wire Poseidon2 / FRI parameters consistent with devnet performance targets.
+| Item | Location |
+|------|----------|
+| Plonky3 0.6.1 deps | `wqc-stark-core/Cargo.toml` (`plonky3-stark` feature) |
+| Shared numeric constraints | `wqc-stark-core/src/air/constraints.rs` |
+| `p3_air::Air` implementation | `wqc-stark-core/src/plonky3_stark/quantum_air.rs` |
+| Circle `StarkConfig` | `wqc-stark-core/src/plonky3_stark/config.rs` |
+| v2 prove / verify | `wqc-stark-core/src/plonky3_stark/mod.rs` |
+| v1 + v2 verifier dispatch | `wqc-stark-core/src/lib.rs` |
+| FFI (v2 enabled) | `wqc-stark-ffi` with `features = ["plonky3-stark"]` |
 
 ## Proof format (v2)
 
 ```text
-<sub_task_id><_M31_PLONKY3_STARK_V2_><public inputs\0...><p3 proof bytes>
+<sub_task_id><_M31_PLONKY3_STARK_V2_><circuit_id\0><node_id\0><slice_id\0><output_hash\0>
+<postcard_len: u32 LE><postcard(p3_uni_stark::Proof)>
 ```
 
-The v2 marker is reserved in `transcript::V2_MARKER`. v1 proofs remain valid until nodes upgrade provers.
+v1 proofs (`_M31_QUANTUM_AIR_V1_`) remain valid. The verifier auto-detects the marker.
 
-## Feature flag
+## API
+
+```rust
+// v1 (default, no extra features)
+let proof = generate_stark_proof(&ctx, &trace);
+
+// v2 (requires `plonky3-stark` feature)
+let proof = generate_plonky3_stark_proof(&ctx, &trace)?;
+
+// Both formats
+verify_stark_proof_core(&ctx, &proof);
+```
+
+## Build
 
 ```bash
-cargo build --release --features plonky3-stark
+# v1 only
+cargo test -p wqc-stark-core
+
+# v1 + v2 Plonky3 STARK
+cargo test -p wqc-stark-core --features plonky3-stark
+
+# FFI shared library (orchestrator CGO)
+cargo build --release -p wqc-stark-ffi
 ```
 
-Scaffold lives in `wqc-stark-core/src/plonky3_stark.rs`.
+Docker builder image enables `plonky3-stark` by default (`Dockerfile`).
 
-## Rollout
+## Trace padding
+
+Circle PCS requires at least 4 trace rows. The prover pads to `max(4, next_power_of_two(height))`
+by repeating the last row (`pad_air_matrix_for_uni_stark`). Padding rows must remain AIR-satisfied
+(idle terminal row or steady-state repetition).
+
+## Rollout (remaining ops work)
 
 | Step | Action |
 |------|--------|
-| 1 | Land `Air` + `StarkConfig` behind `plonky3-stark` feature |
-| 2 | Dual-prove in CI: v1 AIR sum == 0 implies v2 verify OK on golden traces |
+| 1 | ~~Land `Air` + `StarkConfig` behind `plonky3-stark`~~ Done |
+| 2 | ~~Dual-prove golden traces in CI~~ Done (`v1_and_v2_dual_prove_on_golden_traces`) |
 | 3 | Node prover emits v2; orchestrator accepts v1 + v2 during transition |
 | 4 | Remove v1 after quorum on v2 |
 
 ## Open design items
 
-- **Blowup / query count**: tune for ~28-qubit slice traces (variable row count).
-- **Public inputs**: hash-bound fields should enter `StarkConfig` verifier instance.
+- **Blowup / query count**: tune `devnet_circle_config` for ~28-qubit slice traces.
+- **Public inputs**: bound fields are transcript-checked; optional PCS public-value binding TBD.
 - **RX/RY/RZ**: separate rotation AIR columns vs shared `sel_rot` (trace-spec follow-up).

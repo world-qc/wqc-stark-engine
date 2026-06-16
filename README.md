@@ -32,7 +32,15 @@ wqc-stark-engine/
 <trace_rows: u32 LE><trace f64 LE><air_sum: u32 LE><boundary v0_re,v0_im,v1_re,v1_im: u32 LE each>
 ```
 
-The verifier:
+## Proof transcript (v2, Phase 3)
+
+```text
+<sub_task_id><_M31_PLONKY3_STARK_V2_><public inputs\0...><postcard_len: u32 LE><p3 proof bytes>
+```
+
+Real FRI STARK via Plonky3 Circle PCS (Mersenne31). See `docs/PHASE3_PLONKY3.md`.
+
+The verifier (v1):
 
 1. Checks public-input binding
 2. Re-expands the embedded trace to AIR
@@ -48,6 +56,7 @@ Trace column semantics: see `wqc-core/doc/trace-spec.md`.
 ```bash
 cargo build --release
 cargo test
+cargo test -p wqc-stark-core --features plonky3-stark
 ```
 
 ### Docker
@@ -66,7 +75,7 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
 |-------|--------|
 | 1 | Complete — AIR bugfixes, embedded trace, verifier re-eval |
 | 2 | Complete — trace-spec alignment, executor tests, cross-crate AIR checks |
-| 3 | Planned — Plonky3 `p3-uni-stark` (feature `plonky3-stark`) |
+| 3 | Complete — Plonky3 `p3-uni-stark` (`plonky3-stark` feature, v2 transcript) |
 
 ## License
 

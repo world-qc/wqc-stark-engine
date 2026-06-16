@@ -13,7 +13,7 @@ WORKDIR /usr/src/wqc-stark-engine
 COPY . .
 
 # Build the workspace in release mode for production performance
-RUN cargo build --release
+RUN cargo build --release -p wqc-stark-ffi
 
 # Define the default command to output the generated library paths
 CMD ["ls", "-la", "target/release/"]

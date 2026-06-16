@@ -20,6 +20,15 @@ pub use transcript::{
 
 use transcript::verify_public_input_binding;
 
+/// Generates a v2 Plonky3 uni-STARK proof transcript (requires `plonky3-stark` feature).
+#[cfg(feature = "plonky3-stark")]
+pub fn generate_plonky3_stark_proof(
+    context: &StarkContext<'_>,
+    execution_trace: &[f64],
+) -> Result<Vec<u8>, String> {
+    plonky3_stark::generate_plonky3_proof(context, execution_trace)
+}
+
 /// Generates a v1 AIR commitment proof: embeds the execution trace and AIR digest.
 ///
 /// This is **not** a full STARK (no FRI / polynomial commitments). Phase 3 adds Plonky3 uni-STARK.
@@ -176,5 +185,24 @@ mod integration_tests {
         ];
         let proof = generate_stark_proof(&ctx, &trace);
         assert!(verify_stark_proof_core(&ctx, &proof));
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn v1_and_v2_dual_prove_on_golden_traces() {
+        let ctx = context();
+        let inv_sqrt2 = 1.0 / 2.0f64.sqrt();
+        for trace in [
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            vec![
+                4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                inv_sqrt2, 0.0, inv_sqrt2, 0.0, 0.0,
+            ],
+        ] {
+            let v1 = generate_stark_proof(&ctx, &trace);
+            assert!(verify_stark_proof_core(&ctx, &v1));
+            let v2 = generate_plonky3_stark_proof(&ctx, &trace).expect("v2 prove");
+            assert!(verify_stark_proof_core(&ctx, &v2));
+        }
     }
 }
