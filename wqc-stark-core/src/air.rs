@@ -303,4 +303,74 @@ mod tests {
         let sum = evaluate_execution_trace(&trace).unwrap();
         assert_eq!(sum, Mersenne31::zero());
     }
+
+    #[test]
+    fn cz_gate_with_control_one_produces_nonzero_air_sum_if_transition_wrong() {
+        // Two rows: CZ with ctrl_active=1 followed by an inconsistent next row where target
+        // amplitude does *not* get the expected phase, so AIR sum must be non-zero.
+        //
+        // Columns: gate_id, ctrl1, ctrl2, p_cos, p_sin, v0_re, v0_im, v1_re, v1_im, padding.
+        let trace = vec![
+            // Row 0: CZ, ctrl_active=1, amplitudes (v0=1, v1=1)
+            GATE_CZ as f64,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            // Row 1: unchanged amplitudes (should have phase flip on v1), so constraints should fail
+            GATE_CZ as f64,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+        ];
+
+        let matrix = trace_to_air_matrix(&trace).expect("matrix");
+        let sum = evaluate_air_sum(&matrix);
+        assert_ne!(sum, Mersenne31::zero());
+    }
+
+    #[test]
+    fn ccnot_with_dual_control_one_produces_nonzero_air_sum_if_transition_wrong() {
+        // CCNOT with both controls active should flip target, but we keep amplitudes unchanged.
+        // AIR should detect this as a non-zero evaluation sum.
+        let trace = vec![
+            // Row 0: CCNOT, ctrl_active=1, ctrl_active_2=1, v0=1, v1=0
+            GATE_CCNOT as f64,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            // Row 1: amplitudes unchanged (should have been swapped), so constraints fail
+            GATE_CCNOT as f64,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ];
+
+        let matrix = trace_to_air_matrix(&trace).expect("matrix");
+        let sum = evaluate_air_sum(&matrix);
+        assert_ne!(sum, Mersenne31::zero());
+    }
 }

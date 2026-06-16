@@ -203,4 +203,45 @@ mod tests {
         assert_eq!(decoded_sum, air_sum);
         assert_eq!(decoded_boundary, boundary);
     }
+
+    #[test]
+    fn decode_fails_on_mismatched_public_inputs() {
+        let context = sample_context();
+        let trace = vec![
+            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.70710678, 0.0, 0.70710678, 0.0, 0.0,
+        ];
+        let (air_sum, boundary) = air_digest_from_trace(&trace).expect("digest");
+
+        let proof = encode_proof_v1(&context, &trace, air_sum, boundary);
+
+        // Changing the slice_id should cause decoding to fail due to a public input binding mismatch.
+        let bad_context = StarkContext {
+            circuit_id: context.circuit_id,
+            sub_task_id: context.sub_task_id,
+            node_id: context.node_id,
+            slice_id: "1", // mismatch
+            output_hash: context.output_hash,
+        };
+
+        let decoded = decode_proof_v1_owned(&proof, &bad_context);
+        assert!(decoded.is_none(), "decode should fail on mismatched public inputs");
+    }
+
+    #[test]
+    fn decode_fails_on_truncated_payload() {
+        let context = sample_context();
+        let trace = vec![
+            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.70710678, 0.0, 0.70710678, 0.0, 0.0,
+        ];
+        let (air_sum, boundary) = air_digest_from_trace(&trace).expect("digest");
+
+        let mut proof = encode_proof_v1(&context, &trace, air_sum, boundary);
+        // Truncate the trace bytes to break the proof.
+        proof.truncate(proof.len().saturating_sub(8));
+
+        let decoded = decode_proof_v1_owned(&proof, &context);
+        assert!(decoded.is_none(), "decode should fail on truncated payload");
+    }
 }
