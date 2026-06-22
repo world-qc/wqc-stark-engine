@@ -1,21 +1,26 @@
-//! Proof-tree aggregation (v3 compose transcripts).
+//! Proof-tree aggregation (v3 compose transcripts + R2 AggregationAir).
 //!
 //! ## Model
 //!
 //! - **Leaf proofs** (v1/v2) are verified at node ingest before rewards.
 //! - **Compose** pairs two already-valid child proofs into a v3 container.
-//! - **Root verify** walks the tree recursively and re-checks every leaf STARK.
-//!
-//! Phase 4 (future): replace v3 containers with true recursive Plonky3 proofs
-//! (`AggregationAir`) so root verification is O(log² N) on a single STARK.
+//! - **R2**: each compose step also emits an `AggregationAir` STARK tail binding child digests.
+//! - **Root verify (fast path)**: single aggregation STARK verify at the root (O(1) STARK).
+//! - **Root verify (audit)**: walks the v3 tree and re-checks every leaf STARK.
 
 mod leaf;
 mod transcript_v3;
 
+#[cfg(feature = "plonky3-stark")]
+use crate::plonky3_stark::{
+    append_agg_tail, generate_aggregation_proof, verify_aggregation_proof, AggregationContext,
+    split_agg_tail,
+};
+
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
 pub use transcript_v3::{
     child_digest, decode_compose_v3, encode_compose_v3, is_compose_v3, ComposeHeader,
-    V3_COMPOSE_MARKER,
+    CHILD_HASH_LEN, V3_COMPOSE_MARKER,
 };
 
 use crate::transcript::StarkContext;
@@ -85,22 +90,49 @@ pub fn compose_stark_proofs(
     verify_child_proof(left_child, context.parent_task_id, left_leaf_ctx)?;
     verify_child_proof(right_child, context.parent_task_id, right_leaf_ctx)?;
 
-    Ok(encode_compose_v3(
+    let left_hash = child_digest(left_child);
+    let right_hash = child_digest(right_child);
+
+    let mut out = encode_compose_v3(
         context.parent_task_id,
         context.compose_label,
         context.manifest_root_hash,
         left_child,
         right_child,
-    ))
+    );
+
+    #[cfg(feature = "plonky3-stark")]
+    {
+        let agg_ctx = AggregationContext {
+            parent_task_id: context.parent_task_id,
+            compose_label: context.compose_label,
+            manifest_root_hash: context.manifest_root_hash,
+            left_child_hash: left_hash,
+            right_child_hash: right_hash,
+        };
+        let agg_proof = generate_aggregation_proof(&agg_ctx)
+            .map_err(|e| format!("aggregation STARK prove failed: {e}"))?;
+        out = append_agg_tail(out, &agg_proof);
+    }
+
+    Ok(out)
 }
 
 /// Recursively verifies a v3 compose tree (all embedded leaves).
 pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Result<(), String> {
-    if !is_compose_v3(proof) {
+    #[cfg(feature = "plonky3-stark")]
+    let (v3_proof, agg_tail) = match split_agg_tail(proof) {
+        Some((v3, agg)) => (v3, Some(agg)),
+        None => (proof, None),
+    };
+    #[cfg(not(feature = "plonky3-stark"))]
+    let v3_proof = proof;
+
+    if !is_compose_v3(v3_proof) {
         return Err("not a v3 compose proof".to_string());
     }
 
-    let (header, left_child, right_child) = decode_compose_v3(proof).ok_or_else(|| {
+    let (header, left_child, right_child) = decode_compose_v3(v3_proof).ok_or_else(|| {
         "malformed v3 compose transcript".to_string()
     })?;
 
@@ -131,15 +163,65 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
 
     verify_child_proof(&left_child, context.parent_task_id, None)?;
     verify_child_proof(&right_child, context.parent_task_id, None)?;
+
+    #[cfg(feature = "plonky3-stark")]
+    if let Some(agg_bytes) = agg_tail {
+        let agg_ctx = AggregationContext {
+            parent_task_id: context.parent_task_id,
+            compose_label: header.compose_label.as_str(),
+            manifest_root_hash: header.manifest_root_hash.as_str(),
+            left_child_hash: header.left_child_hash,
+            right_child_hash: header.right_child_hash,
+        };
+        if !verify_aggregation_proof(&agg_ctx, agg_bytes) {
+            return Err("aggregation STARK verification failed".to_string());
+        }
+    }
+
     Ok(())
 }
 
-/// Verifies a task root proof tree (v3 at top level).
+/// Verifies a task root proof tree.
+///
+/// With `plonky3-stark`, tries the R2 aggregation STARK fast path first (single STARK verify).
+/// Falls back to the v3 audit walk when no aggregation tail is present.
 pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool {
     if context.parent_task_id.is_empty() {
         eprintln!("[Aggregation] Failed: parent_task_id is empty");
         return false;
     }
+
+    #[cfg(feature = "plonky3-stark")]
+    {
+        if let Some((v3_part, agg_bytes)) = split_agg_tail(proof) {
+            if let Some((header, _, _)) = decode_compose_v3(v3_part) {
+                if header.compose_label == "root" {
+                    let agg_ctx = AggregationContext {
+                        parent_task_id: context.parent_task_id,
+                        compose_label: "root",
+                        manifest_root_hash: context.manifest_root_hash,
+                        left_child_hash: header.left_child_hash,
+                        right_child_hash: header.right_child_hash,
+                    };
+                    if !context.manifest_root_hash.is_empty()
+                        && header.manifest_root_hash != context.manifest_root_hash
+                    {
+                        eprintln!("[Aggregation] Failed: manifest_root_hash mismatch");
+                        return false;
+                    }
+                    if verify_aggregation_proof(&agg_ctx, agg_bytes) {
+                        eprintln!(
+                            "[Aggregation] Root proof verified (R2 fast path) for task {}",
+                            context.parent_task_id
+                        );
+                        return true;
+                    }
+                    eprintln!("[Aggregation] Root aggregation STARK failed; falling back to audit walk");
+                }
+            }
+        }
+    }
+
     if !is_compose_v3(proof) {
         eprintln!("[Aggregation] Failed: root proof is not v3 compose");
         return false;
@@ -154,7 +236,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
     match verify_composed_proof(&compose_ctx, proof) {
         Ok(()) => {
             eprintln!(
-                "[Aggregation] Root proof verified for task {}",
+                "[Aggregation] Root proof verified (audit walk) for task {}",
                 context.parent_task_id
             );
             true

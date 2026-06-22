@@ -76,6 +76,10 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
 | 1 | Complete — AIR bugfixes, embedded trace, verifier re-eval |
 | 2 | Complete — trace-spec alignment, executor tests, cross-crate AIR checks |
 | 3 | Complete — Plonky3 `p3-uni-stark` (`plonky3-stark` feature, v2 transcript) |
+| R1 | Complete — v3 proof tree compose + FFI |
+| R2 | Complete (devnet) — `AggregationAir` STARK tail, O(1) root fast verify |
+
+See `docs/PROOF_AGGREGATION.md`.
 
 ## License
 

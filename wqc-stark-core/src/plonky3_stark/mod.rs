@@ -3,10 +3,20 @@
 mod config;
 mod quantum_air;
 mod transcript_v2;
+#[cfg(feature = "plonky3-stark")]
+mod aggregation;
+#[cfg(feature = "plonky3-stark")]
+mod aggregation_air;
+#[cfg(feature = "plonky3-stark")]
+mod transcript_v4;
 
 pub use config::devnet_circle_config;
 pub use quantum_air::QuantumExecutionAir;
 pub use transcript_v2::{decode_proof_v2_owned, encode_proof_v2};
+#[cfg(feature = "plonky3-stark")]
+pub use aggregation::{generate_aggregation_proof, verify_aggregation_proof, AggregationContext};
+#[cfg(feature = "plonky3-stark")]
+pub use transcript_v4::{append_agg_tail, has_agg_tail, split_agg_tail};
 
 use p3_field::PrimeCharacteristicRing;
 use p3_mersenne_31::Mersenne31;
