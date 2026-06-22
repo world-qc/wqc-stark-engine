@@ -11,6 +11,7 @@ plonky3-stark = ["p3-uni-stark", "p3-air", "p3-circle", "p3-commit", "p3-challen
 p3-field = "0.6.1"
 p3-mersenne-31 = "0.6.1"
 p3-matrix = "0.6.1"
+sha3 = "0.10"
 p3-uni-stark = { version = "0.6.1", optional = true }
 p3-air = { version = "0.6.1", optional = true }
 p3-circle = { version = "0.6.1", optional = true }

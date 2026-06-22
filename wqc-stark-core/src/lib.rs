@@ -1,4 +1,5 @@
 pub mod air;
+pub mod aggregation;
 pub mod trace_spec;
 pub mod transcript;
 
@@ -12,6 +13,10 @@ pub use air::{
 pub use trace_spec::{
     AIR_WIDTH, FIXED_POINT_SCALE, GATE_CCNOT, GATE_CNOT, GATE_CZ, GATE_H, GATE_RX, GATE_RY,
     GATE_RZ, GATE_S, GATE_T, GATE_X, GATE_Y, GATE_Z, SELECTOR_COUNT, TRACE_WIDTH,
+};
+pub use aggregation::{
+    compose_stark_proofs, verify_child_proof, verify_composed_proof, verify_root_proof,
+    ComposeContext, ComposeHeader, ParsedLeafBinding, RootVerifyContext, V3_COMPOSE_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
