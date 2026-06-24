@@ -25,6 +25,8 @@ pub struct AirRow<FR> {
     pub v0_im: FR,
     pub v1_re: FR,
     pub v1_im: FR,
+    pub target_qubit: FR,
+    pub transition_link: FR,
 }
 
 impl<FR: Copy> AirRow<FR> {
@@ -49,6 +51,8 @@ impl<FR: Copy> AirRow<FR> {
             v0_im: cols[16],
             v1_re: cols[17],
             v1_im: cols[18],
+            target_qubit: cols[19],
+            transition_link: cols[20],
         }
     }
 
@@ -196,5 +200,12 @@ pub fn transition_accumulator<FR: Field>(
         + curr.sel_cz
         + curr.sel_ccnot
         + curr.sel_rot;
+
+    // Amplitude columns are sampled on each row's target qubit. Cross-wire transitions
+    // set `transition_link = 0` on the current row so gate / identity constraints are skipped.
+    if curr.transition_link == FR::ZERO {
+        return FR::ZERO;
+    }
+
     gate_active * gate_costs + (one - gate_active) * identity_cost
 }

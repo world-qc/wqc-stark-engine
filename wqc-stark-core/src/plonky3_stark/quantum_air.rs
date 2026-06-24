@@ -15,8 +15,8 @@ impl<F: Field> BaseAir<F> for QuantumExecutionAir {
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {
-        // Selector (deg 1) * amplitude squares (deg 2) * gate_active weight (deg 1).
-        Some(8)
+        // Selector (deg 1) * amplitude squares (deg 2) * gate_active (deg 1) * transition_link (deg 1).
+        Some(10)
     }
 }
 
@@ -154,7 +154,11 @@ where
         + curr[9].into()
         + curr[10].into();
 
-    gate_active.clone() * gate_costs + (one - gate_active) * identity_cost
+    let full_cost =
+        gate_active.clone() * gate_costs + (one - gate_active) * identity_cost;
+
+    // Skip amplitude transition when the executor marked this row as cross-wire (`link = 0`).
+    full_cost * curr[20].into()
 }
 
 impl<AB: AirBuilder> Air<AB> for QuantumExecutionAir

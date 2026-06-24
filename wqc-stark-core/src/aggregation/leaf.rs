@@ -72,7 +72,7 @@ mod tests {
             slice_id: "000",
             output_hash: "hash-out",
         };
-        let trace = vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let trace = crate::trace_spec::idle_qubit0_trace();
         let proof = generate_stark_proof(&ctx, &trace);
         let parsed = parse_leaf_binding(&proof).expect("parse");
         assert_eq!(parsed.sub_task_id, "sub-abc");

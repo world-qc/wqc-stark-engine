@@ -164,7 +164,7 @@ mod integration_tests {
     #[test]
     fn honest_empty_circuit_roundtrip() {
         let ctx = context();
-        let trace = vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let trace = crate::trace_spec::idle_qubit0_trace();
         let proof = generate_stark_proof(&ctx, &trace);
         assert!(verify_stark_proof_core(&ctx, &proof));
     }
@@ -172,7 +172,7 @@ mod integration_tests {
     #[test]
     fn tampered_air_sum_rejected() {
         let ctx = context();
-        let trace = vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let trace = crate::trace_spec::idle_qubit0_trace();
         let (sum, boundary) = air_digest_from_trace(&trace).unwrap();
         let mut proof = encode_proof_v1(&ctx, &trace, sum, boundary);
         let len = proof.len();
@@ -183,11 +183,7 @@ mod integration_tests {
     #[test]
     fn honest_h_trace_roundtrip() {
         let ctx = context();
-        let inv_sqrt2 = 1.0 / 2.0f64.sqrt();
-        let trace = vec![
-            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 1.0, 0.0, inv_sqrt2, 0.0, inv_sqrt2, 0.0, 0.0,
-        ];
+        let trace = crate::trace_spec::golden_h_q0_trace();
         let proof = generate_stark_proof(&ctx, &trace);
         assert!(verify_stark_proof_core(&ctx, &proof));
     }
@@ -196,13 +192,9 @@ mod integration_tests {
     #[test]
     fn v1_and_v2_dual_prove_on_golden_traces() {
         let ctx = context();
-        let inv_sqrt2 = 1.0 / 2.0f64.sqrt();
         for trace in [
-            vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-            vec![
-                4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-                inv_sqrt2, 0.0, inv_sqrt2, 0.0, 0.0,
-            ],
+            crate::trace_spec::idle_qubit0_trace(),
+            crate::trace_spec::golden_h_q0_trace(),
         ] {
             let v1 = generate_stark_proof(&ctx, &trace);
             assert!(verify_stark_proof_core(&ctx, &v1));

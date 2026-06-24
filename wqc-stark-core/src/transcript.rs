@@ -189,10 +189,7 @@ mod tests {
     #[test]
     fn v1_roundtrip_preserves_trace_and_digest() {
         let context = sample_context();
-        let trace = vec![
-            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 1.0, 0.0, 0.70710678, 0.0, 0.70710678, 0.0, 0.0,
-        ];
+        let trace = crate::trace_spec::golden_h_q0_trace();
         let (air_sum, boundary) = air_digest_from_trace(&trace).expect("digest");
 
         let proof = encode_proof_v1(&context, &trace, air_sum, boundary);
@@ -207,10 +204,7 @@ mod tests {
     #[test]
     fn decode_fails_on_mismatched_public_inputs() {
         let context = sample_context();
-        let trace = vec![
-            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 1.0, 0.0, 0.70710678, 0.0, 0.70710678, 0.0, 0.0,
-        ];
+        let trace = crate::trace_spec::golden_h_q0_trace();
         let (air_sum, boundary) = air_digest_from_trace(&trace).expect("digest");
 
         let proof = encode_proof_v1(&context, &trace, air_sum, boundary);
@@ -231,10 +225,7 @@ mod tests {
     #[test]
     fn decode_fails_on_truncated_payload() {
         let context = sample_context();
-        let trace = vec![
-            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 1.0, 0.0, 0.70710678, 0.0, 0.70710678, 0.0, 0.0,
-        ];
+        let trace = crate::trace_spec::golden_h_q0_trace();
         let (air_sum, boundary) = air_digest_from_trace(&trace).expect("digest");
 
         let mut proof = encode_proof_v1(&context, &trace, air_sum, boundary);

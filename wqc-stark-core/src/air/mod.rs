@@ -9,7 +9,7 @@ use p3_mersenne_31::Mersenne31;
 
 use crate::trace_spec::{
     AIR_WIDTH, FIXED_POINT_SCALE, GATE_CCNOT, GATE_CNOT, GATE_CZ, GATE_RX, GATE_RY, GATE_RZ,
-    SELECTOR_COUNT, TRACE_WIDTH,
+    SELECTOR_COUNT, TRACE_COL_TARGET_QUBIT, TRACE_COL_TRANSITION_LINK, TRACE_WIDTH,
 };
 
 pub use constraints::{AirConstants, AirRow, transition_accumulator};
@@ -69,6 +69,8 @@ pub fn trace_to_air_matrix(execution_trace: &[f64]) -> Option<RowMajorMatrix<Mer
         flat_m31_data.push(f64_to_m31(chunk[6]));
         flat_m31_data.push(f64_to_m31(chunk[7]));
         flat_m31_data.push(f64_to_m31(chunk[8]));
+        flat_m31_data.push(f64_to_m31(chunk[TRACE_COL_TARGET_QUBIT]));
+        flat_m31_data.push(f64_to_m31(chunk[TRACE_COL_TRANSITION_LINK]));
     }
 
     Some(RowMajorMatrix::new(flat_m31_data, AIR_WIDTH))
@@ -180,7 +182,7 @@ mod tests {
 
     #[test]
     fn empty_circuit_trace_has_zero_air_sum() {
-        let trace = vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let trace = crate::trace_spec::idle_qubit0_trace();
         let sum = evaluate_execution_trace(&trace).unwrap();
         assert_eq!(sum, Mersenne31::ZERO);
     }
@@ -188,8 +190,8 @@ mod tests {
     #[test]
     fn cz_gate_with_control_one_produces_nonzero_air_sum_if_transition_wrong() {
         let trace = vec![
-            GATE_CZ as f64, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, GATE_CZ as f64, 1.0, 0.0,
-            1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0,
+            GATE_CZ as f64, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0,
+            GATE_CZ as f64, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0,
         ];
         let matrix = trace_to_air_matrix(&trace).expect("matrix");
         let sum = evaluate_air_sum(&matrix);
@@ -199,8 +201,8 @@ mod tests {
     #[test]
     fn ccnot_with_dual_control_one_produces_nonzero_air_sum_if_transition_wrong() {
         let trace = vec![
-            GATE_CCNOT as f64, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, GATE_CCNOT as f64, 1.0,
-            1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            GATE_CCNOT as f64, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 1.0,
+            GATE_CCNOT as f64, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0,
         ];
         let matrix = trace_to_air_matrix(&trace).expect("matrix");
         let sum = evaluate_air_sum(&matrix);

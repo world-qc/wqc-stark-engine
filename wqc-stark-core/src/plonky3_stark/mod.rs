@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn empty_circuit_v2_roundtrip() {
         let ctx = context();
-        let trace = vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let trace = crate::trace_spec::idle_qubit0_trace();
         let proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
         assert!(verify_plonky3_proof(&ctx, &proof));
     }
@@ -125,11 +125,7 @@ mod tests {
     #[test]
     fn honest_h_trace_v2_roundtrip() {
         let ctx = context();
-        let inv_sqrt2 = 1.0 / 2.0f64.sqrt();
-        let trace = vec![
-            4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, inv_sqrt2,
-            0.0, inv_sqrt2, 0.0, 0.0,
-        ];
+        let trace = crate::trace_spec::golden_h_q0_trace();
         let proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
         assert!(verify_plonky3_proof(&ctx, &proof));
     }

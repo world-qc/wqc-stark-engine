@@ -264,7 +264,7 @@ mod integration_tests {
     }
 
     fn sample_trace() -> Vec<f64> {
-        vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        crate::trace_spec::idle_qubit0_trace()
     }
 
     #[test]
