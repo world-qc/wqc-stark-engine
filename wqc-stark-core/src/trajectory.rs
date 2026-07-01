@@ -373,6 +373,17 @@ fn decode_trajectory_segment_v2(payload: &[u8], offset: usize) -> Option<(Trajec
     ))
 }
 
+/// Reads `unitary_link_digest` without running full marginal/zk verification (v2 peek).
+pub fn peek_trajectory_unitary_link_digest(proof: &[u8]) -> Option<String> {
+    let (_, tail) = split_trajectory_tail(proof)?;
+    let (payload, marker) = tail?;
+    let (segment, end) = decode_trajectory_segment(payload, marker)?;
+    if end != payload.len() || segment.unitary_link_digest.is_empty() {
+        return None;
+    }
+    Some(segment.unitary_link_digest)
+}
+
 fn find_trajectory_tail_marker(proof: &[u8]) -> Option<(usize, &'static [u8])> {
     let mut best: Option<(usize, &'static [u8])> = None;
     for marker in [TRAJ_V2_MARKER, TRAJ_V1_MARKER] {

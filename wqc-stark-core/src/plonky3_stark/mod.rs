@@ -105,15 +105,7 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         .and_then(|seg| seg.born_binding)
         .filter(|b| !b.terminal_statevector_digest.is_empty())
         .map(|b| b.terminal_statevector_digest.clone())
-        .or_else(|| {
-            crate::trajectory::split_trajectory_tail(proof)
-                .and_then(|(_, tail)| tail)
-                .and_then(|(payload, marker)| {
-                    crate::trajectory::decode_and_verify_trajectory_tail(payload, marker)
-                })
-                .filter(|seg| !seg.unitary_link_digest.is_empty())
-                .map(|seg| seg.unitary_link_digest.clone())
-        });
+        .or_else(|| crate::trajectory::peek_trajectory_unitary_link_digest(proof));
 
     let verify_ctx = StarkContext {
         circuit_id: context.circuit_id,

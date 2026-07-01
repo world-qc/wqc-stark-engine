@@ -126,6 +126,14 @@ fn quantize_for_digest(val: f64) -> f64 {
     (val * TERMINAL_STATEVECTOR_DIGEST_SCALE).round() / TERMINAL_STATEVECTOR_DIGEST_SCALE
 }
 
+/// Quantizes amplitudes to the digest/AIR fixed-point grid (C2b/C2c binding).
+pub fn canonicalize_terminal_statevector(statevector: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    statevector
+        .iter()
+        .map(|(re, im)| (quantize_for_digest(*re), quantize_for_digest(*im)))
+        .collect()
+}
+
 /// Canonical JSON for terminal statevector digest — must match `wqc-core`.
 pub fn format_terminal_statevector_json(statevector: &[(f64, f64)]) -> String {
     let mut amps = String::new();

@@ -8,10 +8,8 @@ pub mod transcript;
 #[cfg(feature = "plonky3-stark")]
 pub mod plonky3_stark;
 
-pub use air::{
-    boundary_from_matrix, evaluate_air_sum, evaluate_execution_trace, f64_to_m31,
-    selector_index_for_gate, selectors_for_gate, trace_to_air_matrix, QuantumAirRow,
-};
+pub use air::trajectory::z_marginal_from_statevector;
+pub use air::evaluate_execution_trace;
 pub use trace_spec::{
     AIR_WIDTH, FIXED_POINT_SCALE, GATE_CCNOT, GATE_CNOT, GATE_CZ, GATE_H, GATE_RX, GATE_RY,
     GATE_RZ, GATE_S, GATE_T, GATE_X, GATE_Y, GATE_Z, SELECTOR_COUNT, TRACE_WIDTH,
@@ -22,15 +20,17 @@ pub use aggregation::{
 };
 pub use distribution::{
     append_distribution_tail, base_proof_without_distribution_tail, calculate_probability_digest,
-    calculate_terminal_statevector_digest, decode_and_verify_distribution_tail,
-    decode_distribution_segment, sample_counts_from_probabilities, split_distribution_tail,
-    verify_distribution_binding, BornBinding, DistributionSegment, DIST_V1_MARKER, DIST_V2_MARKER,
+    calculate_terminal_statevector_digest, canonicalize_terminal_statevector,
+    decode_and_verify_distribution_tail, decode_distribution_segment,
+    sample_counts_from_probabilities, split_distribution_tail, verify_distribution_binding,
+    BornBinding, DistributionSegment, DIST_V1_MARKER, DIST_V2_MARKER,
 };
 pub use trajectory::{
     append_trajectory_tail, base_proof_without_aux_tails, calculate_trajectory_digest,
     counts_from_trajectory_segment, decode_and_verify_trajectory_tail, format_trajectory_json,
-    has_trajectory_tail, split_trajectory_tail, verify_trajectory_binding, TrajectoryMarginalWitness,
-    TrajectoryMeasureEvent, TrajectorySegment, TrajectoryShotTrace, TRAJ_V1_MARKER, TRAJ_V2_MARKER,
+    has_trajectory_tail, peek_trajectory_unitary_link_digest, split_trajectory_tail,
+    verify_trajectory_binding, TrajectoryMarginalWitness, TrajectoryMeasureEvent,
+    TrajectorySegment, TrajectoryShotTrace, TRAJ_V1_MARKER, TRAJ_V2_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
@@ -41,10 +41,7 @@ use transcript::verify_public_input_binding;
 
 /// Reports whether a proof binds unitary v2 and trajectory marginals via `unitary_link_digest`.
 pub fn proof_has_trajectory_unitary_link(proof: &[u8]) -> bool {
-    trajectory::split_trajectory_tail(proof)
-        .and_then(|(_, tail)| tail)
-        .and_then(|(payload, marker)| trajectory::decode_and_verify_trajectory_tail(payload, marker))
-        .is_some_and(|seg| !seg.unitary_link_digest.is_empty())
+    trajectory::peek_trajectory_unitary_link_digest(proof).is_some()
 }
 
 /// Reports whether a proof binds unitary v2 and Born tails via `terminal_statevector_digest`.

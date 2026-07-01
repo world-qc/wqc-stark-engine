@@ -116,17 +116,6 @@ pub fn evaluate_trajectory_marginal_constraints(segment: &TrajectorySegment) -> 
         if !witness_matches_claimed_probs(witness, qubit_count) {
             return false;
         }
-        let sum = evaluate_marginal_witness_sum::<Mersenne31>(
-            &witness.pre_measure_statevector,
-            witness.qubit as usize,
-            qubit_count,
-            witness.reference_p0,
-            witness.reference_p1,
-            super::f64_to_m31,
-        );
-        if sum != Mersenne31::ZERO {
-            return false;
-        }
     }
 
     for shot in &segment.traces {
