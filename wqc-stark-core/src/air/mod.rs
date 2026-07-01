@@ -1,6 +1,7 @@
 //! Mersenne31 quantum execution AIR: trace ingestion and constraint accumulation.
 
 mod constraints;
+pub mod distribution;
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;

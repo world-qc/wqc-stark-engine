@@ -7,6 +7,40 @@
 pub const DIST_V1_MARKER: &[u8] = b"_M31_DIST_V1_";
 pub const DIST_V2_MARKER: &[u8] = b"_M31_DIST_V2_";
 
+/// C2b optional terminal statevector binding for Born-rule AIR verification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BornBinding {
+    pub qubit_count: u32,
+    pub classical_bit_count: u32,
+    /// Program-order `(qubit, cbit)` pairs.
+    pub measures: Vec<(u32, u32)>,
+    /// Dense terminal amplitudes in computational basis order.
+    pub terminal_statevector: Vec<(f64, f64)>,
+}
+
+impl BornBinding {
+    pub fn from_specs(
+        qubit_count: u32,
+        classical_bit_count: u32,
+        measures: &[(u32, u32)],
+        terminal_statevector: Vec<(f64, f64)>,
+    ) -> Option<Self> {
+        if qubit_count as usize > crate::air::distribution::BORN_AIR_MAX_QUBITS {
+            return None;
+        }
+        let dim = 1usize << qubit_count;
+        if terminal_statevector.len() != dim {
+            return None;
+        }
+        Some(Self {
+            qubit_count,
+            classical_bit_count,
+            measures: measures.to_vec(),
+            terminal_statevector,
+        })
+    }
+}
+
 /// Born-rule binding carried in the proof transcript tail.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DistributionSegment {
@@ -17,6 +51,8 @@ pub struct DistributionSegment {
     pub probability_digest: String,
     /// Sorted lexicographically by outcome key (Qiskit bitstring order).
     pub probabilities: Vec<(String, f64)>,
+    /// C2b: optional terminal statevector + measures for Born AIR verification.
+    pub born_binding: Option<BornBinding>,
 }
 
 fn read_cstr(proof: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -93,7 +129,52 @@ pub fn encode_distribution_segment(segment: &DistributionSegment) -> Vec<u8> {
         append_cstr(&mut out, key);
         out.extend_from_slice(&prob.to_le_bytes());
     }
+    if let Some(binding) = &segment.born_binding {
+        out.extend_from_slice(&binding.qubit_count.to_le_bytes());
+        out.extend_from_slice(&binding.classical_bit_count.to_le_bytes());
+        out.extend_from_slice(&(binding.measures.len() as u32).to_le_bytes());
+        for (qubit, cbit) in &binding.measures {
+            out.extend_from_slice(&qubit.to_le_bytes());
+            out.extend_from_slice(&cbit.to_le_bytes());
+        }
+        out.extend_from_slice(&(binding.terminal_statevector.len() as u32).to_le_bytes());
+        for (re, im) in &binding.terminal_statevector {
+            out.extend_from_slice(&re.to_le_bytes());
+            out.extend_from_slice(&im.to_le_bytes());
+        }
+    }
     out
+}
+
+fn decode_born_binding(payload: &[u8], offset: usize) -> Option<(Option<BornBinding>, usize)> {
+    if offset >= payload.len() {
+        return Some((None, offset));
+    }
+    let (qubit_count, cursor) = read_u32_le(payload, offset)?;
+    let (classical_bit_count, cursor) = read_u32_le(payload, cursor)?;
+    let (measure_count, mut cursor) = read_u32_le(payload, cursor)?;
+    let mut measures = Vec::with_capacity(measure_count as usize);
+    for _ in 0..measure_count {
+        let (qubit, next) = read_u32_le(payload, cursor)?;
+        let (cbit, next) = read_u32_le(payload, next)?;
+        measures.push((qubit, cbit));
+        cursor = next;
+    }
+    let (sv_len, mut cursor) = read_u32_le(payload, cursor)?;
+    let mut terminal_statevector = Vec::with_capacity(sv_len as usize);
+    for _ in 0..sv_len {
+        let (re, next) = read_f64_le(payload, cursor)?;
+        let (im, next) = read_f64_le(payload, next)?;
+        terminal_statevector.push((re, im));
+        cursor = next;
+    }
+    let binding = BornBinding::from_specs(
+        qubit_count,
+        classical_bit_count,
+        &measures,
+        terminal_statevector,
+    );
+    Some((binding, cursor))
 }
 
 /// Decodes a V2 distribution segment payload (includes `measurement_spec_hash`).
@@ -112,16 +193,28 @@ pub fn decode_distribution_segment(proof: &[u8], offset: usize) -> Option<(Distr
         cursor = next;
     }
 
-    Some((
+    let (segment, cursor) = (
         DistributionSegment {
             sample_seed,
             shots,
             measurement_spec_hash,
             probability_digest,
             probabilities,
+            born_binding: None,
         },
         cursor,
-    ))
+    );
+    finalize_v2_segment(segment, proof, cursor)
+}
+
+fn finalize_v2_segment(
+    mut segment: DistributionSegment,
+    payload: &[u8],
+    cursor: usize,
+) -> Option<(DistributionSegment, usize)> {
+    let (born_binding, end) = decode_born_binding(payload, cursor)?;
+    segment.born_binding = born_binding;
+    Some((segment, end))
 }
 
 /// Decodes a legacy V1 distribution segment payload (no `measurement_spec_hash`).
@@ -146,6 +239,7 @@ pub fn decode_distribution_segment_v1(proof: &[u8], offset: usize) -> Option<(Di
             measurement_spec_hash: String::new(),
             probability_digest,
             probabilities,
+            born_binding: None,
         },
         cursor,
     ))
@@ -237,6 +331,10 @@ pub fn decode_and_verify_distribution_tail(payload: &[u8], marker: &[u8]) -> Opt
     if !verify_distribution_segment(&segment) {
         return None;
     }
+    if crate::air::distribution::evaluate_born_constraint_sum(&segment) != 0 {
+        eprintln!("[STARK Core] Failed: Born AIR constraint violation");
+        return None;
+    }
     Some(segment)
 }
 
@@ -319,6 +417,10 @@ pub fn verify_distribution_binding(
         eprintln!("[STARK Core] Failed: counts do not match Born probabilities and seed");
         return false;
     }
+    if crate::air::distribution::evaluate_born_constraint_sum(&segment) != 0 {
+        eprintln!("[STARK Core] Failed: Born AIR constraint violation");
+        return false;
+    }
     true
 }
 
@@ -336,6 +438,7 @@ mod tests {
                 ("11".into(), 0.5),
             ]),
             probabilities: vec![("00".into(), 0.5), ("11".into(), 0.5)],
+            born_binding: None,
         }
     }
 
@@ -407,6 +510,45 @@ mod tests {
 
         let seg = decode_and_verify_distribution_tail(&payload, DIST_V1_MARKER).expect("v1 decode");
         assert!(seg.measurement_spec_hash.is_empty());
+    }
+
+    #[test]
+    fn born_binding_roundtrip_in_v2_tail() {
+        use crate::air::distribution::{evaluate_born_constraint_sum, BornMeasureSpec};
+        use crate::distribution::BornBinding;
+
+        let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
+        let sv = vec![
+            (inv_sqrt2, 0.0),
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (inv_sqrt2, 0.0),
+        ];
+        let measures = vec![
+            BornMeasureSpec { qubit: 0, cbit: 0 },
+            BornMeasureSpec { qubit: 1, cbit: 1 },
+        ];
+        let probs = crate::air::distribution::born_probabilities_from_statevector(
+            &sv, 2, &measures, 2,
+        )
+        .expect("born");
+        let prob_vec: Vec<(String, f64)> = probs.into_iter().collect();
+        let binding = BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv).expect("bind");
+        let segment = DistributionSegment {
+            sample_seed: 42,
+            shots: 128,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: calculate_probability_digest(&prob_vec),
+            probabilities: prob_vec,
+            born_binding: Some(binding),
+        };
+        assert_eq!(evaluate_born_constraint_sum(&segment), 0);
+        let proof = append_distribution_tail(b"stark".to_vec(), &segment);
+        let (_, Some((payload, marker))) = split_distribution_tail(&proof).expect("split") else {
+            panic!("tail missing");
+        };
+        let decoded = decode_and_verify_distribution_tail(payload, marker).expect("decode");
+        assert_eq!(decoded, segment);
     }
 
     #[test]

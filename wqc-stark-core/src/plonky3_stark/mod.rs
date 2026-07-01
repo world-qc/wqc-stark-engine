@@ -150,6 +150,7 @@ mod tests {
                 ("0".into(), 1.0),
             ]),
             probabilities: vec![("0".into(), 1.0)],
+            born_binding: None,
         };
         proof = crate::distribution::append_distribution_tail(proof, &segment);
         assert!(verify_plonky3_proof(&ctx, &proof));
