@@ -260,6 +260,7 @@ mod integration_tests {
             node_id: "node-1",
             slice_id: slice,
             output_hash: "out-hash",
+            terminal_statevector_digest: "",
         }
     }
 

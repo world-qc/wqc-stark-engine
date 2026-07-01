@@ -3,8 +3,8 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    compose_stark_proofs, verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
-    ComposeContext, RootVerifyContext, StarkContext,
+    compose_stark_proofs, proof_has_unitary_statevector_link, verify_distribution_binding,
+    verify_root_proof, verify_stark_proof_core, ComposeContext, RootVerifyContext, StarkContext,
 };
 
 fn cstr_or_empty<'a>(ptr: *const c_char) -> &'a str {
@@ -35,6 +35,7 @@ fn optional_leaf_context<'a>(
         node_id: cstr_or_empty(node_id),
         slice_id: cstr_or_empty(slice_id),
         output_hash: cstr_or_empty(output_hash),
+        terminal_statevector_digest: "",
     })
 }
 
@@ -74,6 +75,7 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
             node_id: cstr_or_empty(node_id),
             slice_id: cstr_or_empty(slice_id),
             output_hash: cstr_or_empty(output_hash),
+            terminal_statevector_digest: "",
         };
 
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
@@ -204,6 +206,30 @@ pub unsafe extern "C" fn wqc_verify_root_proof(
             },
             proof_slice,
         ) {
+            1
+        } else {
+            0
+        }
+    });
+
+    match result {
+        Ok(code) => code,
+        Err(_) => -99,
+    }
+}
+
+/// Returns 1 when the proof transcript includes a non-empty `terminal_statevector_digest` link.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_proof_has_unitary_statevector_link(
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() {
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if proof_has_unitary_statevector_link(proof_slice) {
             1
         } else {
             0

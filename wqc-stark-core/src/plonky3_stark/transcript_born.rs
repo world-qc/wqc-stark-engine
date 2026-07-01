@@ -28,6 +28,8 @@ pub fn encode_born_stark(context: &BornStarkContext<'_>, plonky3_bytes: &[u8]) -
     out.extend_from_slice(BORN_STARK_INNER_MARKER);
     out.extend_from_slice(context.probability_digest.as_bytes());
     out.push(0);
+    out.extend_from_slice(context.terminal_statevector_digest.as_bytes());
+    out.push(0);
     out.extend_from_slice(&(plonky3_bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(plonky3_bytes);
     out
@@ -53,6 +55,10 @@ pub fn decode_born_stark_owned(
     let cursor = marker_pos + BORN_STARK_INNER_MARKER.len();
     let (probability_digest, cursor) = read_cstr(proof, cursor)?;
     if probability_digest != expected.probability_digest {
+        return None;
+    }
+    let (terminal_statevector_digest, cursor) = read_cstr(proof, cursor)?;
+    if terminal_statevector_digest != expected.terminal_statevector_digest {
         return None;
     }
 
@@ -99,6 +105,7 @@ mod tests {
         let ctx = BornStarkContext {
             sub_task_id: "sub-1",
             probability_digest: "abc123digest",
+            terminal_statevector_digest: "svdigest",
         };
         let payload = b"plonky3-bytes";
         let encoded = encode_born_stark(&ctx, payload);
@@ -111,6 +118,7 @@ mod tests {
         let ctx = BornStarkContext {
             sub_task_id: "sub-1",
             probability_digest: "abc123digest",
+            terminal_statevector_digest: "svdigest",
         };
         let inner = encode_born_stark(&ctx, b"plonky3");
         let wrapped = append_born_stark_tail(b"base-proof".to_vec(), &inner);

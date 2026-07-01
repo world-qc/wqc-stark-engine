@@ -19,6 +19,7 @@ use super::transcript_born::{decode_born_stark_owned, encode_born_stark};
 pub struct BornStarkContext<'a> {
     pub sub_task_id: &'a str,
     pub probability_digest: &'a str,
+    pub terminal_statevector_digest: &'a str,
 }
 
 /// Lists computational-basis indices per outcome key (segment probability order).
@@ -135,6 +136,13 @@ pub fn generate_born_stark_proof(
     if context.probability_digest != segment.probability_digest {
         return Err("probability_digest mismatch".to_string());
     }
+    if let Some(binding) = &segment.born_binding {
+        if !binding.terminal_statevector_digest.is_empty()
+            && context.terminal_statevector_digest != binding.terminal_statevector_digest
+        {
+            return Err("terminal_statevector_digest mismatch".to_string());
+        }
+    }
 
     let air = build_distribution_air(segment)
         .ok_or_else(|| "segment does not support Born zk (qubit width or shape)".to_string())?;
@@ -188,6 +196,20 @@ pub fn verify_born_stark_proof(
     if context.probability_digest != segment.probability_digest {
         eprintln!("[DistributionAir] Failed: probability_digest mismatch");
         return false;
+    }
+    if let Some(binding) = &segment.born_binding {
+        if !binding.terminal_statevector_digest.is_empty() {
+            if context.terminal_statevector_digest != binding.terminal_statevector_digest {
+                eprintln!("[DistributionAir] Failed: terminal_statevector_digest mismatch");
+                return false;
+            }
+            let recomputed =
+                crate::distribution::calculate_terminal_statevector_digest(&binding.terminal_statevector);
+            if recomputed != binding.terminal_statevector_digest {
+                eprintln!("[DistributionAir] Failed: statevector digest recomputation mismatch");
+                return false;
+            }
+        }
     }
 
     let air = match build_distribution_air(segment) {
@@ -255,9 +277,15 @@ mod tests {
     #[test]
     fn bell_born_stark_roundtrip() {
         let segment = bell_segment();
+        let sv_digest = segment
+            .born_binding
+            .as_ref()
+            .map(|b| b.terminal_statevector_digest.as_str())
+            .unwrap_or("");
         let ctx = BornStarkContext {
             sub_task_id: "sub-born",
             probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: sv_digest,
         };
         let proof = generate_born_stark_proof(&ctx, &segment).expect("prove");
         assert!(verify_born_stark_proof(&ctx, &segment, &proof));
@@ -266,14 +294,21 @@ mod tests {
     #[test]
     fn bell_born_stark_rejects_tampered_digest() {
         let segment = bell_segment();
+        let sv_digest = segment
+            .born_binding
+            .as_ref()
+            .map(|b| b.terminal_statevector_digest.as_str())
+            .unwrap_or("");
         let ctx = BornStarkContext {
             sub_task_id: "sub-born",
             probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: sv_digest,
         };
         let proof = generate_born_stark_proof(&ctx, &segment).expect("prove");
         let bad = BornStarkContext {
             sub_task_id: "sub-born",
             probability_digest: "deadbeef",
+            terminal_statevector_digest: sv_digest,
         };
         assert!(!verify_born_stark_proof(&bad, &segment, &proof));
     }

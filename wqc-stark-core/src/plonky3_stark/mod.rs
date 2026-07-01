@@ -83,8 +83,26 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         return false;
     }
 
+    let expected_sv_digest = crate::distribution::split_distribution_tail(proof)
+        .and_then(|(_, tail)| tail)
+        .and_then(|(payload, marker)| {
+            crate::distribution::decode_and_verify_distribution_tail(payload, marker)
+        })
+        .and_then(|seg| seg.born_binding)
+        .filter(|b| !b.terminal_statevector_digest.is_empty())
+        .map(|b| b.terminal_statevector_digest.clone());
+
+    let verify_ctx = StarkContext {
+        circuit_id: context.circuit_id,
+        sub_task_id: context.sub_task_id,
+        node_id: context.node_id,
+        slice_id: context.slice_id,
+        output_hash: context.output_hash,
+        terminal_statevector_digest: expected_sv_digest.as_deref().unwrap_or(""),
+    };
+
     let base = crate::distribution::base_proof_without_distribution_tail(proof);
-    let plonky3_bytes = match decode_proof_v2_plonky3_bytes(base, context) {
+    let plonky3_bytes = match decode_proof_v2_plonky3_bytes(base, &verify_ctx) {
         Some(bytes) => bytes,
         None => {
             eprintln!("[STARK Core] Failed: malformed v2 proof payload");
@@ -117,21 +135,39 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
             }
         };
 
+        if let Some(binding) = &segment.born_binding {
+            if !binding.terminal_statevector_digest.is_empty() {
+                let recomputed = crate::distribution::calculate_terminal_statevector_digest(
+                    &binding.terminal_statevector,
+                );
+                if recomputed != binding.terminal_statevector_digest {
+                    eprintln!("[STARK Core] Failed: terminal_statevector_digest mismatch in segment");
+                    return false;
+                }
+            }
+        }
+
         if segment_supports_born_zk(&segment) {
             let Some(born_bytes) = split_born_stark_tail(proof) else {
                 eprintln!("[STARK Core] Failed: Born zk STARK tail missing");
                 return false;
             };
+            let sv_digest = segment
+                .born_binding
+                .as_ref()
+                .map(|b| b.terminal_statevector_digest.as_str())
+                .unwrap_or("");
             let born_ctx = BornStarkContext {
                 sub_task_id: context.sub_task_id,
                 probability_digest: &segment.probability_digest,
+                terminal_statevector_digest: sv_digest,
             };
             if !verify_born_stark_proof(&born_ctx, &segment, born_bytes) {
                 eprintln!("[STARK Core] Failed: Born zk STARK verification failed");
                 return false;
             }
             eprintln!(
-                "[STARK Core] Verification success (v2 Plonky3 STARK + distribution + Born zk)"
+                "[STARK Core] Verification success (v2 Plonky3 STARK + distribution + Born zk + unitary link)"
             );
             return true;
         }
@@ -156,6 +192,7 @@ mod tests {
             node_id: "n1",
             slice_id: "0",
             output_hash: "out-hash",
+            terminal_statevector_digest: "",
         }
     }
 
@@ -179,7 +216,6 @@ mod tests {
     fn v2_with_born_zk_tail_roundtrip() {
         let ctx = context();
         let trace = crate::trace_spec::golden_h_q0_trace();
-        let mut proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
         let sv = vec![(inv_sqrt2, 0.0), (inv_sqrt2, 0.0)];
         let binding = crate::distribution::BornBinding::from_specs(1, 1, &[(0, 0)], sv).expect("bind");
@@ -192,15 +228,59 @@ mod tests {
             probabilities: probs,
             born_binding: Some(binding),
         };
+        let sv_digest = segment
+            .born_binding
+            .as_ref()
+            .map(|b| b.terminal_statevector_digest.as_str())
+            .unwrap_or("");
+        let linked_ctx = StarkContext {
+            terminal_statevector_digest: sv_digest,
+            ..ctx
+        };
+        let mut proof = generate_plonky3_proof(&linked_ctx, &trace).expect("prove");
         proof = crate::distribution::append_distribution_tail(proof, &segment);
         if segment_supports_born_zk(&segment) {
             let born_ctx = BornStarkContext {
                 sub_task_id: ctx.sub_task_id,
                 probability_digest: &segment.probability_digest,
+                terminal_statevector_digest: sv_digest,
             };
             let born = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
             proof = append_born_stark_tail(proof, &born);
         }
         assert!(verify_plonky3_proof(&ctx, &proof));
+    }
+
+    #[test]
+    fn v2_born_zk_rejects_unlinked_unitary() {
+        let ctx = context();
+        let trace = crate::trace_spec::golden_h_q0_trace();
+        let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
+        let sv = vec![(inv_sqrt2, 0.0), (inv_sqrt2, 0.0)];
+        let binding = crate::distribution::BornBinding::from_specs(1, 1, &[(0, 0)], sv).expect("bind");
+        let probs = vec![("0".into(), 0.5), ("1".into(), 0.5)];
+        let segment = crate::distribution::DistributionSegment {
+            sample_seed: 7,
+            shots: 128,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: crate::distribution::calculate_probability_digest(&probs),
+            probabilities: probs,
+            born_binding: Some(binding),
+        };
+        let sv_digest = segment
+            .born_binding
+            .as_ref()
+            .map(|b| b.terminal_statevector_digest.as_str())
+            .unwrap_or("");
+        let mut proof = generate_plonky3_proof(&ctx, &trace).expect("prove without link");
+        proof = crate::distribution::append_distribution_tail(proof, &segment);
+        let born_ctx = BornStarkContext {
+            sub_task_id: ctx.sub_task_id,
+            probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: sv_digest,
+        };
+        let born = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
+        proof = append_born_stark_tail(proof, &born);
+        assert!(!verify_plonky3_proof(&ctx, &proof));
     }
 }

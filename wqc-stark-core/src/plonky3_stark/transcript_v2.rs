@@ -12,6 +12,10 @@ fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) 
         proof.extend_from_slice(field.as_bytes());
         proof.push(0);
     }
+    if !context.terminal_statevector_digest.is_empty() {
+        proof.extend_from_slice(context.terminal_statevector_digest.as_bytes());
+        proof.push(0);
+    }
 }
 
 fn read_u32_le(proof: &[u8], offset: usize) -> Option<(u32, usize)> {

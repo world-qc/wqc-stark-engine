@@ -16,6 +16,8 @@ pub struct BornBinding {
     pub measures: Vec<(u32, u32)>,
     /// Dense terminal amplitudes in computational basis order.
     pub terminal_statevector: Vec<(f64, f64)>,
+    /// SHA3-256 hex of canonical quantized statevector JSON (unitary↔Born link).
+    pub terminal_statevector_digest: String,
 }
 
 impl BornBinding {
@@ -32,12 +34,20 @@ impl BornBinding {
         if terminal_statevector.len() != dim {
             return None;
         }
+        let terminal_statevector_digest =
+            calculate_terminal_statevector_digest(&terminal_statevector);
         Some(Self {
             qubit_count,
             classical_bit_count,
             measures: measures.to_vec(),
             terminal_statevector,
+            terminal_statevector_digest,
         })
+    }
+
+    pub fn with_digest(mut self, digest: String) -> Self {
+        self.terminal_statevector_digest = digest;
+        self
     }
 }
 
@@ -109,6 +119,37 @@ pub fn calculate_probability_digest(probabilities: &[(String, f64)]) -> String {
     ))
 }
 
+/// Fixed-point scale for terminal statevector digest (matches AIR `f64_to_m31`).
+pub const TERMINAL_STATEVECTOR_DIGEST_SCALE: f64 = 10_000.0;
+
+fn quantize_for_digest(val: f64) -> f64 {
+    (val * TERMINAL_STATEVECTOR_DIGEST_SCALE).round() / TERMINAL_STATEVECTOR_DIGEST_SCALE
+}
+
+/// Canonical JSON for terminal statevector digest — must match `wqc-core`.
+pub fn format_terminal_statevector_json(statevector: &[(f64, f64)]) -> String {
+    let mut amps = String::new();
+    for (re, im) in statevector {
+        if !amps.is_empty() {
+            amps.push(',');
+        }
+        amps.push_str(&format!(
+            r#"{{"im":{},"re":{}}}"#,
+            format_go_float(quantize_for_digest(*im)),
+            format_go_float(quantize_for_digest(*re)),
+        ));
+    }
+    format!(r#"{{"statevector":{{"amplitudes":[{amps}]}}}}"#)
+}
+
+/// SHA3-256 hex digest of the canonical quantized terminal statevector JSON.
+pub fn calculate_terminal_statevector_digest(statevector: &[(f64, f64)]) -> String {
+    use sha3::{Digest, Sha3_256};
+    hex::encode(Sha3_256::digest(
+        format_terminal_statevector_json(statevector).as_bytes(),
+    ))
+}
+
 fn format_go_float(val: f64) -> String {
     if val == (val as i64) as f64 {
         format!("{:.1}", val)
@@ -142,6 +183,7 @@ pub fn encode_distribution_segment(segment: &DistributionSegment) -> Vec<u8> {
             out.extend_from_slice(&re.to_le_bytes());
             out.extend_from_slice(&im.to_le_bytes());
         }
+        append_cstr(&mut out, &binding.terminal_statevector_digest);
     }
     out
 }
@@ -168,13 +210,19 @@ fn decode_born_binding(payload: &[u8], offset: usize) -> Option<(Option<BornBind
         terminal_statevector.push((re, im));
         cursor = next;
     }
+    let (terminal_statevector_digest, cursor) = if cursor < payload.len() {
+        read_cstr(payload, cursor)?
+    } else {
+        (String::new(), cursor)
+    };
     let binding = BornBinding::from_specs(
         qubit_count,
         classical_bit_count,
         &measures,
         terminal_statevector,
-    );
-    Some((binding, cursor))
+    )?
+    .with_digest(terminal_statevector_digest);
+    Some((Some(binding), cursor))
 }
 
 /// Decodes a V2 distribution segment payload (includes `measurement_spec_hash`).

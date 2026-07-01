@@ -20,6 +20,8 @@ pub struct StarkContext<'a> {
     pub node_id: &'a str,
     pub slice_id: &'a str,
     pub output_hash: &'a str,
+    /// SHA3-256 hex of quantized terminal statevector JSON (C2b unitary link); empty when unbound.
+    pub terminal_statevector_digest: &'a str,
 }
 
 fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) {
@@ -30,6 +32,10 @@ fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) 
         context.output_hash,
     ] {
         proof.extend_from_slice(field.as_bytes());
+        proof.push(0);
+    }
+    if !context.terminal_statevector_digest.is_empty() {
+        proof.extend_from_slice(context.terminal_statevector_digest.as_bytes());
         proof.push(0);
     }
 }
@@ -59,6 +65,17 @@ pub(crate) fn verify_public_input_binding(
             eprintln!(
                 "[STARK Core] Failed: public input binding mismatch (expected '{}', got '{}')",
                 expected, parsed
+            );
+            return None;
+        }
+        cursor = next;
+    }
+    if !context.terminal_statevector_digest.is_empty() {
+        let (parsed, next) = read_cstr_field(proof, cursor)?;
+        if parsed != context.terminal_statevector_digest {
+            eprintln!(
+                "[STARK Core] Failed: terminal_statevector_digest mismatch (expected '{}', got '{}')",
+                context.terminal_statevector_digest, parsed
             );
             return None;
         }
@@ -183,6 +200,7 @@ mod tests {
             node_id: "node-1",
             slice_id: "0",
             output_hash: "hash-abc",
+            terminal_statevector_digest: "",
         }
     }
 
@@ -216,6 +234,7 @@ mod tests {
             node_id: context.node_id,
             slice_id: "1", // mismatch
             output_hash: context.output_hash,
+            terminal_statevector_digest: "",
         };
 
         let decoded = decode_proof_v1_owned(&proof, &bad_context);

@@ -21,9 +21,9 @@ pub use aggregation::{
 };
 pub use distribution::{
     append_distribution_tail, base_proof_without_distribution_tail, calculate_probability_digest,
-    decode_and_verify_distribution_tail, decode_distribution_segment, sample_counts_from_probabilities,
-    split_distribution_tail, verify_distribution_binding, BornBinding, DistributionSegment,
-    DIST_V1_MARKER, DIST_V2_MARKER,
+    calculate_terminal_statevector_digest, decode_and_verify_distribution_tail,
+    decode_distribution_segment, sample_counts_from_probabilities, split_distribution_tail,
+    verify_distribution_binding, BornBinding, DistributionSegment, DIST_V1_MARKER, DIST_V2_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
@@ -31,6 +31,17 @@ pub use transcript::{
 };
 
 use transcript::verify_public_input_binding;
+
+/// Reports whether a proof binds unitary v2 and Born tails via `terminal_statevector_digest`.
+pub fn proof_has_unitary_statevector_link(proof: &[u8]) -> bool {
+    distribution::split_distribution_tail(proof)
+        .and_then(|(_, tail)| tail)
+        .and_then(|(payload, marker)| {
+            distribution::decode_and_verify_distribution_tail(payload, marker)
+        })
+        .and_then(|seg| seg.born_binding)
+        .is_some_and(|b| !b.terminal_statevector_digest.is_empty())
+}
 
 /// Generates a v2 Plonky3 uni-STARK proof transcript (requires `plonky3-stark` feature).
 #[cfg(feature = "plonky3-stark")]
@@ -184,6 +195,7 @@ mod integration_tests {
             node_id: "n1",
             slice_id: "0",
             output_hash: "out-hash",
+            terminal_statevector_digest: "",
         }
     }
 
