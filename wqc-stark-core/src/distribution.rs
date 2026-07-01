@@ -347,9 +347,7 @@ pub fn proof_without_born_stark_tail(proof: &[u8]) -> &[u8] {
 
 /// Returns the base proof when no distribution tail is present.
 pub fn base_proof_without_distribution_tail(proof: &[u8]) -> &[u8] {
-    split_distribution_tail(proof)
-        .map(|(base, _)| base)
-        .unwrap_or(proof)
+    crate::trajectory::base_proof_without_aux_tails(proof)
 }
 
 /// Verifies sorted keys, non-empty digest, and digest recomputation from embedded probs.

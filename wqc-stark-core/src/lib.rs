@@ -2,6 +2,7 @@ pub mod air;
 pub mod aggregation;
 pub mod distribution;
 pub mod trace_spec;
+pub mod trajectory;
 pub mod transcript;
 
 #[cfg(feature = "plonky3-stark")]
@@ -24,6 +25,12 @@ pub use distribution::{
     calculate_terminal_statevector_digest, decode_and_verify_distribution_tail,
     decode_distribution_segment, sample_counts_from_probabilities, split_distribution_tail,
     verify_distribution_binding, BornBinding, DistributionSegment, DIST_V1_MARKER, DIST_V2_MARKER,
+};
+pub use trajectory::{
+    append_trajectory_tail, base_proof_without_aux_tails, calculate_trajectory_digest,
+    counts_from_trajectory_segment, decode_and_verify_trajectory_tail, format_trajectory_json,
+    has_trajectory_tail, split_trajectory_tail, verify_trajectory_binding, TrajectoryMeasureEvent,
+    TrajectorySegment, TrajectoryShotTrace, TRAJ_V1_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
@@ -173,6 +180,28 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
             eprintln!("[STARK Core] Failed: invalid distribution tail");
             return false;
         }
+    }
+
+    if crate::trajectory::has_trajectory_tail(proof) {
+        let Some((_, Some((payload, marker)))) = crate::trajectory::split_trajectory_tail(proof) else {
+            eprintln!("[STARK Core] Failed: malformed trajectory tail");
+            return false;
+        };
+        if crate::trajectory::decode_and_verify_trajectory_tail(payload, marker).is_none() {
+            eprintln!("[STARK Core] Failed: invalid trajectory tail");
+            return false;
+        }
+        eprintln!(
+            "[STARK Core] Verification success (v1 AIR, trace_len={}, auxiliary tails)",
+            trace.len()
+        );
+        return true;
+    }
+
+    if crate::distribution::split_distribution_tail(proof)
+        .and_then(|(_, tail)| tail)
+        .is_some()
+    {
         eprintln!(
             "[STARK Core] Verification success (v1 AIR, trace_len={}, distribution tail)",
             trace.len()

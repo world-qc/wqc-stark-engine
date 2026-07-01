@@ -126,6 +126,8 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         return false;
     }
 
+    let mut verified_distribution = false;
+    let mut verified_born_zk = false;
     if let Some((_, Some((dist_payload, marker)))) = crate::distribution::split_distribution_tail(proof) {
         let segment = match crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker) {
             Some(seg) => seg,
@@ -166,12 +168,48 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
                 eprintln!("[STARK Core] Failed: Born zk STARK verification failed");
                 return false;
             }
-            eprintln!(
-                "[STARK Core] Verification success (v2 Plonky3 STARK + distribution + Born zk + unitary link)"
-            );
-            return true;
+            verified_born_zk = true;
         }
+        verified_distribution = true;
+    }
 
+    let verified_trajectory = if crate::trajectory::has_trajectory_tail(proof) {
+        let Some((_, Some((payload, marker)))) = crate::trajectory::split_trajectory_tail(proof) else {
+            eprintln!("[STARK Core] Failed: malformed trajectory tail");
+            return false;
+        };
+        if crate::trajectory::decode_and_verify_trajectory_tail(payload, marker).is_none() {
+            eprintln!("[STARK Core] Failed: invalid trajectory tail");
+            return false;
+        }
+        true
+    } else {
+        false
+    };
+
+    if verified_trajectory {
+        if verified_born_zk {
+            eprintln!(
+                "[STARK Core] Verification success (v2 Plonky3 STARK + distribution + Born zk + trajectory tail)"
+            );
+        } else if verified_distribution {
+            eprintln!(
+                "[STARK Core] Verification success (v2 Plonky3 STARK + distribution + trajectory tail)"
+            );
+        } else {
+            eprintln!("[STARK Core] Verification success (v2 Plonky3 STARK + trajectory tail)");
+        }
+        return true;
+    }
+
+    if verified_born_zk {
+        eprintln!(
+            "[STARK Core] Verification success (v2 Plonky3 STARK + distribution + Born zk + unitary link)"
+        );
+        return true;
+    }
+
+    if verified_distribution {
         eprintln!("[STARK Core] Verification success (v2 Plonky3 STARK + distribution tail)");
         return true;
     }
