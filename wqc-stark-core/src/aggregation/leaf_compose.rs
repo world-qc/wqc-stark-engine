@@ -385,27 +385,157 @@ mod tests {
     }
 
     #[cfg(feature = "plonky3-stark")]
-    #[test]
-    fn unitary_trajectory_compose_roundtrip() {
+    fn if_compose_fixture() -> (StarkContext<'static>, Vec<u8>) {
         use crate::generate_plonky3_stark_proof;
         use crate::plonky3_stark::generate_trajectory_stark_bundle;
 
         let segment = sample_segment();
+        let link_digest: &'static str =
+            Box::leak(segment.unitary_link_digest.clone().into_boxed_str());
         let ctx = StarkContext {
             circuit_id: "circuit-if",
             sub_task_id: "sub-traj",
             node_id: "node-1",
             slice_id: "0",
             output_hash: "counts-hash",
-            terminal_statevector_digest: &segment.unitary_link_digest,
+            terminal_statevector_digest: link_digest,
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
         let bundle = generate_trajectory_stark_bundle("sub-traj", &segment).expect("traj zk");
         let composed =
             compose_unitary_trajectory_leaf(&ctx, &unitary, &segment, &bundle).expect("compose");
+        (ctx, composed)
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    fn tamper_subslice(proof: &mut [u8], needle: &[u8]) {
+        let offset = proof
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .expect("needle in proof");
+        proof[offset] ^= 0xFF;
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn unitary_trajectory_compose_roundtrip() {
+        let (ctx, composed) = if_compose_fixture();
         assert!(is_unitary_trajectory_leaf_compose(&composed));
         assert!(verify_unitary_trajectory_leaf_compose(&ctx, &composed));
         assert!(trajectory_child_from_compose(&composed).is_some());
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn compose_rejects_unitary_link_digest_mismatch() {
+        use crate::generate_plonky3_stark_proof;
+        use crate::plonky3_stark::generate_trajectory_stark_bundle;
+
+        let segment = sample_segment();
+        let link_digest = segment.unitary_link_digest.clone();
+        let ctx = StarkContext {
+            circuit_id: "circuit-if",
+            sub_task_id: "sub-traj",
+            node_id: "node-1",
+            slice_id: "0",
+            output_hash: "counts-hash",
+            terminal_statevector_digest: &link_digest,
+        };
+        let trace = crate::trace_spec::golden_h_q0_trace();
+        let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
+        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment).expect("traj zk");
+
+        let mut bad_segment = segment;
+        bad_segment.unitary_link_digest = "00".repeat(32);
+        let err = compose_unitary_trajectory_leaf(&ctx, &unitary, &bad_segment, &bundle)
+            .expect_err("tampered link digest");
+        assert!(
+            err.contains("unitary_link_digest mismatch")
+                || err.contains("unitary child Plonky3 verification failed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn composed_proof_rejects_tampered_children_and_agg_tail() {
+        use crate::aggregation::transcript_v3::decode_compose_v3_slices;
+        use crate::plonky3_stark::split_agg_tail;
+
+        let (ctx, mut composed) = if_compose_fixture();
+        assert!(verify_unitary_trajectory_leaf_compose(&ctx, &composed));
+
+        let v3 = compose_v3_body(&composed);
+        let (_, left_child, right_child) = decode_compose_v3_slices(v3).expect("decode");
+
+        let mut bad_left = composed.clone();
+        tamper_subslice(&mut bad_left, left_child);
+        assert!(!verify_unitary_trajectory_leaf_compose(&ctx, &bad_left));
+
+        let mut bad_right = composed.clone();
+        tamper_subslice(&mut bad_right, right_child);
+        assert!(!verify_unitary_trajectory_leaf_compose(&ctx, &bad_right));
+
+        if let Some((_, agg)) = split_agg_tail(&composed) {
+            let mut bad_agg = composed.clone();
+            tamper_subslice(&mut bad_agg, agg);
+            assert!(!verify_unitary_trajectory_leaf_compose(&ctx, &bad_agg));
+        }
+
+        let tail_idx = composed.len() - 1;
+        composed[tail_idx] ^= 0xFF;
+        assert!(!verify_unitary_trajectory_leaf_compose(&ctx, &composed));
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn composed_proof_rejects_wrong_verify_context() {
+        let (ctx, composed) = if_compose_fixture();
+        assert!(verify_unitary_trajectory_leaf_compose(&ctx, &composed));
+
+        let wrong_sub = StarkContext {
+            circuit_id: ctx.circuit_id,
+            sub_task_id: "other-sub",
+            node_id: ctx.node_id,
+            slice_id: ctx.slice_id,
+            output_hash: ctx.output_hash,
+            terminal_statevector_digest: ctx.terminal_statevector_digest,
+        };
+        assert!(!verify_unitary_trajectory_leaf_compose(&wrong_sub, &composed));
+
+        let wrong_output = StarkContext {
+            circuit_id: ctx.circuit_id,
+            sub_task_id: ctx.sub_task_id,
+            node_id: ctx.node_id,
+            slice_id: ctx.slice_id,
+            output_hash: "deadbeef",
+            terminal_statevector_digest: ctx.terminal_statevector_digest,
+        };
+        assert!(!verify_unitary_trajectory_leaf_compose(&wrong_output, &composed));
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn composed_proof_rejects_tampered_unitary_link_in_trajectory_child() {
+        let (ctx, composed) = if_compose_fixture();
+        let link = ctx.terminal_statevector_digest.as_bytes();
+        let mut tampered = composed.clone();
+        tamper_subslice(&mut tampered, link);
+        assert!(!verify_unitary_trajectory_leaf_compose(&ctx, &tampered));
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn verify_stark_proof_core_routes_composed_leaf() {
+        use crate::verify_stark_proof_core;
+
+        let (ctx, composed) = if_compose_fixture();
+        assert!(verify_stark_proof_core(&ctx, &composed));
+
+        let mut bad = composed.clone();
+        let mid = bad.len() / 2;
+        bad[mid] ^= 0xFF;
+        assert!(!verify_stark_proof_core(&ctx, &bad));
     }
 }
