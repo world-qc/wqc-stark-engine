@@ -41,6 +41,12 @@ pub fn generate_plonky3_stark_proof(
     plonky3_stark::generate_plonky3_proof(context, execution_trace)
 }
 
+#[cfg(feature = "plonky3-stark")]
+pub use plonky3_stark::{
+    append_born_stark_tail, generate_born_stark_proof, has_born_stark_tail, segment_supports_born_zk,
+    verify_born_stark_proof, BornStarkContext, BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_QUBITS,
+};
+
 /// Generates a v1 AIR commitment proof: embeds the execution trace and AIR digest.
 ///
 /// This is **not** a full STARK (no FRI / polynomial commitments). Phase 3 adds Plonky3 uni-STARK.

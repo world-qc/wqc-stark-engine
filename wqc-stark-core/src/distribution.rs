@@ -272,6 +272,7 @@ pub fn append_distribution_tail(mut proof: Vec<u8>, segment: &DistributionSegmen
 }
 
 /// Splits a proof into the base STARK body and optional distribution tail.
+/// A Born zk STARK transcript may follow the distribution payload.
 pub fn split_distribution_tail(proof: &[u8]) -> Option<(&[u8], Option<(&[u8], &'static [u8])>)> {
     let (pos, marker) = find_distribution_tail_marker(proof)?;
     let base = &proof[..pos];
@@ -279,10 +280,21 @@ pub fn split_distribution_tail(proof: &[u8]) -> Option<(&[u8], Option<(&[u8], &'
     let (len, cursor) = read_u32_le(proof, cursor)?;
     let end = cursor + len as usize;
     let payload = proof.get(cursor..end)?;
-    if end != proof.len() {
-        return None;
-    }
     Some((base, Some((payload, marker))))
+}
+
+/// Strips an optional Born STARK suffix (returns proof up to and including distribution payload end).
+pub fn proof_without_born_stark_tail(proof: &[u8]) -> &[u8] {
+    #[cfg(feature = "plonky3-stark")]
+    {
+        if let Some(pos) = proof
+            .windows(crate::plonky3_stark::BORN_STARK_TAIL_MARKER.len())
+            .rposition(|w| w == crate::plonky3_stark::BORN_STARK_TAIL_MARKER)
+        {
+            return &proof[..pos];
+        }
+    }
+    proof
 }
 
 /// Returns the base proof when no distribution tail is present.

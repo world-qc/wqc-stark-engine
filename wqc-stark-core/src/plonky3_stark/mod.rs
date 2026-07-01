@@ -8,6 +8,12 @@ mod aggregation;
 #[cfg(feature = "plonky3-stark")]
 mod aggregation_air;
 #[cfg(feature = "plonky3-stark")]
+mod distribution_air;
+#[cfg(feature = "plonky3-stark")]
+mod distribution_stark;
+#[cfg(feature = "plonky3-stark")]
+mod transcript_born;
+#[cfg(feature = "plonky3-stark")]
 mod transcript_v4;
 
 pub use config::devnet_circle_config;
@@ -15,6 +21,15 @@ pub use quantum_air::QuantumExecutionAir;
 pub use transcript_v2::{decode_proof_v2_owned, decode_proof_v2_plonky3_bytes, encode_proof_v2};
 #[cfg(feature = "plonky3-stark")]
 pub use aggregation::{generate_aggregation_proof, verify_aggregation_proof, AggregationContext};
+#[cfg(feature = "plonky3-stark")]
+pub use distribution_stark::{
+    generate_born_stark_proof, segment_supports_born_zk, verify_born_stark_proof,
+    BornStarkContext, BORN_ZK_MAX_QUBITS,
+};
+#[cfg(feature = "plonky3-stark")]
+pub use transcript_born::{
+    append_born_stark_tail, has_born_stark_tail, split_born_stark_tail, BORN_STARK_TAIL_MARKER,
+};
 #[cfg(feature = "plonky3-stark")]
 pub use transcript_v4::{append_agg_tail, has_agg_tail, split_agg_tail};
 
@@ -94,10 +109,33 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
     }
 
     if let Some((_, Some((dist_payload, marker)))) = crate::distribution::split_distribution_tail(proof) {
-        if crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker).is_none() {
-            eprintln!("[STARK Core] Failed: invalid distribution tail");
-            return false;
+        let segment = match crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker) {
+            Some(seg) => seg,
+            None => {
+                eprintln!("[STARK Core] Failed: invalid distribution tail");
+                return false;
+            }
+        };
+
+        if segment_supports_born_zk(&segment) {
+            let Some(born_bytes) = split_born_stark_tail(proof) else {
+                eprintln!("[STARK Core] Failed: Born zk STARK tail missing");
+                return false;
+            };
+            let born_ctx = BornStarkContext {
+                sub_task_id: context.sub_task_id,
+                probability_digest: &segment.probability_digest,
+            };
+            if !verify_born_stark_proof(&born_ctx, &segment, born_bytes) {
+                eprintln!("[STARK Core] Failed: Born zk STARK verification failed");
+                return false;
+            }
+            eprintln!(
+                "[STARK Core] Verification success (v2 Plonky3 STARK + distribution + Born zk)"
+            );
+            return true;
         }
+
         eprintln!("[STARK Core] Verification success (v2 Plonky3 STARK + distribution tail)");
         return true;
     }
@@ -138,21 +176,31 @@ mod tests {
     }
 
     #[test]
-    fn v2_with_distribution_tail_roundtrip() {
+    fn v2_with_born_zk_tail_roundtrip() {
         let ctx = context();
         let trace = crate::trace_spec::golden_h_q0_trace();
         let mut proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
+        let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
+        let sv = vec![(inv_sqrt2, 0.0), (inv_sqrt2, 0.0)];
+        let binding = crate::distribution::BornBinding::from_specs(1, 1, &[(0, 0)], sv).expect("bind");
+        let probs = vec![("0".into(), 0.5), ("1".into(), 0.5)];
         let segment = crate::distribution::DistributionSegment {
             sample_seed: 7,
             shots: 128,
-            measurement_spec_hash: String::new(),
-            probability_digest: crate::distribution::calculate_probability_digest(&[
-                ("0".into(), 1.0),
-            ]),
-            probabilities: vec![("0".into(), 1.0)],
-            born_binding: None,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: crate::distribution::calculate_probability_digest(&probs),
+            probabilities: probs,
+            born_binding: Some(binding),
         };
         proof = crate::distribution::append_distribution_tail(proof, &segment);
+        if segment_supports_born_zk(&segment) {
+            let born_ctx = BornStarkContext {
+                sub_task_id: ctx.sub_task_id,
+                probability_digest: &segment.probability_digest,
+            };
+            let born = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
+            proof = append_born_stark_tail(proof, &born);
+        }
         assert!(verify_plonky3_proof(&ctx, &proof));
     }
 }
