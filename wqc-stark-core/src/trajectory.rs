@@ -1,9 +1,10 @@
 //! C2c: mid-circuit trajectory tail bound to a v1/v2 STARK transcript.
 //!
 //! Appended after optional distribution / Born tails:
-//! `_M31_TRAJ_V1_` + sample_seed + shots + measurement_spec_hash + trajectory_digest + shot traces
+//! `_M31_TRAJ_V1_` or `_M31_TRAJ_V2_` + segment payload (+ optional `_M31_TRAJ_STARK_V1_` zk bundle)
 
 pub const TRAJ_V1_MARKER: &[u8] = b"_M31_TRAJ_V1_";
+pub const TRAJ_V2_MARKER: &[u8] = b"_M31_TRAJ_V2_";
 
 /// One observed MEASURE event during a trajectory shot.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,6 +15,18 @@ pub struct TrajectoryMeasureEvent {
     pub p0: f64,
     pub p1: f64,
     pub outcome: u8,
+    /// SHA3-256 hex of canonical pre-measure statevector JSON (empty in legacy V1 tails).
+    pub pre_measure_statevector_digest: String,
+}
+
+/// Unique pre-measure statevector witness for zk marginal binding (deduped by digest + qubit).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrajectoryMarginalWitness {
+    pub qubit: u32,
+    pub reference_p0: f64,
+    pub reference_p1: f64,
+    pub pre_measure_statevector: Vec<(f64, f64)>,
+    pub pre_measure_statevector_digest: String,
 }
 
 /// One deterministic trajectory shot.
@@ -35,7 +48,12 @@ pub struct TrajectorySegment {
     pub measurement_spec_hash: String,
     /// SHA3-256 hex of canonical trajectory JSON.
     pub trajectory_digest: String,
+    pub qubit_count: u32,
+    /// Digest of the first MEASURE pre-measure statevector (unitary v2 link); empty when absent.
+    pub unitary_link_digest: String,
     pub traces: Vec<TrajectoryShotTrace>,
+    /// Deduped marginal witnesses for algebraic / zk binding (empty in legacy V1 tails).
+    pub marginal_witnesses: Vec<TrajectoryMarginalWitness>,
 }
 
 fn read_cstr(proof: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -121,7 +139,15 @@ pub fn calculate_trajectory_digest(traces: &[TrajectoryShotTrace]) -> String {
     hex::encode(Sha3_256::digest(format_trajectory_json(traces).as_bytes()))
 }
 
-pub fn encode_trajectory_segment(segment: &TrajectorySegment) -> Vec<u8> {
+pub fn encode_trajectory_segment(segment: &TrajectorySegment, marker: &[u8]) -> Vec<u8> {
+    if marker == TRAJ_V2_MARKER {
+        encode_trajectory_segment_v2(segment)
+    } else {
+        encode_trajectory_segment_v1(segment)
+    }
+}
+
+fn encode_trajectory_segment_v1(segment: &TrajectorySegment) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&segment.sample_seed.to_le_bytes());
     out.extend_from_slice(&segment.shots.to_le_bytes());
@@ -147,7 +173,56 @@ pub fn encode_trajectory_segment(segment: &TrajectorySegment) -> Vec<u8> {
     out
 }
 
-pub fn decode_trajectory_segment(payload: &[u8], offset: usize) -> Option<(TrajectorySegment, usize)> {
+fn encode_trajectory_segment_v2(segment: &TrajectorySegment) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&segment.sample_seed.to_le_bytes());
+    out.extend_from_slice(&segment.shots.to_le_bytes());
+    append_cstr(&mut out, &segment.measurement_spec_hash);
+    append_cstr(&mut out, &segment.trajectory_digest);
+    out.extend_from_slice(&segment.qubit_count.to_le_bytes());
+    append_cstr(&mut out, &segment.unitary_link_digest);
+    out.extend_from_slice(&(segment.traces.len() as u32).to_le_bytes());
+    for shot in &segment.traces {
+        out.extend_from_slice(&shot.shot_index.to_le_bytes());
+        out.extend_from_slice(&shot.shot_seed.to_le_bytes());
+        append_cstr(&mut out, &shot.final_outcome);
+        out.extend_from_slice(&(shot.classical_bits.len() as u32).to_le_bytes());
+        out.extend_from_slice(&shot.classical_bits);
+        out.extend_from_slice(&(shot.measures.len() as u32).to_le_bytes());
+        for m in &shot.measures {
+            out.extend_from_slice(&m.gate_index.to_le_bytes());
+            out.extend_from_slice(&m.qubit.to_le_bytes());
+            out.extend_from_slice(&m.cbit.to_le_bytes());
+            out.extend_from_slice(&m.p0.to_le_bytes());
+            out.extend_from_slice(&m.p1.to_le_bytes());
+            out.push(m.outcome);
+            append_cstr(&mut out, &m.pre_measure_statevector_digest);
+        }
+    }
+    out.extend_from_slice(&(segment.marginal_witnesses.len() as u32).to_le_bytes());
+    for witness in &segment.marginal_witnesses {
+        out.extend_from_slice(&witness.qubit.to_le_bytes());
+        out.extend_from_slice(&witness.reference_p0.to_le_bytes());
+        out.extend_from_slice(&witness.reference_p1.to_le_bytes());
+        out.extend_from_slice(&(witness.pre_measure_statevector.len() as u32).to_le_bytes());
+        for (re, im) in &witness.pre_measure_statevector {
+            out.extend_from_slice(&re.to_le_bytes());
+            out.extend_from_slice(&im.to_le_bytes());
+        }
+        append_cstr(&mut out, &witness.pre_measure_statevector_digest);
+    }
+    out
+}
+
+pub fn decode_trajectory_segment(payload: &[u8], marker: &[u8]) -> Option<(TrajectorySegment, usize)> {
+    if marker == TRAJ_V2_MARKER {
+        decode_trajectory_segment_v2(payload, 0)
+    } else {
+        decode_trajectory_segment_v1(payload, 0)
+    }
+}
+
+fn decode_trajectory_segment_v1(payload: &[u8], offset: usize) -> Option<(TrajectorySegment, usize)> {
     let (sample_seed, cursor) = read_u64_le(payload, offset)?;
     let (shots, cursor) = read_u64_le(payload, cursor)?;
     let (measurement_spec_hash, cursor) = read_cstr(payload, cursor)?;
@@ -181,6 +256,7 @@ pub fn decode_trajectory_segment(payload: &[u8], offset: usize) -> Option<(Traje
                 p0,
                 p1,
                 outcome,
+                pre_measure_statevector_digest: String::new(),
             });
         }
         traces.push(TrajectoryShotTrace {
@@ -198,23 +274,127 @@ pub fn decode_trajectory_segment(payload: &[u8], offset: usize) -> Option<(Traje
             shots,
             measurement_spec_hash,
             trajectory_digest,
+            qubit_count: 0,
+            unitary_link_digest: String::new(),
             traces,
+            marginal_witnesses: Vec::new(),
+        },
+        cursor,
+    ))
+}
+
+fn decode_trajectory_segment_v2(payload: &[u8], offset: usize) -> Option<(TrajectorySegment, usize)> {
+    let (sample_seed, cursor) = read_u64_le(payload, offset)?;
+    let (shots, cursor) = read_u64_le(payload, cursor)?;
+    let (measurement_spec_hash, cursor) = read_cstr(payload, cursor)?;
+    let (trajectory_digest, cursor) = read_cstr(payload, cursor)?;
+    let (qubit_count, cursor) = read_u32_le(payload, cursor)?;
+    let (unitary_link_digest, cursor) = read_cstr(payload, cursor)?;
+    let (shot_count, mut cursor) = read_u32_le(payload, cursor)?;
+
+    let mut traces = Vec::with_capacity(shot_count as usize);
+    for _ in 0..shot_count {
+        let (shot_index, next) = read_u64_le(payload, cursor)?;
+        let (shot_seed, next) = read_u64_le(payload, next)?;
+        let (final_outcome, next) = read_cstr(payload, next)?;
+        let (classical_len, next) = read_u32_le(payload, next)?;
+        let classical_end = next + classical_len as usize;
+        let classical_bits = payload.get(next..classical_end)?.to_vec();
+        cursor = classical_end;
+        let (measure_count, next) = read_u32_le(payload, cursor)?;
+        cursor = next;
+        let mut measures = Vec::with_capacity(measure_count as usize);
+        for _ in 0..measure_count {
+            let (gate_index, next) = read_u32_le(payload, cursor)?;
+            let (qubit, next) = read_u32_le(payload, next)?;
+            let (cbit, next) = read_u32_le(payload, next)?;
+            let (p0, next) = read_f64_le(payload, next)?;
+            let (p1, next) = read_f64_le(payload, next)?;
+            let outcome = *payload.get(next)?;
+            let (pre_measure_statevector_digest, next) = read_cstr(payload, next + 1)?;
+            cursor = next;
+            measures.push(TrajectoryMeasureEvent {
+                gate_index,
+                qubit,
+                cbit,
+                p0,
+                p1,
+                outcome,
+                pre_measure_statevector_digest,
+            });
+        }
+        traces.push(TrajectoryShotTrace {
+            shot_index,
+            shot_seed,
+            final_outcome,
+            classical_bits,
+            measures,
+        });
+    }
+
+    let (witness_count, mut cursor) = read_u32_le(payload, cursor)?;
+    let mut marginal_witnesses = Vec::with_capacity(witness_count as usize);
+    for _ in 0..witness_count {
+        let (qubit, next) = read_u32_le(payload, cursor)?;
+        let (reference_p0, next) = read_f64_le(payload, next)?;
+        let (reference_p1, next) = read_f64_le(payload, next)?;
+        let (sv_len, next) = read_u32_le(payload, next)?;
+        cursor = next;
+        let mut pre_measure_statevector = Vec::with_capacity(sv_len as usize);
+        for _ in 0..sv_len {
+            let (re, next) = read_f64_le(payload, cursor)?;
+            let (im, next) = read_f64_le(payload, next)?;
+            cursor = next;
+            pre_measure_statevector.push((re, im));
+        }
+        let (pre_measure_statevector_digest, next) = read_cstr(payload, cursor)?;
+        cursor = next;
+        marginal_witnesses.push(TrajectoryMarginalWitness {
+            qubit,
+            reference_p0,
+            reference_p1,
+            pre_measure_statevector,
+            pre_measure_statevector_digest,
+        });
+    }
+
+    Some((
+        TrajectorySegment {
+            sample_seed,
+            shots,
+            measurement_spec_hash,
+            trajectory_digest,
+            qubit_count,
+            unitary_link_digest,
+            traces,
+            marginal_witnesses,
         },
         cursor,
     ))
 }
 
 fn find_trajectory_tail_marker(proof: &[u8]) -> Option<(usize, &'static [u8])> {
-    proof
-        .windows(TRAJ_V1_MARKER.len())
-        .rposition(|w| w == TRAJ_V1_MARKER)
-        .map(|pos| (pos, TRAJ_V1_MARKER))
+    let mut best: Option<(usize, &'static [u8])> = None;
+    for marker in [TRAJ_V2_MARKER, TRAJ_V1_MARKER] {
+        if let Some(pos) = proof.windows(marker.len()).rposition(|w| w == marker) {
+            best = Some(match best {
+                Some((bpos, _)) if bpos > pos => best.unwrap(),
+                _ => (pos, marker),
+            });
+        }
+    }
+    best
 }
 
 /// Appends a trajectory tail to a STARK transcript (after optional distribution / Born tails).
 pub fn append_trajectory_tail(mut proof: Vec<u8>, segment: &TrajectorySegment) -> Vec<u8> {
-    let payload = encode_trajectory_segment(segment);
-    proof.extend_from_slice(TRAJ_V1_MARKER);
+    let marker = if segment.marginal_witnesses.is_empty() && segment.unitary_link_digest.is_empty() {
+        TRAJ_V1_MARKER
+    } else {
+        TRAJ_V2_MARKER
+    };
+    let payload = encode_trajectory_segment(segment, marker);
+    proof.extend_from_slice(marker);
     proof.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     proof.extend_from_slice(&payload);
     proof
@@ -240,7 +420,7 @@ pub fn strip_one_aux_tail(proof: &[u8]) -> &[u8] {
     let mut best: Option<usize> = None;
     const DIST_V2_MARKER: &[u8] = b"_M31_DIST_V2_";
     const DIST_V1_MARKER: &[u8] = b"_M31_DIST_V1_";
-    for marker in [TRAJ_V1_MARKER, DIST_V2_MARKER, DIST_V1_MARKER] {
+    for marker in [TRAJ_V2_MARKER, TRAJ_V1_MARKER, DIST_V2_MARKER, DIST_V1_MARKER] {
         if let Some(pos) = proof.windows(marker.len()).rposition(|w| w == marker) {
             best = Some(best.map_or(pos, |b| b.max(pos)));
         }
@@ -249,6 +429,10 @@ pub fn strip_one_aux_tail(proof: &[u8]) -> &[u8] {
     {
         let born = crate::plonky3_stark::BORN_STARK_TAIL_MARKER;
         if let Some(pos) = proof.windows(born.len()).rposition(|w| w == born) {
+            best = Some(best.map_or(pos, |b| b.max(pos)));
+        }
+        let traj_stark = crate::plonky3_stark::TRAJ_STARK_TAIL_MARKER;
+        if let Some(pos) = proof.windows(traj_stark.len()).rposition(|w| w == traj_stark) {
             best = Some(best.map_or(pos, |b| b.max(pos)));
         }
     }
@@ -301,14 +485,20 @@ pub fn verify_trajectory_segment(segment: &TrajectorySegment) -> bool {
         );
         return false;
     }
+    if !segment.marginal_witnesses.is_empty()
+        && !crate::air::trajectory::evaluate_trajectory_marginal_constraints(segment)
+    {
+        eprintln!("[STARK Core] Failed: trajectory marginal constraints not satisfied");
+        return false;
+    }
     true
 }
 
 pub fn decode_and_verify_trajectory_tail(payload: &[u8], marker: &[u8]) -> Option<TrajectorySegment> {
-    if marker != TRAJ_V1_MARKER {
+    if marker != TRAJ_V1_MARKER && marker != TRAJ_V2_MARKER {
         return None;
     }
-    let (segment, end) = decode_trajectory_segment(payload, 0)?;
+    let (segment, end) = decode_trajectory_segment(payload, marker)?;
     if end != payload.len() {
         return None;
     }
@@ -371,6 +561,24 @@ pub fn verify_trajectory_binding(
         eprintln!("[STARK Core] Failed: counts do not match trajectory segment");
         return false;
     }
+
+    #[cfg(feature = "plonky3-stark")]
+    if crate::plonky3_stark::has_trajectory_stark_tail(proof) {
+        if !crate::plonky3_stark::segment_supports_trajectory_zk(&segment) {
+            eprintln!("[STARK Core] Failed: trajectory zk tail without zk-capable segment");
+            return false;
+        }
+        let Some(bundle) = crate::plonky3_stark::split_trajectory_stark_tail(proof) else {
+            eprintln!("[STARK Core] Failed: malformed trajectory zk tail");
+            return false;
+        };
+        // sub_task_id is validated via prefix binding in full verify path; here we only check bundle shape.
+        if bundle.is_empty() {
+            eprintln!("[STARK Core] Failed: empty trajectory zk bundle");
+            return false;
+        }
+    }
+
     true
 }
 
@@ -393,6 +601,7 @@ mod tests {
                         p0: 0.5,
                         p1: 0.5,
                         outcome: 1,
+                        pre_measure_statevector_digest: String::new(),
                     },
                     TrajectoryMeasureEvent {
                         gate_index: 3,
@@ -401,6 +610,7 @@ mod tests {
                         p0: 1.0,
                         p1: 0.0,
                         outcome: 0,
+                        pre_measure_statevector_digest: String::new(),
                     },
                 ],
             },
@@ -417,6 +627,7 @@ mod tests {
                         p0: 0.5,
                         p1: 0.5,
                         outcome: 1,
+                        pre_measure_statevector_digest: String::new(),
                     },
                     TrajectoryMeasureEvent {
                         gate_index: 3,
@@ -425,6 +636,7 @@ mod tests {
                         p0: 0.0,
                         p1: 1.0,
                         outcome: 1,
+                        pre_measure_statevector_digest: String::new(),
                     },
                 ],
             },
@@ -434,7 +646,10 @@ mod tests {
             shots: 2,
             measurement_spec_hash: "spec-hash".into(),
             trajectory_digest: calculate_trajectory_digest(&traces),
+            qubit_count: 0,
+            unitary_link_digest: String::new(),
             traces,
+            marginal_witnesses: Vec::new(),
         }
     }
 

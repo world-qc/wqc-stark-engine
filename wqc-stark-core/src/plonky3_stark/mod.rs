@@ -14,6 +14,10 @@ mod distribution_stark;
 #[cfg(feature = "plonky3-stark")]
 mod transcript_born;
 #[cfg(feature = "plonky3-stark")]
+mod transcript_trajectory_stark;
+#[cfg(feature = "plonky3-stark")]
+mod trajectory_stark;
+#[cfg(feature = "plonky3-stark")]
 mod transcript_v4;
 
 pub use config::devnet_circle_config;
@@ -29,6 +33,16 @@ pub use distribution_stark::{
 #[cfg(feature = "plonky3-stark")]
 pub use transcript_born::{
     append_born_stark_tail, has_born_stark_tail, split_born_stark_tail, BORN_STARK_TAIL_MARKER,
+};
+#[cfg(feature = "plonky3-stark")]
+pub use trajectory_stark::{
+    generate_trajectory_stark_bundle, segment_supports_trajectory_zk, verify_trajectory_stark_bundle,
+    TRAJ_MARGINAL_ZK_MAX_QUBITS,
+};
+#[cfg(feature = "plonky3-stark")]
+pub use transcript_trajectory_stark::{
+    append_trajectory_stark_tail, has_trajectory_stark_tail, split_trajectory_stark_tail,
+    TRAJ_STARK_TAIL_MARKER,
 };
 #[cfg(feature = "plonky3-stark")]
 pub use transcript_v4::{append_agg_tail, has_agg_tail, split_agg_tail};
@@ -90,7 +104,16 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         })
         .and_then(|seg| seg.born_binding)
         .filter(|b| !b.terminal_statevector_digest.is_empty())
-        .map(|b| b.terminal_statevector_digest.clone());
+        .map(|b| b.terminal_statevector_digest.clone())
+        .or_else(|| {
+            crate::trajectory::split_trajectory_tail(proof)
+                .and_then(|(_, tail)| tail)
+                .and_then(|(payload, marker)| {
+                    crate::trajectory::decode_and_verify_trajectory_tail(payload, marker)
+                })
+                .filter(|seg| !seg.unitary_link_digest.is_empty())
+                .map(|seg| seg.unitary_link_digest.clone())
+        });
 
     let verify_ctx = StarkContext {
         circuit_id: context.circuit_id,
@@ -178,9 +201,23 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
             eprintln!("[STARK Core] Failed: malformed trajectory tail");
             return false;
         };
-        if crate::trajectory::decode_and_verify_trajectory_tail(payload, marker).is_none() {
-            eprintln!("[STARK Core] Failed: invalid trajectory tail");
-            return false;
+        let segment = match crate::trajectory::decode_and_verify_trajectory_tail(payload, marker) {
+            Some(seg) => seg,
+            None => {
+                eprintln!("[STARK Core] Failed: invalid trajectory tail");
+                return false;
+            }
+        };
+
+        if segment_supports_trajectory_zk(&segment) {
+            let Some(bundle) = split_trajectory_stark_tail(proof) else {
+                eprintln!("[STARK Core] Failed: trajectory zk STARK tail missing");
+                return false;
+            };
+            if !verify_trajectory_stark_bundle(context.sub_task_id, &segment, bundle) {
+                eprintln!("[STARK Core] Failed: trajectory zk STARK verification failed");
+                return false;
+            }
         }
         true
     } else {

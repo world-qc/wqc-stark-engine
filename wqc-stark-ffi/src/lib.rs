@@ -4,7 +4,8 @@ use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
     compose_stark_proofs, proof_has_unitary_statevector_link, verify_distribution_binding,
-    verify_root_proof, verify_stark_proof_core, verify_trajectory_binding, ComposeContext,
+    verify_root_proof, verify_stark_proof_core, verify_trajectory_binding, proof_has_trajectory_unitary_link,
+    ComposeContext,
     RootVerifyContext, StarkContext,
 };
 
@@ -231,6 +232,53 @@ pub unsafe extern "C" fn wqc_proof_has_unitary_statevector_link(
         }
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
         if proof_has_unitary_statevector_link(proof_slice) {
+            1
+        } else {
+            0
+        }
+    });
+
+    match result {
+        Ok(code) => code,
+        Err(_) => -99,
+    }
+}
+
+/// Returns 1 when the proof transcript includes a C2c trajectory marginal Plonky3 tail.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_has_trajectory_zk_tail(
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() {
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if wqc_stark_core::plonky3_stark::has_trajectory_stark_tail(proof_slice) {
+            return 1;
+        }
+        0
+    });
+
+    match result {
+        Ok(code) => code,
+        Err(_) => -99,
+    }
+}
+
+/// Returns 1 when the proof transcript includes a non-empty trajectory `unitary_link_digest`.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_proof_has_trajectory_unitary_link(
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() {
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if proof_has_trajectory_unitary_link(proof_slice) {
             1
         } else {
             0

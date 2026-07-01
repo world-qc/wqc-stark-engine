@@ -2,6 +2,7 @@
 
 mod constraints;
 pub mod distribution;
+pub mod trajectory;
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;

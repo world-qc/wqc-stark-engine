@@ -29,8 +29,8 @@ pub use distribution::{
 pub use trajectory::{
     append_trajectory_tail, base_proof_without_aux_tails, calculate_trajectory_digest,
     counts_from_trajectory_segment, decode_and_verify_trajectory_tail, format_trajectory_json,
-    has_trajectory_tail, split_trajectory_tail, verify_trajectory_binding, TrajectoryMeasureEvent,
-    TrajectorySegment, TrajectoryShotTrace, TRAJ_V1_MARKER,
+    has_trajectory_tail, split_trajectory_tail, verify_trajectory_binding, TrajectoryMarginalWitness,
+    TrajectoryMeasureEvent, TrajectorySegment, TrajectoryShotTrace, TRAJ_V1_MARKER, TRAJ_V2_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
@@ -38,6 +38,14 @@ pub use transcript::{
 };
 
 use transcript::verify_public_input_binding;
+
+/// Reports whether a proof binds unitary v2 and trajectory marginals via `unitary_link_digest`.
+pub fn proof_has_trajectory_unitary_link(proof: &[u8]) -> bool {
+    trajectory::split_trajectory_tail(proof)
+        .and_then(|(_, tail)| tail)
+        .and_then(|(payload, marker)| trajectory::decode_and_verify_trajectory_tail(payload, marker))
+        .is_some_and(|seg| !seg.unitary_link_digest.is_empty())
+}
 
 /// Reports whether a proof binds unitary v2 and Born tails via `terminal_statevector_digest`.
 pub fn proof_has_unitary_statevector_link(proof: &[u8]) -> bool {
@@ -61,8 +69,11 @@ pub fn generate_plonky3_stark_proof(
 
 #[cfg(feature = "plonky3-stark")]
 pub use plonky3_stark::{
-    append_born_stark_tail, generate_born_stark_proof, has_born_stark_tail, segment_supports_born_zk,
-    verify_born_stark_proof, BornStarkContext, BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_QUBITS,
+    append_born_stark_tail, append_trajectory_stark_tail, generate_born_stark_proof,
+    generate_trajectory_stark_bundle, has_born_stark_tail, has_trajectory_stark_tail,
+    segment_supports_born_zk, segment_supports_trajectory_zk, verify_born_stark_proof,
+    verify_trajectory_stark_bundle, BornStarkContext, BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_QUBITS,
+    TRAJ_MARGINAL_ZK_MAX_QUBITS, TRAJ_STARK_TAIL_MARKER,
 };
 
 /// Generates a v1 AIR commitment proof: embeds the execution trace and AIR digest.
