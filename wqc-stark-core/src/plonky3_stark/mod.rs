@@ -12,7 +12,7 @@ mod transcript_v4;
 
 pub use config::devnet_circle_config;
 pub use quantum_air::QuantumExecutionAir;
-pub use transcript_v2::{decode_proof_v2_owned, encode_proof_v2};
+pub use transcript_v2::{decode_proof_v2_owned, decode_proof_v2_plonky3_bytes, encode_proof_v2};
 #[cfg(feature = "plonky3-stark")]
 pub use aggregation::{generate_aggregation_proof, verify_aggregation_proof, AggregationContext};
 #[cfg(feature = "plonky3-stark")]
@@ -68,7 +68,8 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         return false;
     }
 
-    let plonky3_bytes = match decode_proof_v2_owned(proof, context) {
+    let base = crate::distribution::base_proof_without_distribution_tail(proof);
+    let plonky3_bytes = match decode_proof_v2_plonky3_bytes(base, context) {
         Some(bytes) => bytes,
         None => {
             eprintln!("[STARK Core] Failed: malformed v2 proof payload");
@@ -87,16 +88,22 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
 
     let config = devnet_circle_config();
     let air = QuantumExecutionAir;
-    match verify(&config, &air, &p3_proof, &[]) {
-        Ok(()) => {
-            eprintln!("[STARK Core] Verification success (v2 Plonky3 STARK)");
-            true
-        }
-        Err(e) => {
-            eprintln!("[STARK Core] Failed: Plonky3 verify error: {e:?}");
-            false
-        }
+    if let Err(e) = verify(&config, &air, &p3_proof, &[]) {
+        eprintln!("[STARK Core] Failed: Plonky3 verify error: {e:?}");
+        return false;
     }
+
+    if let Some((_, Some(dist_payload))) = crate::distribution::split_distribution_tail(proof) {
+        if crate::distribution::decode_and_verify_distribution_tail(dist_payload).is_none() {
+            eprintln!("[STARK Core] Failed: invalid distribution tail");
+            return false;
+        }
+        eprintln!("[STARK Core] Verification success (v2 Plonky3 STARK + distribution tail)");
+        return true;
+    }
+
+    eprintln!("[STARK Core] Verification success (v2 Plonky3 STARK)");
+    true
 }
 
 #[cfg(test)]
@@ -127,6 +134,23 @@ mod tests {
         let ctx = context();
         let trace = crate::trace_spec::golden_h_q0_trace();
         let proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
+        assert!(verify_plonky3_proof(&ctx, &proof));
+    }
+
+    #[test]
+    fn v2_with_distribution_tail_roundtrip() {
+        let ctx = context();
+        let trace = crate::trace_spec::golden_h_q0_trace();
+        let mut proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
+        let segment = crate::distribution::DistributionSegment {
+            sample_seed: 7,
+            shots: 128,
+            probability_digest: crate::distribution::calculate_probability_digest(&[
+                ("0".into(), 1.0),
+            ]),
+            probabilities: vec![("0".into(), 1.0)],
+        };
+        proof = crate::distribution::append_distribution_tail(proof, &segment);
         assert!(verify_plonky3_proof(&ctx, &proof));
     }
 }

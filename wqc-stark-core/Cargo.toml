@@ -12,6 +12,7 @@ p3-field = "0.6.1"
 p3-mersenne-31 = "0.6.1"
 p3-matrix = "0.6.1"
 sha3 = "0.10"
+hex = "0.4"
 p3-uni-stark = { version = "0.6.1", optional = true }
 p3-air = { version = "0.6.1", optional = true }
 p3-circle = { version = "0.6.1", optional = true }

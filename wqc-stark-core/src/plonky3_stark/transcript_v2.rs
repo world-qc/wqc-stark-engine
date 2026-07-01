@@ -40,8 +40,8 @@ pub fn decode_proof_v2_payload(proof: &[u8], offset: usize) -> Option<(Vec<u8>, 
     Some((payload, end))
 }
 
-/// Owned decode of a v2 proof.
-pub fn decode_proof_v2_owned(proof: &[u8], context: &StarkContext<'_>) -> Option<Vec<u8>> {
+/// Owned decode of a v2 proof body (allows trailing distribution tail).
+pub fn decode_proof_v2_plonky3_bytes(proof: &[u8], context: &StarkContext<'_>) -> Option<Vec<u8>> {
     if !proof.starts_with(context.sub_task_id.as_bytes()) {
         return None;
     }
@@ -51,8 +51,15 @@ pub fn decode_proof_v2_owned(proof: &[u8], context: &StarkContext<'_>) -> Option
     }
     let binding_start = prefix_len + V2_MARKER.len();
     let payload_start = verify_public_input_binding(proof, binding_start, context)?;
-    let (payload, end) = decode_proof_v2_payload(proof, payload_start)?;
-    if end != proof.len() {
+    let (payload, _end) = decode_proof_v2_payload(proof, payload_start)?;
+    Some(payload)
+}
+
+/// Owned decode of a v2 proof (entire transcript must be only v2 body).
+pub fn decode_proof_v2_owned(proof: &[u8], context: &StarkContext<'_>) -> Option<Vec<u8>> {
+    let base = crate::distribution::base_proof_without_distribution_tail(proof);
+    let payload = decode_proof_v2_plonky3_bytes(base, context)?;
+    if base.len() != proof.len() {
         return None;
     }
     Some(payload)

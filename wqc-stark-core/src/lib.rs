@@ -1,5 +1,6 @@
 pub mod air;
 pub mod aggregation;
+pub mod distribution;
 pub mod trace_spec;
 pub mod transcript;
 
@@ -17,6 +18,11 @@ pub use trace_spec::{
 pub use aggregation::{
     compose_stark_proofs, verify_child_proof, verify_composed_proof, verify_root_proof,
     ComposeContext, ComposeHeader, ParsedLeafBinding, RootVerifyContext, V3_COMPOSE_MARKER,
+};
+pub use distribution::{
+    append_distribution_tail, base_proof_without_distribution_tail, calculate_probability_digest,
+    decode_and_verify_distribution_tail, decode_distribution_segment, split_distribution_tail,
+    DistributionSegment, DIST_V1_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
@@ -102,15 +108,16 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
         }
     }
 
+    let base = crate::distribution::base_proof_without_distribution_tail(proof);
     let binding_start = marker_index + V1_MARKER.len();
-    let payload_start = match verify_public_input_binding(proof, binding_start, context) {
+    let payload_start = match verify_public_input_binding(base, binding_start, context) {
         Some(offset) => offset,
         None => return false,
     };
 
     let (trace, claimed_sum, claimed_boundary) =
-        match transcript::decode_proof_v1_payload(proof, payload_start) {
-            Some((trace, sum, boundary, end)) if end == proof.len() => (trace, sum, boundary),
+        match transcript::decode_proof_v1_payload(base, payload_start) {
+            Some((trace, sum, boundary, end)) if end == base.len() => (trace, sum, boundary),
             _ => {
                 eprintln!("[STARK Core] Failed: malformed v1 proof payload");
                 return false;
@@ -141,6 +148,18 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
     if recomputed_boundary != claimed_boundary {
         eprintln!("[STARK Core] Failed: boundary amplitude mismatch");
         return false;
+    }
+
+    if let Some((_, Some(dist_payload))) = crate::distribution::split_distribution_tail(proof) {
+        if crate::distribution::decode_and_verify_distribution_tail(dist_payload).is_none() {
+            eprintln!("[STARK Core] Failed: invalid distribution tail");
+            return false;
+        }
+        eprintln!(
+            "[STARK Core] Verification success (v1 AIR, trace_len={}, distribution tail)",
+            trace.len()
+        );
+        return true;
     }
 
     eprintln!("[STARK Core] Verification success (v1 AIR, trace_len={})", trace.len());
