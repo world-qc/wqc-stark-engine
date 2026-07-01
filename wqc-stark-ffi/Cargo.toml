@@ -9,3 +9,5 @@ crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 wqc-stark-core = { path = "../wqc-stark-core", features = ["plonky3-stark"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

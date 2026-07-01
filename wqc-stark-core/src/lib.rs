@@ -21,8 +21,8 @@ pub use aggregation::{
 };
 pub use distribution::{
     append_distribution_tail, base_proof_without_distribution_tail, calculate_probability_digest,
-    decode_and_verify_distribution_tail, decode_distribution_segment, split_distribution_tail,
-    DistributionSegment, DIST_V1_MARKER,
+    decode_and_verify_distribution_tail, decode_distribution_segment, sample_counts_from_probabilities,
+    split_distribution_tail, verify_distribution_binding, DistributionSegment, DIST_V1_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,

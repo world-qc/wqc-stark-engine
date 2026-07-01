@@ -187,6 +187,77 @@ pub fn decode_and_verify_distribution_tail(payload: &[u8]) -> Option<Distributio
     Some(segment)
 }
 
+/// Deterministic shot sampling — matches `wqc-core` `sample_counts_from_probabilities`.
+pub fn sample_counts_from_probabilities(
+    probabilities: &[(String, f64)],
+    shots: u64,
+    seed: u64,
+) -> std::collections::BTreeMap<String, u64> {
+    use rand::{Rng, SeedableRng};
+    use rand::rngs::StdRng;
+    use std::collections::BTreeMap;
+
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    if shots == 0 || probabilities.is_empty() {
+        return counts;
+    }
+
+    let total: f64 = probabilities.iter().map(|(_, p)| p).sum();
+    let mut cumulative = Vec::with_capacity(probabilities.len());
+    let mut acc = 0.0;
+    for (label, prob) in probabilities {
+        acc += prob / total;
+        cumulative.push((label.clone(), acc));
+    }
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    for _ in 0..shots {
+        let r: f64 = rng.gen();
+        let label = cumulative
+            .iter()
+            .find(|(_, c)| r <= *c)
+            .map(|(label, _)| label.clone())
+            .unwrap_or_else(|| cumulative.last().unwrap().0.clone());
+        *counts.entry(label).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// Verifies proof tail binding: segment metadata + Born probs → deterministic counts.
+pub fn verify_distribution_binding(
+    proof: &[u8],
+    expected_seed: u64,
+    expected_shots: u64,
+    reported_counts: &std::collections::BTreeMap<String, u64>,
+    reported_shots: u64,
+) -> bool {
+    let Some((_, Some(payload))) = split_distribution_tail(proof) else {
+        eprintln!("[STARK Core] Failed: missing distribution tail");
+        return false;
+    };
+    let segment = match decode_and_verify_distribution_tail(payload) {
+        Some(seg) => seg,
+        None => {
+            eprintln!("[STARK Core] Failed: invalid distribution segment");
+            return false;
+        }
+    };
+    if segment.sample_seed != expected_seed {
+        eprintln!("[STARK Core] Failed: distribution sample_seed mismatch");
+        return false;
+    }
+    if segment.shots != expected_shots || segment.shots != reported_shots {
+        eprintln!("[STARK Core] Failed: distribution shots mismatch");
+        return false;
+    }
+    let recomputed = sample_counts_from_probabilities(&segment.probabilities, segment.shots, segment.sample_seed);
+    if &recomputed != reported_counts {
+        eprintln!("[STARK Core] Failed: counts do not match Born probabilities and seed");
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +299,28 @@ mod tests {
         let mut segment = bell_segment();
         segment.probabilities = vec![("11".into(), 0.5), ("00".into(), 0.5)];
         assert!(!verify_distribution_segment(&segment));
+    }
+
+    #[test]
+    fn sample_counts_match_core_golden_h_seed99() {
+        let probs = vec![("0".into(), 0.5), ("1".into(), 0.5)];
+        let counts = sample_counts_from_probabilities(&probs, 256, 99);
+        assert_eq!(counts.get("0").copied(), Some(118));
+        assert_eq!(counts.get("1").copied(), Some(138));
+    }
+
+    #[test]
+    fn verify_distribution_binding_roundtrip() {
+        let segment = bell_segment();
+        let counts = sample_counts_from_probabilities(&segment.probabilities, segment.shots, segment.sample_seed);
+        let proof = append_distribution_tail(b"stark".to_vec(), &segment);
+        assert!(verify_distribution_binding(
+            &proof,
+            segment.sample_seed,
+            segment.shots,
+            &counts,
+            segment.shots,
+        ));
     }
 
     #[test]

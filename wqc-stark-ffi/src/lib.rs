@@ -3,8 +3,8 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    compose_stark_proofs, verify_root_proof, verify_stark_proof_core, ComposeContext,
-    RootVerifyContext, StarkContext,
+    compose_stark_proofs, verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
+    ComposeContext, RootVerifyContext, StarkContext,
 };
 
 fn cstr_or_empty<'a>(ptr: *const c_char) -> &'a str {
@@ -214,4 +214,60 @@ pub unsafe extern "C" fn wqc_verify_root_proof(
         Ok(code) => code,
         Err(_) => -99,
     }
+}
+
+/// Verifies distribution tail binding: Born probabilities + seed → reported counts.
+///
+/// `counts_json` must be canonical `{"counts":{...},"shots":N}` (orchestrator format).
+#[no_mangle]
+pub unsafe extern "C" fn wqc_verify_distribution_binding(
+    proof_bytes: *const u8,
+    proof_len: u32,
+    sample_seed: u64,
+    shots: u64,
+    counts_json: *const c_char,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() || counts_json.is_null() {
+            eprintln!("[Rust FFI] distribution binding: null pointer");
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        let json = cstr_or_empty(counts_json);
+        let (reported_counts, reported_shots) = match parse_sample_counts_json(json) {
+            Some(v) => v,
+            None => {
+                eprintln!("[Rust FFI] distribution binding: malformed counts JSON");
+                return 0;
+            }
+        };
+        if verify_distribution_binding(
+            proof_slice,
+            sample_seed,
+            shots,
+            &reported_counts,
+            reported_shots,
+        ) {
+            1
+        } else {
+            0
+        }
+    });
+
+    match result {
+        Ok(code) => code,
+        Err(_) => -99,
+    }
+}
+
+fn parse_sample_counts_json(
+    json: &str,
+) -> Option<(std::collections::BTreeMap<String, u64>, u64)> {
+    #[derive(serde::Deserialize)]
+    struct Payload {
+        counts: std::collections::BTreeMap<String, u64>,
+        shots: u64,
+    }
+    let payload: Payload = serde_json::from_str(json).ok()?;
+    Some((payload.counts, payload.shots))
 }
