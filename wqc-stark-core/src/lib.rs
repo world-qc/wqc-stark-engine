@@ -23,6 +23,7 @@ pub use distribution::{
     append_distribution_tail, base_proof_without_distribution_tail, calculate_probability_digest,
     decode_and_verify_distribution_tail, decode_distribution_segment, sample_counts_from_probabilities,
     split_distribution_tail, verify_distribution_binding, DistributionSegment, DIST_V1_MARKER,
+    DIST_V2_MARKER,
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
@@ -150,8 +151,8 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
         return false;
     }
 
-    if let Some((_, Some(dist_payload))) = crate::distribution::split_distribution_tail(proof) {
-        if crate::distribution::decode_and_verify_distribution_tail(dist_payload).is_none() {
+    if let Some((_, Some((dist_payload, marker)))) = crate::distribution::split_distribution_tail(proof) {
+        if crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker).is_none() {
             eprintln!("[STARK Core] Failed: invalid distribution tail");
             return false;
         }

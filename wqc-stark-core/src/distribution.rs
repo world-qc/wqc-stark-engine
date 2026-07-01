@@ -1,15 +1,19 @@
-//! C2a-2: optional distribution tail bound to a v1/v2 STARK transcript.
+//! C2a-2/4: optional distribution tail bound to a v1/v2 STARK transcript.
 //!
 //! Appended after the main proof body:
-//! `_M31_DIST_V1_` + sample_seed + shots + probability_digest + outcome probabilities.
+//! `_M31_DIST_V2_` + sample_seed + shots + measurement_spec_hash + probability_digest + probs
+//! (`_M31_DIST_V1_` tails without `measurement_spec_hash` remain decodable for devnet replay).
 
 pub const DIST_V1_MARKER: &[u8] = b"_M31_DIST_V1_";
+pub const DIST_V2_MARKER: &[u8] = b"_M31_DIST_V2_";
 
 /// Born-rule binding carried in the proof transcript tail.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DistributionSegment {
     pub sample_seed: u64,
     pub shots: u64,
+    /// SHA3-256 hex of canonical measurement spec JSON (C2a-4); empty on legacy V1 tails.
+    pub measurement_spec_hash: String,
     pub probability_digest: String,
     /// Sorted lexicographically by outcome key (Qiskit bitstring order).
     pub probabilities: Vec<(String, f64)>,
@@ -82,6 +86,7 @@ pub fn encode_distribution_segment(segment: &DistributionSegment) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&segment.sample_seed.to_le_bytes());
     out.extend_from_slice(&segment.shots.to_le_bytes());
+    append_cstr(&mut out, &segment.measurement_spec_hash);
     append_cstr(&mut out, &segment.probability_digest);
     out.extend_from_slice(&(segment.probabilities.len() as u32).to_le_bytes());
     for (key, prob) in &segment.probabilities {
@@ -91,8 +96,36 @@ pub fn encode_distribution_segment(segment: &DistributionSegment) -> Vec<u8> {
     out
 }
 
-/// Decodes a distribution segment payload (after `DIST_V1_MARKER`).
+/// Decodes a V2 distribution segment payload (includes `measurement_spec_hash`).
 pub fn decode_distribution_segment(proof: &[u8], offset: usize) -> Option<(DistributionSegment, usize)> {
+    let (sample_seed, cursor) = read_u64_le(proof, offset)?;
+    let (shots, cursor) = read_u64_le(proof, cursor)?;
+    let (measurement_spec_hash, cursor) = read_cstr(proof, cursor)?;
+    let (probability_digest, cursor) = read_cstr(proof, cursor)?;
+    let (prob_count, mut cursor) = read_u32_le(proof, cursor)?;
+
+    let mut probabilities = Vec::with_capacity(prob_count as usize);
+    for _ in 0..prob_count {
+        let (key, next) = read_cstr(proof, cursor)?;
+        let (prob, next) = read_f64_le(proof, next)?;
+        probabilities.push((key, prob));
+        cursor = next;
+    }
+
+    Some((
+        DistributionSegment {
+            sample_seed,
+            shots,
+            measurement_spec_hash,
+            probability_digest,
+            probabilities,
+        },
+        cursor,
+    ))
+}
+
+/// Decodes a legacy V1 distribution segment payload (no `measurement_spec_hash`).
+pub fn decode_distribution_segment_v1(proof: &[u8], offset: usize) -> Option<(DistributionSegment, usize)> {
     let (sample_seed, cursor) = read_u64_le(proof, offset)?;
     let (shots, cursor) = read_u64_le(proof, cursor)?;
     let (probability_digest, cursor) = read_cstr(proof, cursor)?;
@@ -110,6 +143,7 @@ pub fn decode_distribution_segment(proof: &[u8], offset: usize) -> Option<(Distr
         DistributionSegment {
             sample_seed,
             shots,
+            measurement_spec_hash: String::new(),
             probability_digest,
             probabilities,
         },
@@ -117,29 +151,44 @@ pub fn decode_distribution_segment(proof: &[u8], offset: usize) -> Option<(Distr
     ))
 }
 
+fn find_distribution_tail_marker(proof: &[u8]) -> Option<(usize, &'static [u8])> {
+    let v2 = proof
+        .windows(DIST_V2_MARKER.len())
+        .rposition(|w| w == DIST_V2_MARKER)
+        .map(|pos| (pos, DIST_V2_MARKER));
+    let v1 = proof
+        .windows(DIST_V1_MARKER.len())
+        .rposition(|w| w == DIST_V1_MARKER)
+        .map(|pos| (pos, DIST_V1_MARKER));
+    match (v2, v1) {
+        (Some(a), Some(b)) => Some(if a.0 >= b.0 { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
 /// Appends a distribution tail to a v1/v2 STARK transcript.
 pub fn append_distribution_tail(mut proof: Vec<u8>, segment: &DistributionSegment) -> Vec<u8> {
     let payload = encode_distribution_segment(segment);
-    proof.extend_from_slice(DIST_V1_MARKER);
+    proof.extend_from_slice(DIST_V2_MARKER);
     proof.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     proof.extend_from_slice(&payload);
     proof
 }
 
 /// Splits a proof into the base STARK body and optional distribution tail.
-pub fn split_distribution_tail(proof: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
-    let pos = proof
-        .windows(DIST_V1_MARKER.len())
-        .rposition(|w| w == DIST_V1_MARKER)?;
+pub fn split_distribution_tail(proof: &[u8]) -> Option<(&[u8], Option<(&[u8], &'static [u8])>)> {
+    let (pos, marker) = find_distribution_tail_marker(proof)?;
     let base = &proof[..pos];
-    let cursor = pos + DIST_V1_MARKER.len();
+    let cursor = pos + marker.len();
     let (len, cursor) = read_u32_le(proof, cursor)?;
     let end = cursor + len as usize;
     let payload = proof.get(cursor..end)?;
     if end != proof.len() {
         return None;
     }
-    Some((base, Some(payload)))
+    Some((base, Some((payload, marker))))
 }
 
 /// Returns the base proof when no distribution tail is present.
@@ -176,8 +225,12 @@ pub fn verify_distribution_segment(segment: &DistributionSegment) -> bool {
 }
 
 /// Decodes and verifies a distribution tail payload (post-marker bytes).
-pub fn decode_and_verify_distribution_tail(payload: &[u8]) -> Option<DistributionSegment> {
-    let (segment, end) = decode_distribution_segment(payload, 0)?;
+pub fn decode_and_verify_distribution_tail(payload: &[u8], marker: &[u8]) -> Option<DistributionSegment> {
+    let (segment, end) = if marker == DIST_V2_MARKER {
+        decode_distribution_segment(payload, 0)?
+    } else {
+        decode_distribution_segment_v1(payload, 0)?
+    };
     if end != payload.len() {
         return None;
     }
@@ -228,14 +281,15 @@ pub fn verify_distribution_binding(
     proof: &[u8],
     expected_seed: u64,
     expected_shots: u64,
+    expected_measurement_spec_hash: Option<&str>,
     reported_counts: &std::collections::BTreeMap<String, u64>,
     reported_shots: u64,
 ) -> bool {
-    let Some((_, Some(payload))) = split_distribution_tail(proof) else {
+    let Some((_, Some((payload, marker)))) = split_distribution_tail(proof) else {
         eprintln!("[STARK Core] Failed: missing distribution tail");
         return false;
     };
-    let segment = match decode_and_verify_distribution_tail(payload) {
+    let segment = match decode_and_verify_distribution_tail(payload, marker) {
         Some(seg) => seg,
         None => {
             eprintln!("[STARK Core] Failed: invalid distribution segment");
@@ -249,6 +303,16 @@ pub fn verify_distribution_binding(
     if segment.shots != expected_shots || segment.shots != reported_shots {
         eprintln!("[STARK Core] Failed: distribution shots mismatch");
         return false;
+    }
+    if let Some(expected_hash) = expected_measurement_spec_hash {
+        if expected_hash.is_empty() {
+            eprintln!("[STARK Core] Failed: expected measurement_spec_hash is empty");
+            return false;
+        }
+        if segment.measurement_spec_hash != expected_hash {
+            eprintln!("[STARK Core] Failed: distribution measurement_spec_hash mismatch");
+            return false;
+        }
     }
     let recomputed = sample_counts_from_probabilities(&segment.probabilities, segment.shots, segment.sample_seed);
     if &recomputed != reported_counts {
@@ -266,6 +330,7 @@ mod tests {
         DistributionSegment {
             sample_seed: 42,
             shots: 1024,
+            measurement_spec_hash: "abc123".into(),
             probability_digest: calculate_probability_digest(&[
                 ("00".into(), 0.5),
                 ("11".into(), 0.5),
@@ -289,8 +354,9 @@ mod tests {
         let proof = append_distribution_tail(base.to_vec(), &segment);
         let (decoded_base, tail) = split_distribution_tail(&proof).expect("split");
         assert_eq!(decoded_base, base);
-        let payload = tail.expect("tail");
-        let decoded = decode_and_verify_distribution_tail(payload).expect("decode");
+        let (payload, marker) = tail.expect("tail");
+        assert_eq!(marker, DIST_V2_MARKER);
+        let decoded = decode_and_verify_distribution_tail(payload, marker).expect("decode");
         assert_eq!(decoded, segment);
     }
 
@@ -318,9 +384,29 @@ mod tests {
             &proof,
             segment.sample_seed,
             segment.shots,
+            Some(&segment.measurement_spec_hash),
             &counts,
             segment.shots,
         ));
+    }
+
+    #[test]
+    fn v1_tail_still_decodes_without_measurement_spec_hash() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&42u64.to_le_bytes());
+        payload.extend_from_slice(&128u64.to_le_bytes());
+        append_cstr(&mut payload, "b3de34846864135b2fc5dc4cfc94c950b8e4c95b98015ba3e09fa46ada453e20");
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        append_cstr(&mut payload, "0");
+        payload.extend_from_slice(&1.0f64.to_le_bytes());
+
+        let mut proof = b"stark".to_vec();
+        proof.extend_from_slice(DIST_V1_MARKER);
+        proof.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        proof.extend_from_slice(&payload);
+
+        let seg = decode_and_verify_distribution_tail(&payload, DIST_V1_MARKER).expect("v1 decode");
+        assert!(seg.measurement_spec_hash.is_empty());
     }
 
     #[test]

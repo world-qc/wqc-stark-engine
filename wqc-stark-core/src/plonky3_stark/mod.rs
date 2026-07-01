@@ -93,8 +93,8 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         return false;
     }
 
-    if let Some((_, Some(dist_payload))) = crate::distribution::split_distribution_tail(proof) {
-        if crate::distribution::decode_and_verify_distribution_tail(dist_payload).is_none() {
+    if let Some((_, Some((dist_payload, marker)))) = crate::distribution::split_distribution_tail(proof) {
+        if crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker).is_none() {
             eprintln!("[STARK Core] Failed: invalid distribution tail");
             return false;
         }
@@ -145,6 +145,7 @@ mod tests {
         let segment = crate::distribution::DistributionSegment {
             sample_seed: 7,
             shots: 128,
+            measurement_spec_hash: String::new(),
             probability_digest: crate::distribution::calculate_probability_digest(&[
                 ("0".into(), 1.0),
             ]),

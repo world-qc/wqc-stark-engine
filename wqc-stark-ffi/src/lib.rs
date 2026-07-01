@@ -219,12 +219,14 @@ pub unsafe extern "C" fn wqc_verify_root_proof(
 /// Verifies distribution tail binding: Born probabilities + seed → reported counts.
 ///
 /// `counts_json` must be canonical `{"counts":{...},"shots":N}` (orchestrator format).
+/// `measurement_spec_hash` may be null/empty to skip spec binding (legacy V1 tails).
 #[no_mangle]
 pub unsafe extern "C" fn wqc_verify_distribution_binding(
     proof_bytes: *const u8,
     proof_len: u32,
     sample_seed: u64,
     shots: u64,
+    measurement_spec_hash: *const c_char,
     counts_json: *const c_char,
 ) -> i32 {
     let result = catch_unwind(|| {
@@ -241,10 +243,19 @@ pub unsafe extern "C" fn wqc_verify_distribution_binding(
                 return 0;
             }
         };
+        let expected_spec = {
+            let s = cstr_or_empty(measurement_spec_hash);
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        };
         if verify_distribution_binding(
             proof_slice,
             sample_seed,
             shots,
+            expected_spec,
             &reported_counts,
             reported_shots,
         ) {
