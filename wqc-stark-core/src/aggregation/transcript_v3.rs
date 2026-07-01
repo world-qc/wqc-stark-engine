@@ -92,6 +92,12 @@ pub fn locate_compose_marker(proof: &[u8]) -> Option<usize> {
 }
 
 pub fn decode_compose_v3(proof: &[u8]) -> Option<(ComposeHeader, Vec<u8>, Vec<u8>)> {
+    let (header, left, right) = decode_compose_v3_slices(proof)?;
+    Some((header, left.to_vec(), right.to_vec()))
+}
+
+/// Decodes a v3 compose transcript returning child byte slices into `proof`.
+pub fn decode_compose_v3_slices(proof: &[u8]) -> Option<(ComposeHeader, &[u8], &[u8])> {
     let marker_pos = locate_compose_marker(proof)?;
     let parent_end = marker_pos.saturating_sub(1);
     let parent_task_id = std::str::from_utf8(&proof[..parent_end]).ok()?.to_string();
@@ -103,11 +109,11 @@ pub fn decode_compose_v3(proof: &[u8]) -> Option<(ComposeHeader, Vec<u8>, Vec<u8
     let (right_child_hash, cursor) = read_fixed::<CHILD_HASH_LEN>(proof, cursor)?;
     let (left_len, cursor) = read_u32_le(proof, cursor)?;
     let left_end = cursor + left_len as usize;
-    let left_child = proof.get(cursor..left_end)?.to_vec();
+    let left_child = proof.get(cursor..left_end)?;
     let cursor = left_end;
     let (right_len, cursor) = read_u32_le(proof, cursor)?;
     let right_end = cursor + right_len as usize;
-    let right_child = proof.get(cursor..right_end)?.to_vec();
+    let right_child = proof.get(cursor..right_end)?;
     if right_end != proof.len() {
         return None;
     }

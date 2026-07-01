@@ -9,8 +9,6 @@ use p3_field::{Field, PrimeCharacteristicRing};
 
 pub const AGG_WIDTH: usize = 66;
 /// Columns `0..32`: left child digest bytes, `32..64`: right digest, `64..66`: verify flags.
-pub const AGG_LEFT_HASH_COL: usize = 0;
-pub const AGG_RIGHT_HASH_COL: usize = 32;
 pub const AGG_LEFT_OK_COL: usize = 64;
 pub const AGG_RIGHT_OK_COL: usize = 65;
 

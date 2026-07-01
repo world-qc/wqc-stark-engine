@@ -3,10 +3,10 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    compose_stark_proofs, proof_has_unitary_statevector_link, verify_distribution_binding,
-    verify_root_proof, verify_stark_proof_core, verify_trajectory_binding, proof_has_trajectory_unitary_link,
-    ComposeContext,
-    RootVerifyContext, StarkContext,
+    compose_stark_proofs, is_unitary_trajectory_leaf_compose, proof_has_unitary_statevector_link,
+    trajectory_proof_view, verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
+    verify_trajectory_binding, proof_has_trajectory_unitary_link, ComposeContext, RootVerifyContext,
+    StarkContext,
 };
 
 fn cstr_or_empty<'a>(ptr: *const c_char) -> &'a str {
@@ -255,7 +255,7 @@ pub unsafe extern "C" fn wqc_has_trajectory_zk_tail(
             return 0;
         }
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
-        if wqc_stark_core::plonky3_stark::has_trajectory_stark_tail(proof_slice) {
+        if wqc_stark_core::plonky3_stark::has_trajectory_stark_tail(trajectory_proof_view(proof_slice)) {
             return 1;
         }
         0
@@ -279,6 +279,30 @@ pub unsafe extern "C" fn wqc_proof_has_trajectory_unitary_link(
         }
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
         if proof_has_trajectory_unitary_link(proof_slice) {
+            1
+        } else {
+            0
+        }
+    });
+
+    match result {
+        Ok(code) => code,
+        Err(_) => -99,
+    }
+}
+
+/// Returns 1 when the proof is a v3 `leaf:unitary_traj` compose transcript.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_is_unitary_trajectory_compose(
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() {
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if is_unitary_trajectory_leaf_compose(proof_slice) {
             1
         } else {
             0

@@ -538,9 +538,20 @@ pub fn verify_trajectory_binding(
     reported_counts: &std::collections::BTreeMap<String, u64>,
     reported_shots: u64,
 ) -> bool {
-    let Some((_, Some((payload, marker)))) = split_trajectory_tail(proof) else {
-        eprintln!("[STARK Core] Failed: missing trajectory tail");
-        return false;
+    let traj_proof = crate::aggregation::trajectory_proof_view(proof);
+    let (_, tail) = match split_trajectory_tail(traj_proof) {
+        Some(parts) => parts,
+        None => {
+            eprintln!("[STARK Core] Failed: missing trajectory tail");
+            return false;
+        }
+    };
+    let (payload, marker) = match tail {
+        Some(parts) => parts,
+        None => {
+            eprintln!("[STARK Core] Failed: missing trajectory tail");
+            return false;
+        }
     };
     let segment = match decode_and_verify_trajectory_tail(payload, marker) {
         Some(seg) => seg,
@@ -574,12 +585,12 @@ pub fn verify_trajectory_binding(
     }
 
     #[cfg(feature = "plonky3-stark")]
-    if crate::plonky3_stark::has_trajectory_stark_tail(proof) {
+    if crate::plonky3_stark::has_trajectory_stark_tail(traj_proof) {
         if !crate::plonky3_stark::segment_supports_trajectory_zk(&segment) {
             eprintln!("[STARK Core] Failed: trajectory zk tail without zk-capable segment");
             return false;
         }
-        let Some(bundle) = crate::plonky3_stark::split_trajectory_stark_tail(proof) else {
+        let Some(bundle) = crate::plonky3_stark::split_trajectory_stark_tail(traj_proof) else {
             eprintln!("[STARK Core] Failed: malformed trajectory zk tail");
             return false;
         };

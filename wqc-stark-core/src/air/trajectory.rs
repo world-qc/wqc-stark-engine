@@ -1,7 +1,6 @@
 //! C2c: Z-marginal constraints linking mid-circuit MEASURE probabilities to pre-measure statevectors.
 
 use p3_field::PrimeCharacteristicRing;
-use p3_mersenne_31::Mersenne31;
 
 use crate::trajectory::{TrajectoryMarginalWitness, TrajectorySegment};
 

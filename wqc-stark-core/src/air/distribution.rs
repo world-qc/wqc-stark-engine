@@ -73,14 +73,6 @@ pub fn born_probabilities_from_statevector(
     Some(probs)
 }
 
-fn format_go_float(val: f64) -> String {
-    if val == (val as i64) as f64 {
-        format!("{:.1}", val)
-    } else {
-        format!("{val}")
-    }
-}
-
 fn probabilities_match(
     claimed: &[(String, f64)],
     recomputed: &BTreeMap<String, f64>,

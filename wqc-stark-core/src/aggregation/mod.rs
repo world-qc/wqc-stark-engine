@@ -9,6 +9,7 @@
 //! - **Root verify (audit)**: walks the v3 tree and re-checks every leaf STARK.
 
 mod leaf;
+mod leaf_compose;
 mod transcript_v3;
 
 #[cfg(feature = "plonky3-stark")]
@@ -18,9 +19,16 @@ use crate::plonky3_stark::{
 };
 
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
+pub use leaf_compose::{
+    encode_trajectory_leaf, is_trajectory_leaf_proof, is_unitary_trajectory_leaf_compose,
+    trajectory_child_from_compose, trajectory_proof_view, verify_trajectory_leaf, TRAJ_LEAF_MARKER,
+    UNITARY_TRAJ_COMPOSE_LABEL,
+};
+#[cfg(feature = "plonky3-stark")]
+pub use leaf_compose::{compose_unitary_trajectory_leaf, verify_unitary_trajectory_leaf_compose};
 pub use transcript_v3::{
-    child_digest, decode_compose_v3, encode_compose_v3, is_compose_v3, ComposeHeader,
-    CHILD_HASH_LEN, V3_COMPOSE_MARKER,
+    child_digest, decode_compose_v3, decode_compose_v3_slices, encode_compose_v3, is_compose_v3,
+    ComposeHeader, CHILD_HASH_LEN, V3_COMPOSE_MARKER,
 };
 
 use crate::transcript::StarkContext;
@@ -48,10 +56,20 @@ pub fn verify_child_proof(
     if child.is_empty() {
         return Err("child proof is empty".to_string());
     }
+    if is_trajectory_leaf_proof(child) {
+        return verify_trajectory_leaf(parent_task_id, child)
+            .map_err(|e| format!("trajectory leaf verification failed: {e}"));
+    }
+
     if is_compose_v3(child) {
+        let embedded_parent = leaf_compose::is_unitary_trajectory_leaf_compose(child)
+            .then(|| leaf_compose::compose_v3_body(child))
+            .and_then(|v3| {
+                transcript_v3::decode_compose_v3_slices(v3).map(|(header, _, _)| header.parent_task_id)
+            });
         return verify_composed_proof(
             &ComposeContext {
-                parent_task_id,
+                parent_task_id: embedded_parent.as_deref().unwrap_or(parent_task_id),
                 compose_label: "",
                 manifest_root_hash: "",
             },
