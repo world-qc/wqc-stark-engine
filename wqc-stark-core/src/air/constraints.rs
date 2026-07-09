@@ -55,7 +55,6 @@ impl<FR: Copy> AirRow<FR> {
             transition_link: cols[20],
         }
     }
-
 }
 
 /// Fixed-point constants used by Hadamard / rotation constraints.

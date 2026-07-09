@@ -34,7 +34,11 @@ pub fn outcome_key_from_classical(classical: &[u8]) -> String {
     unsafe { String::from_utf8_unchecked(bits) }
 }
 
-fn outcome_key(basis_index: usize, measures: &[BornMeasureSpec], classical_bit_count: usize) -> String {
+fn outcome_key(
+    basis_index: usize,
+    measures: &[BornMeasureSpec],
+    classical_bit_count: usize,
+) -> String {
     let mut bits = vec![0u8; classical_bit_count];
     for spec in measures {
         let bit = (basis_index >> spec.qubit) & 1;
@@ -73,10 +77,7 @@ pub fn born_probabilities_from_statevector(
     Some(probs)
 }
 
-fn probabilities_match(
-    claimed: &[(String, f64)],
-    recomputed: &BTreeMap<String, f64>,
-) -> bool {
+fn probabilities_match(claimed: &[(String, f64)], recomputed: &BTreeMap<String, f64>) -> bool {
     if claimed.len() != recomputed.len() {
         return false;
     }
@@ -150,17 +151,12 @@ pub fn born_constraint_accumulator(segment: &DistributionSegment) -> Mersenne31 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distribution::{append_distribution_tail, calculate_probability_digest, BornBinding};
+    use crate::distribution::{calculate_probability_digest, BornBinding};
 
     #[test]
     fn bell_state_born_probs_match_segment() {
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
-        let sv = vec![
-            (inv_sqrt2, 0.0),
-            (0.0, 0.0),
-            (0.0, 0.0),
-            (inv_sqrt2, 0.0),
-        ];
+        let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
         let measures = vec![
             BornMeasureSpec { qubit: 0, cbit: 0 },
             BornMeasureSpec { qubit: 1, cbit: 1 },
@@ -187,12 +183,7 @@ mod tests {
     #[test]
     fn tampered_born_probs_rejected() {
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
-        let sv = vec![
-            (inv_sqrt2, 0.0),
-            (0.0, 0.0),
-            (0.0, 0.0),
-            (inv_sqrt2, 0.0),
-        ];
+        let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
         let binding = BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv).expect("bind");
         let segment = DistributionSegment {
             sample_seed: 1,

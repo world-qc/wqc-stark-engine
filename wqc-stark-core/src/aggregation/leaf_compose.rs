@@ -7,18 +7,23 @@
 //! An R2 `AggregationAir` tail binds the two child SHA3-256 digests.
 
 use crate::aggregation::leaf::{parse_leaf_binding, parsed_to_stark_context};
-use crate::aggregation::transcript_v3::{child_digest, decode_compose_v3, decode_compose_v3_slices, is_compose_v3};
+use crate::aggregation::transcript_v3::{
+    child_digest, decode_compose_v3, decode_compose_v3_slices, is_compose_v3,
+};
 use crate::aggregation::{compose_stark_proofs, ComposeContext};
-use crate::trajectory::{append_trajectory_tail, decode_and_verify_trajectory_tail, split_trajectory_tail, TrajectorySegment};
+use crate::trajectory::{
+    append_trajectory_tail, decode_and_verify_trajectory_tail, split_trajectory_tail,
+    TrajectorySegment,
+};
 use crate::transcript::StarkContext;
 
+#[cfg(feature = "plonky3-stark")]
+use crate::plonky3_stark::split_agg_tail;
 #[cfg(feature = "plonky3-stark")]
 use crate::plonky3_stark::{
     append_trajectory_stark_tail, has_trajectory_stark_tail, segment_supports_trajectory_zk,
     split_trajectory_stark_tail, verify_plonky3_proof, verify_trajectory_stark_bundle,
 };
-#[cfg(feature = "plonky3-stark")]
-use crate::plonky3_stark::split_agg_tail;
 
 /// v3 compose label for a mid-circuit unitary + trajectory leaf pair.
 pub const UNITARY_TRAJ_COMPOSE_LABEL: &str = "leaf:unitary_traj";
@@ -60,7 +65,7 @@ pub fn trajectory_child_from_compose(proof: &[u8]) -> Option<&[u8]> {
 }
 
 /// Resolves the proof slice that carries trajectory segment / zk tails.
-pub fn trajectory_proof_view<'a>(proof: &'a [u8]) -> &'a [u8] {
+pub fn trajectory_proof_view(proof: &[u8]) -> &[u8] {
     trajectory_child_from_compose(proof).unwrap_or(proof)
 }
 
@@ -171,7 +176,9 @@ pub fn compose_unitary_trajectory_leaf(
     let parsed = parse_leaf_binding(unitary_v2_proof)
         .ok_or_else(|| "cannot parse unitary child public inputs".to_string())?;
     if parsed.terminal_statevector_digest != segment.unitary_link_digest {
-        return Err("unitary_link_digest mismatch between unitary child and trajectory segment".to_string());
+        return Err(
+            "unitary_link_digest mismatch between unitary child and trajectory segment".to_string(),
+        );
     }
 
     let traj_child = encode_trajectory_leaf(context.sub_task_id, segment, Some(traj_bundle));
@@ -192,10 +199,7 @@ pub fn compose_unitary_trajectory_leaf(
 
 /// Verifies a `leaf:unitary_traj` v3 compose transcript (unitary + trajectory children + agg tail).
 #[cfg(feature = "plonky3-stark")]
-pub fn verify_unitary_trajectory_leaf_compose(
-    context: &StarkContext<'_>,
-    proof: &[u8],
-) -> bool {
+pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof: &[u8]) -> bool {
     if !is_unitary_trajectory_leaf_compose(proof) {
         eprintln!("[LeafCompose] Failed: not a unitary+trajectory compose proof");
         return false;
@@ -319,8 +323,10 @@ mod tests {
         let pre_second = crate::distribution::canonicalize_terminal_statevector(&pre_second_raw);
         let d0 = crate::distribution::calculate_terminal_statevector_digest(&pre_first);
         let d2 = crate::distribution::calculate_terminal_statevector_digest(&pre_second);
-        let (p0, p1) = crate::air::trajectory::z_marginal_from_statevector(&pre_first, 0, 2).unwrap();
-        let (p0b, p1b) = crate::air::trajectory::z_marginal_from_statevector(&pre_second, 1, 2).unwrap();
+        let (p0, p1) =
+            crate::air::trajectory::z_marginal_from_statevector(&pre_first, 0, 2).unwrap();
+        let (p0b, p1b) =
+            crate::air::trajectory::z_marginal_from_statevector(&pre_second, 1, 2).unwrap();
         let witnesses = vec![
             crate::trajectory::TrajectoryMarginalWitness {
                 qubit: 0,
@@ -347,8 +353,8 @@ mod tests {
                     gate_index: 1,
                     qubit: 0,
                     cbit: 0,
-                    p0: p0,
-                    p1: p1,
+                    p0,
+                    p1,
                     outcome: 1,
                     pre_measure_statevector_digest: d0.clone(),
                 },
@@ -381,7 +387,9 @@ mod tests {
         let leaf = encode_trajectory_leaf("sub-traj", &segment, None);
         assert!(is_trajectory_leaf_proof(&leaf));
         verify_trajectory_leaf("sub-traj", &leaf).expect("verify leaf");
-        assert!(trajectory_proof_view(&leaf).windows(TRAJ_LEAF_MARKER.len()).any(|w| w == TRAJ_LEAF_MARKER));
+        assert!(trajectory_proof_view(&leaf)
+            .windows(TRAJ_LEAF_MARKER.len())
+            .any(|w| w == TRAJ_LEAF_MARKER));
     }
 
     #[cfg(feature = "plonky3-stark")]
@@ -502,7 +510,9 @@ mod tests {
             output_hash: ctx.output_hash,
             terminal_statevector_digest: ctx.terminal_statevector_digest,
         };
-        assert!(!verify_unitary_trajectory_leaf_compose(&wrong_sub, &composed));
+        assert!(!verify_unitary_trajectory_leaf_compose(
+            &wrong_sub, &composed
+        ));
 
         let wrong_output = StarkContext {
             circuit_id: ctx.circuit_id,
@@ -512,7 +522,10 @@ mod tests {
             output_hash: "deadbeef",
             terminal_statevector_digest: ctx.terminal_statevector_digest,
         };
-        assert!(!verify_unitary_trajectory_leaf_compose(&wrong_output, &composed));
+        assert!(!verify_unitary_trajectory_leaf_compose(
+            &wrong_output,
+            &composed
+        ));
     }
 
     #[cfg(feature = "plonky3-stark")]

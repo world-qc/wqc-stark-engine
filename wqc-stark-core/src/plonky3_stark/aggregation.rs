@@ -47,9 +47,7 @@ fn build_agg_matrix(
 }
 
 /// Generates a v4 aggregation STARK transcript after native child verification.
-pub fn generate_aggregation_proof(
-    context: &AggregationContext<'_>,
-) -> Result<Vec<u8>, String> {
+pub fn generate_aggregation_proof(context: &AggregationContext<'_>) -> Result<Vec<u8>, String> {
     if context.parent_task_id.is_empty() {
         return Err("parent_task_id is required".to_string());
     }

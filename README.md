@@ -81,6 +81,10 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
 
 See `docs/PROOF_AGGREGATION.md`.
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding guidelines, and the pull request process.
+
 ## License
 
 GPLv3 — see `LICENSE`.

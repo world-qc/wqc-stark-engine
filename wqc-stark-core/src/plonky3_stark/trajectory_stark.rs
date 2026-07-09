@@ -18,7 +18,10 @@ use super::transcript_trajectory_stark::{
     decode_trajectory_marginal_stark_owned, encode_trajectory_marginal_stark,
 };
 
-fn build_marginal_air(witness: &TrajectoryMarginalWitness, qubit_count: usize) -> Option<DistributionAir> {
+fn build_marginal_air(
+    witness: &TrajectoryMarginalWitness,
+    qubit_count: usize,
+) -> Option<DistributionAir> {
     if qubit_count > TRAJ_MARGINAL_ZK_MAX_QUBITS {
         return None;
     }
@@ -181,7 +184,11 @@ fn verify_one_marginal(
 }
 
 /// Verifies a trajectory marginal STARK bundle against a trajectory segment.
-pub fn verify_trajectory_stark_bundle(sub_task_id: &str, segment: &TrajectorySegment, bundle: &[u8]) -> bool {
+pub fn verify_trajectory_stark_bundle(
+    sub_task_id: &str,
+    segment: &TrajectorySegment,
+    bundle: &[u8],
+) -> bool {
     if sub_task_id.is_empty() || segment.trajectory_digest.is_empty() {
         eprintln!("[TrajectoryAir] Failed: context fields empty");
         return false;
@@ -341,6 +348,8 @@ mod tests {
     fn if_demo_trajectory_marginal_stark_roundtrip() {
         let segment = if_demo_segment();
         let bundle = generate_trajectory_stark_bundle("sub-traj", &segment).expect("prove");
-        assert!(verify_trajectory_stark_bundle("sub-traj", &segment, &bundle));
+        assert!(verify_trajectory_stark_bundle(
+            "sub-traj", &segment, &bundle
+        ));
     }
 }

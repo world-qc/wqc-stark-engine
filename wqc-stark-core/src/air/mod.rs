@@ -14,7 +14,7 @@ use crate::trace_spec::{
     SELECTOR_COUNT, TRACE_COL_TARGET_QUBIT, TRACE_COL_TRANSITION_LINK, TRACE_WIDTH,
 };
 
-pub use constraints::{AirConstants, AirRow, transition_accumulator};
+pub use constraints::{transition_accumulator, AirConstants, AirRow};
 
 /// Legacy row struct retained for compatibility with existing callers.
 pub type QuantumAirRow = AirRow<Mersenne31>;
@@ -25,7 +25,7 @@ pub fn f64_to_m31(val: f64) -> Mersenne31 {
     if scaled >= 0 {
         Mersenne31::new((scaled as u64 % 2_147_483_647) as u32)
     } else {
-        let abs_scaled = (scaled.abs() as u64) % 2_147_483_647;
+        let abs_scaled = scaled.unsigned_abs() % 2_147_483_647;
         Mersenne31::new((2_147_483_647 - abs_scaled) as u32)
     }
 }
@@ -82,7 +82,9 @@ pub fn trace_to_air_matrix(execution_trace: &[f64]) -> Option<RowMajorMatrix<Mer
 pub const MIN_UNI_STARK_HEIGHT: usize = 4;
 
 /// Pads an AIR matrix for uni-STARK: next power of two, at least [`MIN_UNI_STARK_HEIGHT`].
-pub fn pad_air_matrix_for_uni_stark(matrix: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
+pub fn pad_air_matrix_for_uni_stark(
+    matrix: RowMajorMatrix<Mersenne31>,
+) -> RowMajorMatrix<Mersenne31> {
     let height = matrix.height();
     let target = height.next_power_of_two().max(MIN_UNI_STARK_HEIGHT);
     if target == height {
@@ -99,7 +101,9 @@ pub fn pad_air_matrix_for_uni_stark(matrix: RowMajorMatrix<Mersenne31>) -> RowMa
 }
 
 /// Pads an AIR matrix height to the next power of two (Plonky3 uni-STARK requirement).
-pub fn pad_air_matrix_to_power_of_two(matrix: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Mersenne31> {
+pub fn pad_air_matrix_to_power_of_two(
+    matrix: RowMajorMatrix<Mersenne31>,
+) -> RowMajorMatrix<Mersenne31> {
     let height = matrix.height();
     let target = height.next_power_of_two();
     if target == height {
@@ -192,8 +196,28 @@ mod tests {
     #[test]
     fn cz_gate_with_control_one_produces_nonzero_air_sum_if_transition_wrong() {
         let trace = vec![
-            GATE_CZ as f64, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0,
-            GATE_CZ as f64, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0,
+            GATE_CZ as f64,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            GATE_CZ as f64,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
         ];
         let matrix = trace_to_air_matrix(&trace).expect("matrix");
         let sum = evaluate_air_sum(&matrix);
@@ -203,8 +227,28 @@ mod tests {
     #[test]
     fn ccnot_with_dual_control_one_produces_nonzero_air_sum_if_transition_wrong() {
         let trace = vec![
-            GATE_CCNOT as f64, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 1.0,
-            GATE_CCNOT as f64, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0,
+            GATE_CCNOT as f64,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            1.0,
+            GATE_CCNOT as f64,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            0.0,
         ];
         let matrix = trace_to_air_matrix(&trace).expect("matrix");
         let sum = evaluate_air_sum(&matrix);

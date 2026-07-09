@@ -54,8 +54,7 @@ pub fn outcome_basis_groups(
                 let bit = (basis >> spec.qubit) & 1;
                 bits[spec.cbit as usize] = bit as u8;
             }
-            let outcome =
-                crate::air::distribution::outcome_key_from_classical(&bits);
+            let outcome = crate::air::distribution::outcome_key_from_classical(&bits);
             if &outcome == key {
                 indices.push(basis);
             }
@@ -74,7 +73,11 @@ fn build_distribution_air(segment: &DistributionSegment) -> Option<DistributionA
     if qubit_count > BORN_ZK_MAX_QUBITS {
         return None;
     }
-    let outcome_keys: Vec<String> = segment.probabilities.iter().map(|(k, _)| k.clone()).collect();
+    let outcome_keys: Vec<String> = segment
+        .probabilities
+        .iter()
+        .map(|(k, _)| k.clone())
+        .collect();
     let outcome_groups = outcome_basis_groups(binding, &outcome_keys)?;
     Some(DistributionAir {
         dim: 1usize << qubit_count,
@@ -203,8 +206,9 @@ pub fn verify_born_stark_proof(
                 eprintln!("[DistributionAir] Failed: terminal_statevector_digest mismatch");
                 return false;
             }
-            let recomputed =
-                crate::distribution::calculate_terminal_statevector_digest(&binding.terminal_statevector);
+            let recomputed = crate::distribution::calculate_terminal_statevector_digest(
+                &binding.terminal_statevector,
+            );
             if recomputed != binding.terminal_statevector_digest {
                 eprintln!("[DistributionAir] Failed: statevector digest recomputation mismatch");
                 return false;
@@ -239,7 +243,10 @@ pub fn verify_born_stark_proof(
     let config = devnet_circle_config();
     match verify(&config, &air, &p3_proof, &[]) {
         Ok(()) => {
-            eprintln!("[DistributionAir] Verification success (Born zk, dim={})", air.dim);
+            eprintln!(
+                "[DistributionAir] Verification success (Born zk, dim={})",
+                air.dim
+            );
             true
         }
         Err(e) => {
@@ -256,12 +263,7 @@ mod tests {
 
     fn bell_segment() -> DistributionSegment {
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
-        let sv = vec![
-            (inv_sqrt2, 0.0),
-            (0.0, 0.0),
-            (0.0, 0.0),
-            (inv_sqrt2, 0.0),
-        ];
+        let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
         let probs = vec![("00".into(), 0.5), ("11".into(), 0.5)];
         let binding = BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv).expect("bind");
         DistributionSegment {

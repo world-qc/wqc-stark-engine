@@ -6,6 +6,8 @@
 pub const TRAJ_V1_MARKER: &[u8] = b"_M31_TRAJ_V1_";
 pub const TRAJ_V2_MARKER: &[u8] = b"_M31_TRAJ_V2_";
 
+type ProofTailSplit<'a> = (&'a [u8], Option<(&'a [u8], &'static [u8])>);
+
 /// One observed MEASURE event during a trajectory shot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrajectoryMeasureEvent {
@@ -214,7 +216,10 @@ fn encode_trajectory_segment_v2(segment: &TrajectorySegment) -> Vec<u8> {
     out
 }
 
-pub fn decode_trajectory_segment(payload: &[u8], marker: &[u8]) -> Option<(TrajectorySegment, usize)> {
+pub fn decode_trajectory_segment(
+    payload: &[u8],
+    marker: &[u8],
+) -> Option<(TrajectorySegment, usize)> {
     if marker == TRAJ_V2_MARKER {
         decode_trajectory_segment_v2(payload, 0)
     } else {
@@ -222,7 +227,10 @@ pub fn decode_trajectory_segment(payload: &[u8], marker: &[u8]) -> Option<(Traje
     }
 }
 
-fn decode_trajectory_segment_v1(payload: &[u8], offset: usize) -> Option<(TrajectorySegment, usize)> {
+fn decode_trajectory_segment_v1(
+    payload: &[u8],
+    offset: usize,
+) -> Option<(TrajectorySegment, usize)> {
     let (sample_seed, cursor) = read_u64_le(payload, offset)?;
     let (shots, cursor) = read_u64_le(payload, cursor)?;
     let (measurement_spec_hash, cursor) = read_cstr(payload, cursor)?;
@@ -283,7 +291,10 @@ fn decode_trajectory_segment_v1(payload: &[u8], offset: usize) -> Option<(Trajec
     ))
 }
 
-fn decode_trajectory_segment_v2(payload: &[u8], offset: usize) -> Option<(TrajectorySegment, usize)> {
+fn decode_trajectory_segment_v2(
+    payload: &[u8],
+    offset: usize,
+) -> Option<(TrajectorySegment, usize)> {
     let (sample_seed, cursor) = read_u64_le(payload, offset)?;
     let (shots, cursor) = read_u64_le(payload, cursor)?;
     let (measurement_spec_hash, cursor) = read_cstr(payload, cursor)?;
@@ -399,7 +410,8 @@ fn find_trajectory_tail_marker(proof: &[u8]) -> Option<(usize, &'static [u8])> {
 
 /// Appends a trajectory tail to a STARK transcript (after optional distribution / Born tails).
 pub fn append_trajectory_tail(mut proof: Vec<u8>, segment: &TrajectorySegment) -> Vec<u8> {
-    let marker = if segment.marginal_witnesses.is_empty() && segment.unitary_link_digest.is_empty() {
+    let marker = if segment.marginal_witnesses.is_empty() && segment.unitary_link_digest.is_empty()
+    {
         TRAJ_V1_MARKER
     } else {
         TRAJ_V2_MARKER
@@ -412,7 +424,7 @@ pub fn append_trajectory_tail(mut proof: Vec<u8>, segment: &TrajectorySegment) -
 }
 
 /// Splits a proof into the prefix and optional trajectory tail payload.
-pub fn split_trajectory_tail(proof: &[u8]) -> Option<(&[u8], Option<(&[u8], &'static [u8])>)> {
+pub fn split_trajectory_tail(proof: &[u8]) -> Option<ProofTailSplit<'_>> {
     let (pos, marker) = find_trajectory_tail_marker(proof)?;
     let base = &proof[..pos];
     let cursor = pos + marker.len();
@@ -431,7 +443,12 @@ pub fn strip_one_aux_tail(proof: &[u8]) -> &[u8] {
     let mut best: Option<usize> = None;
     const DIST_V2_MARKER: &[u8] = b"_M31_DIST_V2_";
     const DIST_V1_MARKER: &[u8] = b"_M31_DIST_V1_";
-    for marker in [TRAJ_V2_MARKER, TRAJ_V1_MARKER, DIST_V2_MARKER, DIST_V1_MARKER] {
+    for marker in [
+        TRAJ_V2_MARKER,
+        TRAJ_V1_MARKER,
+        DIST_V2_MARKER,
+        DIST_V1_MARKER,
+    ] {
         if let Some(pos) = proof.windows(marker.len()).rposition(|w| w == marker) {
             best = Some(best.map_or(pos, |b| b.max(pos)));
         }
@@ -443,7 +460,10 @@ pub fn strip_one_aux_tail(proof: &[u8]) -> &[u8] {
             best = Some(best.map_or(pos, |b| b.max(pos)));
         }
         let traj_stark = crate::plonky3_stark::TRAJ_STARK_TAIL_MARKER;
-        if let Some(pos) = proof.windows(traj_stark.len()).rposition(|w| w == traj_stark) {
+        if let Some(pos) = proof
+            .windows(traj_stark.len())
+            .rposition(|w| w == traj_stark)
+        {
             best = Some(best.map_or(pos, |b| b.max(pos)));
         }
     }
@@ -505,7 +525,10 @@ pub fn verify_trajectory_segment(segment: &TrajectorySegment) -> bool {
     true
 }
 
-pub fn decode_and_verify_trajectory_tail(payload: &[u8], marker: &[u8]) -> Option<TrajectorySegment> {
+pub fn decode_and_verify_trajectory_tail(
+    payload: &[u8],
+    marker: &[u8],
+) -> Option<TrajectorySegment> {
     if marker != TRAJ_V1_MARKER && marker != TRAJ_V2_MARKER {
         return None;
     }
@@ -520,7 +543,9 @@ pub fn decode_and_verify_trajectory_tail(payload: &[u8], marker: &[u8]) -> Optio
 }
 
 /// Aggregates per-shot final outcomes into a counts histogram.
-pub fn counts_from_trajectory_segment(segment: &TrajectorySegment) -> std::collections::BTreeMap<String, u64> {
+pub fn counts_from_trajectory_segment(
+    segment: &TrajectorySegment,
+) -> std::collections::BTreeMap<String, u64> {
     use std::collections::BTreeMap;
     let mut counts = BTreeMap::new();
     for shot in &segment.traces {

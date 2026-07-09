@@ -76,7 +76,9 @@ pub fn encode_compose_v3(
 
 /// Returns true when `proof` contains a v3 compose marker.
 pub fn is_compose_v3(proof: &[u8]) -> bool {
-    proof.windows(V3_COMPOSE_MARKER.len()).any(|w| w == V3_COMPOSE_MARKER)
+    proof
+        .windows(V3_COMPOSE_MARKER.len())
+        .any(|w| w == V3_COMPOSE_MARKER)
 }
 
 /// Locates the v3 compose marker and returns the parent_task_id prefix length.

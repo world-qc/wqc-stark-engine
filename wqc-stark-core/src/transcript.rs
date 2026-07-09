@@ -147,7 +147,10 @@ pub fn find_marker(proof: &[u8], sub_task_id: &str) -> Option<(usize, &'static [
 }
 
 /// Decodes a v1 proof payload after public-input binding.
-pub(crate) fn decode_proof_v1_payload(proof: &[u8], offset: usize) -> Option<(Vec<f64>, u32, [u32; 4], usize)> {
+pub(crate) fn decode_proof_v1_payload(
+    proof: &[u8],
+    offset: usize,
+) -> Option<(Vec<f64>, u32, [u32; 4], usize)> {
     let (trace_row_count, offset) = read_u32_le(proof, offset)?;
     let trace_float_count = trace_row_count as usize * TRACE_WIDTH;
     let trace_byte_len = trace_float_count * 8;
@@ -238,7 +241,10 @@ mod tests {
         };
 
         let decoded = decode_proof_v1_owned(&proof, &bad_context);
-        assert!(decoded.is_none(), "decode should fail on mismatched public inputs");
+        assert!(
+            decoded.is_none(),
+            "decode should fail on mismatched public inputs"
+        );
     }
 
     #[test]

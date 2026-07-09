@@ -21,10 +21,7 @@ impl<F: Field> BaseAir<F> for QuantumExecutionAir {
 }
 
 /// Symbolic transition constraints using `Copy` trace vars (see `AirBuilder::Var`).
-fn transition_constraint_expr<AB: AirBuilder>(
-    curr: &[AB::Var],
-    next: &[AB::Var],
-) -> AB::Expr
+fn transition_constraint_expr<AB: AirBuilder>(curr: &[AB::Var], next: &[AB::Var]) -> AB::Expr
 where
     AB::F: Field,
 {
@@ -89,8 +86,7 @@ where
         (ctrl_inactive.clone() * curr[16].into()) + (ctrl_active.clone() * curr[18].into());
     let expected_c_v1_re =
         (ctrl_inactive.clone() * curr[17].into()) + (ctrl_active.clone() * curr[15].into());
-    let expected_c_v1_im =
-        (ctrl_inactive * curr[18].into()) + (ctrl_active * curr[16].into());
+    let expected_c_v1_im = (ctrl_inactive * curr[18].into()) + (ctrl_active * curr[16].into());
     let cost_ctrl = (next[15].into() - expected_c_v0_re).square()
         + (next[16].into() - expected_c_v0_im).square()
         + (next[17].into() - expected_c_v1_re).square()
@@ -112,8 +108,7 @@ where
         (cc_inactive.clone() * curr[16].into()) + (cc_active.clone() * curr[18].into());
     let expected_cc_v1_re =
         (cc_inactive.clone() * curr[17].into()) + (cc_active.clone() * curr[15].into());
-    let expected_cc_v1_im =
-        (cc_inactive * curr[18].into()) + (cc_active * curr[16].into());
+    let expected_cc_v1_im = (cc_inactive * curr[18].into()) + (cc_active * curr[16].into());
     let cost_ccnot = (next[15].into() - expected_cc_v0_re).square()
         + (next[16].into() - expected_cc_v0_im).square()
         + (next[17].into() - expected_cc_v1_re).square()
@@ -154,8 +149,7 @@ where
         + curr[9].into()
         + curr[10].into();
 
-    let full_cost =
-        gate_active.clone() * gate_costs + (one - gate_active) * identity_cost;
+    let full_cost = gate_active.clone() * gate_costs + (one - gate_active) * identity_cost;
 
     // Skip amplitude transition when the executor marked this row as cross-wire (`link = 0`).
     full_cost * curr[20].into()

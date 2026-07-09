@@ -14,18 +14,18 @@ mod transcript_v3;
 
 #[cfg(feature = "plonky3-stark")]
 use crate::plonky3_stark::{
-    append_agg_tail, generate_aggregation_proof, verify_aggregation_proof, AggregationContext,
-    split_agg_tail,
+    append_agg_tail, generate_aggregation_proof, split_agg_tail, verify_aggregation_proof,
+    AggregationContext,
 };
 
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
+#[cfg(feature = "plonky3-stark")]
+pub use leaf_compose::{compose_unitary_trajectory_leaf, verify_unitary_trajectory_leaf_compose};
 pub use leaf_compose::{
     encode_trajectory_leaf, is_trajectory_leaf_proof, is_unitary_trajectory_leaf_compose,
     trajectory_child_from_compose, trajectory_proof_view, verify_trajectory_leaf, TRAJ_LEAF_MARKER,
     UNITARY_TRAJ_COMPOSE_LABEL,
 };
-#[cfg(feature = "plonky3-stark")]
-pub use leaf_compose::{compose_unitary_trajectory_leaf, verify_unitary_trajectory_leaf_compose};
 pub use transcript_v3::{
     child_digest, decode_compose_v3, decode_compose_v3_slices, encode_compose_v3, is_compose_v3,
     ComposeHeader, CHILD_HASH_LEN, V3_COMPOSE_MARKER,
@@ -65,7 +65,8 @@ pub fn verify_child_proof(
         let embedded_parent = leaf_compose::is_unitary_trajectory_leaf_compose(child)
             .then(|| leaf_compose::compose_v3_body(child))
             .and_then(|v3| {
-                transcript_v3::decode_compose_v3_slices(v3).map(|(header, _, _)| header.parent_task_id)
+                transcript_v3::decode_compose_v3_slices(v3)
+                    .map(|(header, _, _)| header.parent_task_id)
             });
         return verify_composed_proof(
             &ComposeContext {
@@ -84,8 +85,8 @@ pub fn verify_child_proof(
         return Err("leaf proof verification failed".to_string());
     }
 
-    let parsed = parse_leaf_binding(child)
-        .ok_or_else(|| "cannot parse leaf public inputs".to_string())?;
+    let parsed =
+        parse_leaf_binding(child).ok_or_else(|| "cannot parse leaf public inputs".to_string())?;
     let ctx = parsed_to_stark_context(&parsed);
     if verify_stark_proof_core(&ctx, child) {
         Ok(())
@@ -150,9 +151,8 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
         return Err("not a v3 compose proof".to_string());
     }
 
-    let (header, left_child, right_child) = decode_compose_v3(v3_proof).ok_or_else(|| {
-        "malformed v3 compose transcript".to_string()
-    })?;
+    let (header, left_child, right_child) =
+        decode_compose_v3(v3_proof).ok_or_else(|| "malformed v3 compose transcript".to_string())?;
 
     if header.parent_task_id != context.parent_task_id {
         return Err(format!(
@@ -234,7 +234,9 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                         );
                         return true;
                     }
-                    eprintln!("[Aggregation] Root aggregation STARK failed; falling back to audit walk");
+                    eprintln!(
+                        "[Aggregation] Root aggregation STARK failed; falling back to audit walk"
+                    );
                 }
             }
         }

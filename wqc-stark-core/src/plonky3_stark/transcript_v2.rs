@@ -1,6 +1,6 @@
 //! v2 proof transcript helpers (Plonky3 payload).
 
-use crate::transcript::{StarkContext, V2_MARKER, verify_public_input_binding};
+use crate::transcript::{verify_public_input_binding, StarkContext, V2_MARKER};
 
 fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) {
     for field in [

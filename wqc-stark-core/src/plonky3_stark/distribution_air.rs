@@ -22,9 +22,9 @@ impl DistributionAir {
     }
 
     /// Host-side constraint accumulator (`ZERO` iff the first trace row satisfies Born binding).
-    pub fn evaluate_first_row_sum<FR: Field>(&self, row: &[FR]) -> FR
+    pub fn evaluate_first_row_sum<FR>(&self, row: &[FR]) -> FR
     where
-        FR: PrimeCharacteristicRing + Copy,
+        FR: Field + PrimeCharacteristicRing + Copy,
     {
         let scale = FR::from_u32(BORN_ZK_SCALE);
         let mut acc = FR::ZERO;
@@ -56,29 +56,26 @@ impl<F: Field> BaseAir<F> for DistributionAir {
     }
 }
 
-fn born_constraints_expr<AB: AirBuilder>(
-    air: &DistributionAir,
-    curr: &[AB::Var],
-) -> AB::Expr
+fn born_constraints_expr<AB: AirBuilder>(air: &DistributionAir, curr: &[AB::Var]) -> AB::Expr
 where
     AB::F: Field,
 {
-        let scale: AB::Expr = AB::F::from_u32(BORN_ZK_SCALE).into();
-        let mut acc = AB::Expr::ZERO;
+    let scale: AB::Expr = AB::F::from_u32(BORN_ZK_SCALE).into();
+    let mut acc = AB::Expr::ZERO;
 
-        for (outcome_idx, group) in air.outcome_groups.iter().enumerate() {
-            let claimed = curr[2 * air.dim + outcome_idx].into();
-            let mut mass = AB::Expr::ZERO;
-            for &basis in group {
-                let re = curr[2 * basis].into();
-                let im = curr[2 * basis + 1].into();
-                mass = mass + re.clone() * re + im.clone() * im;
-            }
-            acc = acc + claimed * scale.clone() - mass;
+    for (outcome_idx, group) in air.outcome_groups.iter().enumerate() {
+        let claimed = curr[2 * air.dim + outcome_idx].into();
+        let mut mass = AB::Expr::ZERO;
+        for &basis in group {
+            let re = curr[2 * basis].into();
+            let im = curr[2 * basis + 1].into();
+            mass = mass + re.clone() * re + im.clone() * im;
         }
-
-        acc
+        acc = acc + claimed * scale.clone() - mass;
     }
+
+    acc
+}
 
 impl<AB: AirBuilder> Air<AB> for DistributionAir
 where

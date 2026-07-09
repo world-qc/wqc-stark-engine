@@ -1,5 +1,5 @@
-pub mod air;
 pub mod aggregation;
+pub mod air;
 pub mod distribution;
 pub mod trace_spec;
 pub mod trajectory;
@@ -8,12 +8,6 @@ pub mod transcript;
 #[cfg(feature = "plonky3-stark")]
 pub mod plonky3_stark;
 
-pub use air::trajectory::z_marginal_from_statevector;
-pub use air::evaluate_execution_trace;
-pub use trace_spec::{
-    AIR_WIDTH, FIXED_POINT_SCALE, GATE_CCNOT, GATE_CNOT, GATE_CZ, GATE_H, GATE_RX, GATE_RY,
-    GATE_RZ, GATE_S, GATE_T, GATE_X, GATE_Y, GATE_Z, SELECTOR_COUNT, TRACE_WIDTH,
-};
 pub use aggregation::{
     compose_stark_proofs, is_unitary_trajectory_leaf_compose, trajectory_proof_view,
     verify_child_proof, verify_composed_proof, verify_root_proof, ComposeContext, ComposeHeader,
@@ -21,12 +15,18 @@ pub use aggregation::{
 };
 #[cfg(feature = "plonky3-stark")]
 pub use aggregation::{compose_unitary_trajectory_leaf, verify_unitary_trajectory_leaf_compose};
+pub use air::evaluate_execution_trace;
+pub use air::trajectory::z_marginal_from_statevector;
 pub use distribution::{
     append_distribution_tail, base_proof_without_distribution_tail, calculate_probability_digest,
     calculate_terminal_statevector_digest, canonicalize_terminal_statevector,
     decode_and_verify_distribution_tail, decode_distribution_segment,
     sample_counts_from_probabilities, split_distribution_tail, verify_distribution_binding,
     BornBinding, DistributionSegment, DIST_V1_MARKER, DIST_V2_MARKER,
+};
+pub use trace_spec::{
+    AIR_WIDTH, FIXED_POINT_SCALE, GATE_CCNOT, GATE_CNOT, GATE_CZ, GATE_H, GATE_RX, GATE_RY,
+    GATE_RZ, GATE_S, GATE_T, GATE_X, GATE_Y, GATE_Z, SELECTOR_COUNT, TRACE_WIDTH,
 };
 pub use trajectory::{
     append_trajectory_tail, base_proof_without_aux_tails, calculate_trajectory_digest,
@@ -44,7 +44,8 @@ use transcript::verify_public_input_binding;
 
 /// Reports whether a proof binds unitary v2 and trajectory marginals via `unitary_link_digest`.
 pub fn proof_has_trajectory_unitary_link(proof: &[u8]) -> bool {
-    trajectory::peek_trajectory_unitary_link_digest(aggregation::trajectory_proof_view(proof)).is_some()
+    trajectory::peek_trajectory_unitary_link_digest(aggregation::trajectory_proof_view(proof))
+        .is_some()
 }
 
 /// Reports whether a proof binds unitary v2 and Born tails via `terminal_statevector_digest`.
@@ -191,15 +192,19 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
         return false;
     }
 
-    if let Some((_, Some((dist_payload, marker)))) = crate::distribution::split_distribution_tail(proof) {
-        if crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker).is_none() {
+    if let Some((_, Some((dist_payload, marker)))) =
+        crate::distribution::split_distribution_tail(proof)
+    {
+        if crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker).is_none()
+        {
             eprintln!("[STARK Core] Failed: invalid distribution tail");
             return false;
         }
     }
 
     if crate::trajectory::has_trajectory_tail(proof) {
-        let Some((_, Some((payload, marker)))) = crate::trajectory::split_trajectory_tail(proof) else {
+        let Some((_, Some((payload, marker)))) = crate::trajectory::split_trajectory_tail(proof)
+        else {
             eprintln!("[STARK Core] Failed: malformed trajectory tail");
             return false;
         };
@@ -225,7 +230,10 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
         return true;
     }
 
-    eprintln!("[STARK Core] Verification success (v1 AIR, trace_len={})", trace.len());
+    eprintln!(
+        "[STARK Core] Verification success (v1 AIR, trace_len={})",
+        trace.len()
+    );
     true
 }
 

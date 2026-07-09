@@ -14,7 +14,10 @@ pub const TRAJ_MARGINAL_EPSILON: f64 = 1e-5;
 pub const TRAJ_MARGINAL_ZK_MAX_QUBITS: usize = 4;
 
 /// Computational-basis indices where `qubit` reads 0 / 1.
-pub fn z_marginal_basis_groups(qubit: usize, qubit_count: usize) -> Option<(Vec<usize>, Vec<usize>)> {
+pub fn z_marginal_basis_groups(
+    qubit: usize,
+    qubit_count: usize,
+) -> Option<(Vec<usize>, Vec<usize>)> {
     if qubit_count > TRAJ_MARGINAL_ZK_MAX_QUBITS || qubit >= qubit_count {
         return None;
     }
@@ -87,9 +90,11 @@ pub fn evaluate_marginal_witness_sum<FR: PrimeCharacteristicRing + Copy>(
 }
 
 fn witness_matches_claimed_probs(witness: &TrajectoryMarginalWitness, qubit_count: usize) -> bool {
-    let Some((p0, p1)) =
-        z_marginal_from_statevector(&witness.pre_measure_statevector, witness.qubit as usize, qubit_count)
-    else {
+    let Some((p0, p1)) = z_marginal_from_statevector(
+        &witness.pre_measure_statevector,
+        witness.qubit as usize,
+        qubit_count,
+    ) else {
         return false;
     };
     (witness.reference_p0 - p0).abs() <= TRAJ_MARGINAL_EPSILON
@@ -107,8 +112,9 @@ pub fn evaluate_trajectory_marginal_constraints(segment: &TrajectorySegment) -> 
     }
 
     for witness in &segment.marginal_witnesses {
-        let recomputed =
-            crate::distribution::calculate_terminal_statevector_digest(&witness.pre_measure_statevector);
+        let recomputed = crate::distribution::calculate_terminal_statevector_digest(
+            &witness.pre_measure_statevector,
+        );
         if recomputed != witness.pre_measure_statevector_digest {
             return false;
         }

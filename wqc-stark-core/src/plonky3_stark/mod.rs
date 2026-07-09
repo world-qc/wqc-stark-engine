@@ -1,49 +1,49 @@
 //! Phase 3: Plonky3 `p3-uni-stark` prover and verifier (Mersenne31 Circle STARK).
 
-mod config;
-mod quantum_air;
-mod transcript_v2;
 #[cfg(feature = "plonky3-stark")]
 mod aggregation;
 #[cfg(feature = "plonky3-stark")]
 mod aggregation_air;
+mod config;
 #[cfg(feature = "plonky3-stark")]
 mod distribution_air;
 #[cfg(feature = "plonky3-stark")]
 mod distribution_stark;
+mod quantum_air;
+#[cfg(feature = "plonky3-stark")]
+mod trajectory_stark;
 #[cfg(feature = "plonky3-stark")]
 mod transcript_born;
 #[cfg(feature = "plonky3-stark")]
 mod transcript_trajectory_stark;
-#[cfg(feature = "plonky3-stark")]
-mod trajectory_stark;
+mod transcript_v2;
 #[cfg(feature = "plonky3-stark")]
 mod transcript_v4;
 
-pub use config::devnet_circle_config;
-pub use quantum_air::QuantumExecutionAir;
-pub use transcript_v2::{decode_proof_v2_owned, decode_proof_v2_plonky3_bytes, encode_proof_v2};
 #[cfg(feature = "plonky3-stark")]
 pub use aggregation::{generate_aggregation_proof, verify_aggregation_proof, AggregationContext};
+pub use config::devnet_circle_config;
 #[cfg(feature = "plonky3-stark")]
 pub use distribution_stark::{
-    generate_born_stark_proof, segment_supports_born_zk, verify_born_stark_proof,
-    BornStarkContext, BORN_ZK_MAX_QUBITS,
+    generate_born_stark_proof, segment_supports_born_zk, verify_born_stark_proof, BornStarkContext,
+    BORN_ZK_MAX_QUBITS,
+};
+pub use quantum_air::QuantumExecutionAir;
+#[cfg(feature = "plonky3-stark")]
+pub use trajectory_stark::{
+    generate_trajectory_stark_bundle, segment_supports_trajectory_zk,
+    verify_trajectory_stark_bundle, TRAJ_MARGINAL_ZK_MAX_QUBITS,
 };
 #[cfg(feature = "plonky3-stark")]
 pub use transcript_born::{
     append_born_stark_tail, has_born_stark_tail, split_born_stark_tail, BORN_STARK_TAIL_MARKER,
 };
 #[cfg(feature = "plonky3-stark")]
-pub use trajectory_stark::{
-    generate_trajectory_stark_bundle, segment_supports_trajectory_zk, verify_trajectory_stark_bundle,
-    TRAJ_MARGINAL_ZK_MAX_QUBITS,
-};
-#[cfg(feature = "plonky3-stark")]
 pub use transcript_trajectory_stark::{
     append_trajectory_stark_tail, has_trajectory_stark_tail, split_trajectory_stark_tail,
     TRAJ_STARK_TAIL_MARKER,
 };
+pub use transcript_v2::{decode_proof_v2_owned, decode_proof_v2_plonky3_bytes, encode_proof_v2};
 #[cfg(feature = "plonky3-stark")]
 pub use transcript_v4::{append_agg_tail, has_agg_tail, split_agg_tail};
 
@@ -68,9 +68,7 @@ pub fn generate_plonky3_proof(
     })?;
 
     if evaluate_air_sum(&matrix) != Mersenne31::ZERO {
-        return Err(
-            "execution trace does not satisfy AIR constraints (air_sum != 0)".to_string(),
-        );
+        return Err("execution trace does not satisfy AIR constraints (air_sum != 0)".to_string());
     }
 
     let matrix = pad_air_matrix_for_uni_stark(matrix);
@@ -150,14 +148,17 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
 
     let mut verified_distribution = false;
     let mut verified_born_zk = false;
-    if let Some((_, Some((dist_payload, marker)))) = crate::distribution::split_distribution_tail(proof) {
-        let segment = match crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker) {
-            Some(seg) => seg,
-            None => {
-                eprintln!("[STARK Core] Failed: invalid distribution tail");
-                return false;
-            }
-        };
+    if let Some((_, Some((dist_payload, marker)))) =
+        crate::distribution::split_distribution_tail(proof)
+    {
+        let segment =
+            match crate::distribution::decode_and_verify_distribution_tail(dist_payload, marker) {
+                Some(seg) => seg,
+                None => {
+                    eprintln!("[STARK Core] Failed: invalid distribution tail");
+                    return false;
+                }
+            };
 
         if let Some(binding) = &segment.born_binding {
             if !binding.terminal_statevector_digest.is_empty() {
@@ -165,7 +166,9 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
                     &binding.terminal_statevector,
                 );
                 if recomputed != binding.terminal_statevector_digest {
-                    eprintln!("[STARK Core] Failed: terminal_statevector_digest mismatch in segment");
+                    eprintln!(
+                        "[STARK Core] Failed: terminal_statevector_digest mismatch in segment"
+                    );
                     return false;
                 }
             }
@@ -196,7 +199,8 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
     }
 
     let verified_trajectory = if crate::trajectory::has_trajectory_tail(proof) {
-        let Some((_, Some((payload, marker)))) = crate::trajectory::split_trajectory_tail(proof) else {
+        let Some((_, Some((payload, marker)))) = crate::trajectory::split_trajectory_tail(proof)
+        else {
             eprintln!("[STARK Core] Failed: malformed trajectory tail");
             return false;
         };
@@ -292,7 +296,8 @@ mod tests {
         let trace = crate::trace_spec::golden_h_q0_trace();
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
         let sv = vec![(inv_sqrt2, 0.0), (inv_sqrt2, 0.0)];
-        let binding = crate::distribution::BornBinding::from_specs(1, 1, &[(0, 0)], sv).expect("bind");
+        let binding =
+            crate::distribution::BornBinding::from_specs(1, 1, &[(0, 0)], sv).expect("bind");
         let probs = vec![("0".into(), 0.5), ("1".into(), 0.5)];
         let segment = crate::distribution::DistributionSegment {
             sample_seed: 7,
@@ -331,7 +336,8 @@ mod tests {
         let trace = crate::trace_spec::golden_h_q0_trace();
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
         let sv = vec![(inv_sqrt2, 0.0), (inv_sqrt2, 0.0)];
-        let binding = crate::distribution::BornBinding::from_specs(1, 1, &[(0, 0)], sv).expect("bind");
+        let binding =
+            crate::distribution::BornBinding::from_specs(1, 1, &[(0, 0)], sv).expect("bind");
         let probs = vec![("0".into(), 0.5), ("1".into(), 0.5)];
         let segment = crate::distribution::DistributionSegment {
             sample_seed: 7,

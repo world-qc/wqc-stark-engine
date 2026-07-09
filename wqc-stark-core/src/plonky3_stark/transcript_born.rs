@@ -36,10 +36,7 @@ pub fn encode_born_stark(context: &BornStarkContext<'_>, plonky3_bytes: &[u8]) -
 }
 
 /// Decodes the Plonky3 payload from a Born STARK inner transcript.
-pub fn decode_born_stark_owned(
-    proof: &[u8],
-    expected: &BornStarkContext<'_>,
-) -> Option<Vec<u8>> {
+pub fn decode_born_stark_owned(proof: &[u8], expected: &BornStarkContext<'_>) -> Option<Vec<u8>> {
     if !proof.starts_with(expected.sub_task_id.as_bytes()) {
         return None;
     }

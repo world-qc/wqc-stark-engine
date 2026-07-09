@@ -3,11 +3,15 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    compose_stark_proofs, is_unitary_trajectory_leaf_compose, proof_has_unitary_statevector_link,
-    trajectory_proof_view, verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
-    verify_trajectory_binding, proof_has_trajectory_unitary_link, ComposeContext, RootVerifyContext,
-    StarkContext,
+    compose_stark_proofs, is_unitary_trajectory_leaf_compose, proof_has_trajectory_unitary_link,
+    proof_has_unitary_statevector_link, trajectory_proof_view, verify_distribution_binding,
+    verify_root_proof, verify_stark_proof_core, verify_trajectory_binding, ComposeContext,
+    RootVerifyContext, StarkContext,
 };
+
+fn unwind_to_ffi_code(result: Result<i32, Box<dyn std::any::Any + Send>>) -> i32 {
+    result.unwrap_or(-99)
+}
 
 fn cstr_or_empty<'a>(ptr: *const c_char) -> &'a str {
     if ptr.is_null() {
@@ -44,6 +48,11 @@ fn optional_leaf_context<'a>(
 /// Foreign Function Interface (FFI) for the Go orchestrator CGO layer.
 ///
 /// Returns: `1` = success, `0` = invalid proof/args, `-99` = panic escaped across FFI.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid for the duration of this call. String pointers
+/// must be null-terminated UTF-8. `proof_bytes` must reference at least `proof_len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_verify_stark_proof(
     circuit_id: *const c_char,
@@ -89,10 +98,7 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
         }
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Composes two verified child proofs into a v3 proof-tree transcript.
@@ -100,6 +106,12 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
 /// Pass null `left_circuit_id` / `right_circuit_id` when the child is already a v3 compose node.
 ///
 /// Returns composed byte length on success, `0` on failure, `-99` on panic.
+///
+/// # Safety
+///
+/// Required pointers must be valid for the duration of this call. Proof slices must
+/// reference at least `left_proof_len` / `right_proof_len` bytes. `out_buf` must be
+/// writable for at least `out_buf_cap` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_compose_stark_proofs(
     parent_task_id: *const c_char,
@@ -123,8 +135,11 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
     out_buf_cap: u32,
 ) -> i32 {
     let result = catch_unwind(|| {
-        if parent_task_id.is_null() || compose_label.is_null() || left_proof.is_null()
-            || right_proof.is_null() || out_buf.is_null()
+        if parent_task_id.is_null()
+            || compose_label.is_null()
+            || left_proof.is_null()
+            || right_proof.is_null()
+            || out_buf.is_null()
         {
             eprintln!("[Rust FFI] compose: null required pointer");
             return 0;
@@ -180,13 +195,15 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
         composed.len() as i32
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Recursively verifies a v3 root proof tree for a parent task.
+///
+/// # Safety
+///
+/// `parent_task_id` and `proof_bytes` must be valid for the duration of this call.
+/// `proof_bytes` must reference at least `proof_len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_verify_root_proof(
     parent_task_id: *const c_char,
@@ -214,13 +231,14 @@ pub unsafe extern "C" fn wqc_verify_root_proof(
         }
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Returns 1 when the proof transcript includes a non-empty `terminal_statevector_digest` link.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes when non-null.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_proof_has_unitary_statevector_link(
     proof_bytes: *const u8,
@@ -238,36 +256,37 @@ pub unsafe extern "C" fn wqc_proof_has_unitary_statevector_link(
         }
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Returns 1 when the proof transcript includes a C2c trajectory marginal Plonky3 tail.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes when non-null.
 #[no_mangle]
-pub unsafe extern "C" fn wqc_has_trajectory_zk_tail(
-    proof_bytes: *const u8,
-    proof_len: u32,
-) -> i32 {
+pub unsafe extern "C" fn wqc_has_trajectory_zk_tail(proof_bytes: *const u8, proof_len: u32) -> i32 {
     let result = catch_unwind(|| {
         if proof_bytes.is_null() {
             return 0;
         }
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
-        if wqc_stark_core::plonky3_stark::has_trajectory_stark_tail(trajectory_proof_view(proof_slice)) {
+        if wqc_stark_core::plonky3_stark::has_trajectory_stark_tail(trajectory_proof_view(
+            proof_slice,
+        )) {
             return 1;
         }
         0
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Returns 1 when the proof transcript includes a non-empty trajectory `unitary_link_digest`.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes when non-null.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_proof_has_trajectory_unitary_link(
     proof_bytes: *const u8,
@@ -285,13 +304,14 @@ pub unsafe extern "C" fn wqc_proof_has_trajectory_unitary_link(
         }
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Returns 1 when the proof is a v3 `leaf:unitary_traj` compose transcript.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes when non-null.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_is_unitary_trajectory_compose(
     proof_bytes: *const u8,
@@ -309,13 +329,15 @@ pub unsafe extern "C" fn wqc_is_unitary_trajectory_compose(
         }
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Verifies trajectory tail binding: shot outcomes + seed → reported counts.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes. `counts_json` must be
+/// null-terminated UTF-8. `measurement_spec_hash` may be null.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_verify_trajectory_binding(
     proof_bytes: *const u8,
@@ -361,16 +383,18 @@ pub unsafe extern "C" fn wqc_verify_trajectory_binding(
         }
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
 /// Verifies distribution tail binding: Born probabilities + seed → reported counts.
 ///
 /// `counts_json` must be canonical `{"counts":{...},"shots":N}` (orchestrator format).
 /// `measurement_spec_hash` may be null/empty to skip spec binding (legacy V1 tails).
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes. `counts_json` must be
+/// null-terminated UTF-8. `measurement_spec_hash` may be null.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_verify_distribution_binding(
     proof_bytes: *const u8,
@@ -416,15 +440,10 @@ pub unsafe extern "C" fn wqc_verify_distribution_binding(
         }
     });
 
-    match result {
-        Ok(code) => code,
-        Err(_) => -99,
-    }
+    unwind_to_ffi_code(result)
 }
 
-fn parse_sample_counts_json(
-    json: &str,
-) -> Option<(std::collections::BTreeMap<String, u64>, u64)> {
+fn parse_sample_counts_json(json: &str) -> Option<(std::collections::BTreeMap<String, u64>, u64)> {
     #[derive(serde::Deserialize)]
     struct Payload {
         counts: std::collections::BTreeMap<String, u64>,

@@ -58,10 +58,7 @@ pub fn encode_agg_proof(context: &AggregationContext<'_>, plonky3_bytes: &[u8]) 
 }
 
 /// Decodes the Plonky3 payload from a v4 aggregation transcript.
-pub fn decode_agg_proof_owned(
-    proof: &[u8],
-    expected: &AggregationContext<'_>,
-) -> Option<Vec<u8>> {
+pub fn decode_agg_proof_owned(proof: &[u8], expected: &AggregationContext<'_>) -> Option<Vec<u8>> {
     if !proof.starts_with(expected.parent_task_id.as_bytes()) {
         return None;
     }
