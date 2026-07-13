@@ -14,6 +14,10 @@ pub const V2_MARKER: &[u8] = b"_M31_PLONKY3_STARK_V2_";
 /// Legacy devnet marker (pre-Phase 1; no embedded trace).
 pub const LEGACY_MARKER: &[u8] = b"_M31_QUANTUM_AIR_STARK_";
 
+/// Prefix for optional `measurement_spec_hash` in the public-input binding (C2c).
+/// Distinguishes the field from `terminal_statevector_digest` (raw 64-hex cstr).
+pub const MEASUREMENT_SPEC_HASH_PI_PREFIX: &str = "MSH1";
+
 pub struct StarkContext<'a> {
     pub circuit_id: &'a str,
     pub sub_task_id: &'a str,
@@ -22,6 +26,8 @@ pub struct StarkContext<'a> {
     pub output_hash: &'a str,
     /// SHA3-256 hex of quantized terminal statevector JSON (C2b unitary link); empty when unbound.
     pub terminal_statevector_digest: &'a str,
+    /// SHA3-256 hex of canonical measurement spec JSON (C2c STARK PI); empty when unbound.
+    pub measurement_spec_hash: &'a str,
 }
 
 fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) {
@@ -36,6 +42,11 @@ fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) 
     }
     if !context.terminal_statevector_digest.is_empty() {
         proof.extend_from_slice(context.terminal_statevector_digest.as_bytes());
+        proof.push(0);
+    }
+    if !context.measurement_spec_hash.is_empty() {
+        proof.extend_from_slice(MEASUREMENT_SPEC_HASH_PI_PREFIX.as_bytes());
+        proof.extend_from_slice(context.measurement_spec_hash.as_bytes());
         proof.push(0);
     }
 }
@@ -76,6 +87,21 @@ pub(crate) fn verify_public_input_binding(
             eprintln!(
                 "[STARK Core] Failed: terminal_statevector_digest mismatch (expected '{}', got '{}')",
                 context.terminal_statevector_digest, parsed
+            );
+            return None;
+        }
+        cursor = next;
+    }
+    if !context.measurement_spec_hash.is_empty() {
+        let (parsed, next) = read_cstr_field(proof, cursor)?;
+        let expected = format!(
+            "{}{}",
+            MEASUREMENT_SPEC_HASH_PI_PREFIX, context.measurement_spec_hash
+        );
+        if parsed != expected {
+            eprintln!(
+                "[STARK Core] Failed: measurement_spec_hash mismatch (expected '{}', got '{}')",
+                expected, parsed
             );
             return None;
         }
@@ -204,6 +230,7 @@ mod tests {
             slice_id: "0",
             output_hash: "hash-abc",
             terminal_statevector_digest: "",
+            measurement_spec_hash: "",
         }
     }
 
@@ -238,6 +265,7 @@ mod tests {
             slice_id: "1", // mismatch
             output_hash: context.output_hash,
             terminal_statevector_digest: "",
+            measurement_spec_hash: "",
         };
 
         let decoded = decode_proof_v1_owned(&proof, &bad_context);
@@ -259,5 +287,30 @@ mod tests {
 
         let decoded = decode_proof_v1_owned(&proof, &context);
         assert!(decoded.is_none(), "decode should fail on truncated payload");
+    }
+
+    #[test]
+    fn v1_binding_rejects_wrong_measurement_spec_hash() {
+        let msh = "b".repeat(64);
+        let context = StarkContext {
+            circuit_id: "circuit-a",
+            sub_task_id: "task-1",
+            node_id: "node-1",
+            slice_id: "0",
+            output_hash: "hash-abc",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: &msh,
+        };
+        let trace = crate::trace_spec::golden_h_q0_trace();
+        let (air_sum, boundary) = air_digest_from_trace(&trace).expect("digest");
+        let proof = encode_proof_v1(&context, &trace, air_sum, boundary);
+
+        let wrong = "c".repeat(64);
+        let bad_context = StarkContext {
+            measurement_spec_hash: &wrong,
+            ..context
+        };
+        assert!(decode_proof_v1_owned(&proof, &bad_context).is_none());
+        assert!(decode_proof_v1_owned(&proof, &context).is_some());
     }
 }

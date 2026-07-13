@@ -167,6 +167,7 @@ pub fn compose_unitary_trajectory_leaf(
         slice_id: context.slice_id,
         output_hash: context.output_hash,
         terminal_statevector_digest: &segment.unitary_link_digest,
+        measurement_spec_hash: context.measurement_spec_hash,
     };
 
     if !verify_plonky3_proof(&unitary_ctx, unitary_v2_proof) {
@@ -178,6 +179,22 @@ pub fn compose_unitary_trajectory_leaf(
     if parsed.terminal_statevector_digest != segment.unitary_link_digest {
         return Err(
             "unitary_link_digest mismatch between unitary child and trajectory segment".to_string(),
+        );
+    }
+    if !context.measurement_spec_hash.is_empty()
+        && parsed.measurement_spec_hash != context.measurement_spec_hash
+    {
+        return Err(
+            "measurement_spec_hash mismatch between unitary child and StarkContext".to_string(),
+        );
+    }
+    if !parsed.measurement_spec_hash.is_empty()
+        && !segment.measurement_spec_hash.is_empty()
+        && parsed.measurement_spec_hash != segment.measurement_spec_hash
+    {
+        return Err(
+            "measurement_spec_hash mismatch between unitary child and trajectory segment"
+                .to_string(),
         );
     }
 
@@ -245,6 +262,12 @@ pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof:
         eprintln!("[LeafCompose] Failed: unitary child public input mismatch");
         return false;
     }
+    if !context.measurement_spec_hash.is_empty()
+        && parsed.measurement_spec_hash != context.measurement_spec_hash
+    {
+        eprintln!("[LeafCompose] Failed: measurement_spec_hash mismatch");
+        return false;
+    }
 
     let unitary_ctx = parsed_to_stark_context(&parsed);
     if !verify_plonky3_proof(&unitary_ctx, left_child) {
@@ -286,6 +309,13 @@ pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof:
         && parsed.terminal_statevector_digest != segment.unitary_link_digest
     {
         eprintln!("[LeafCompose] Failed: unitary↔trajectory link digest mismatch");
+        return false;
+    }
+    if !parsed.measurement_spec_hash.is_empty()
+        && !segment.measurement_spec_hash.is_empty()
+        && parsed.measurement_spec_hash != segment.measurement_spec_hash
+    {
+        eprintln!("[LeafCompose] Failed: measurement_spec_hash mismatch vs trajectory segment");
         return false;
     }
 
@@ -419,6 +449,7 @@ mod tests {
             slice_id: "0",
             output_hash: "counts-hash",
             terminal_statevector_digest: link_digest,
+            measurement_spec_hash: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
@@ -461,6 +492,7 @@ mod tests {
             slice_id: "0",
             output_hash: "counts-hash",
             terminal_statevector_digest: &link_digest,
+            measurement_spec_hash: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
@@ -521,6 +553,7 @@ mod tests {
             slice_id: ctx.slice_id,
             output_hash: ctx.output_hash,
             terminal_statevector_digest: ctx.terminal_statevector_digest,
+            measurement_spec_hash: "",
         };
         assert!(!verify_unitary_trajectory_leaf_compose(
             &wrong_sub, &composed
@@ -533,6 +566,7 @@ mod tests {
             slice_id: ctx.slice_id,
             output_hash: "deadbeef",
             terminal_statevector_digest: ctx.terminal_statevector_digest,
+            measurement_spec_hash: "",
         };
         assert!(!verify_unitary_trajectory_leaf_compose(
             &wrong_output,

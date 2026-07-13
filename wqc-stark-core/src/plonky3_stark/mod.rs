@@ -118,6 +118,20 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
             }
         });
 
+    // Prefer the transcript-bound hash (via leaf parse) so legacy proofs without PI promotion
+    // are not forced to expect a measurement_spec_hash that only exists on the segment.
+    let base_for_parse = crate::distribution::base_proof_without_distribution_tail(proof);
+    let expected_msh = crate::aggregation::parse_leaf_binding(base_for_parse)
+        .map(|p| p.measurement_spec_hash)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            if context.measurement_spec_hash.is_empty() {
+                None
+            } else {
+                Some(context.measurement_spec_hash.to_string())
+            }
+        });
+
     let verify_ctx = StarkContext {
         circuit_id: context.circuit_id,
         sub_task_id: context.sub_task_id,
@@ -125,6 +139,7 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         slice_id: context.slice_id,
         output_hash: context.output_hash,
         terminal_statevector_digest: expected_sv_digest.as_deref().unwrap_or(""),
+        measurement_spec_hash: expected_msh.as_deref().unwrap_or(""),
     };
 
     let base = crate::distribution::base_proof_without_distribution_tail(proof);
@@ -277,6 +292,7 @@ mod tests {
             slice_id: "0",
             output_hash: "out-hash",
             terminal_statevector_digest: "",
+            measurement_spec_hash: "",
         }
     }
 

@@ -10,9 +10,10 @@ pub mod plonky3_stark;
 
 pub use aggregation::{
     born_proof_view, compose_stark_proofs, is_unitary_born_leaf_compose,
-    is_unitary_trajectory_leaf_compose, trajectory_proof_view, verify_child_proof,
-    verify_composed_proof, verify_root_proof, ComposeContext, ComposeHeader, ParsedLeafBinding,
-    RootVerifyContext, UNITARY_BORN_COMPOSE_LABEL, UNITARY_TRAJ_COMPOSE_LABEL, V3_COMPOSE_MARKER,
+    is_unitary_trajectory_leaf_compose, parse_leaf_binding, trajectory_proof_view,
+    verify_child_proof, verify_composed_proof, verify_root_proof, ComposeContext, ComposeHeader,
+    ParsedLeafBinding, RootVerifyContext, UNITARY_BORN_COMPOSE_LABEL, UNITARY_TRAJ_COMPOSE_LABEL,
+    V3_COMPOSE_MARKER,
 };
 #[cfg(feature = "plonky3-stark")]
 pub use aggregation::{
@@ -41,7 +42,7 @@ pub use trajectory::{
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
-    LEGACY_MARKER, V1_MARKER, V2_MARKER,
+    LEGACY_MARKER, MEASUREMENT_SPEC_HASH_PI_PREFIX, V1_MARKER, V2_MARKER,
 };
 
 use transcript::verify_public_input_binding;
@@ -258,6 +259,7 @@ mod integration_tests {
             slice_id: "0",
             output_hash: "out-hash",
             terminal_statevector_digest: "",
+        measurement_spec_hash: "",
         }
     }
 

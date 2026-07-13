@@ -300,6 +300,7 @@ mod integration_tests {
             slice_id: slice,
             output_hash: "out-hash",
             terminal_statevector_digest: "",
+        measurement_spec_hash: "",
         }
     }
 
