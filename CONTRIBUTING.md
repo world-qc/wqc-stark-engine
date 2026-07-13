@@ -11,7 +11,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 Contributions are welcome in many forms:
 
 - Bug reports and feature requests via [GitHub Issues](https://github.com/world-qc/wqc-stark-engine/issues)
-- Documentation improvements (including `docs/`)
+- Documentation improvements
 - Code changes via pull requests
 
 If you plan a larger change, please open an issue first so we can discuss the approach and avoid duplicate work.
@@ -36,11 +36,8 @@ cargo build
 ```text
 wqc-stark-engine/
 ├── wqc-stark-core/     # AIR prover/verifier (Rust library)
-├── wqc-stark-ffi/      # CGO-compatible libwqc_stark_verifier
-└── docs/               # Phase, aggregation, and C2 distribution notes
+└── wqc-stark-ffi/      # CGO-compatible libwqc_stark_verifier
 ```
-
-Key docs: `PHASE2_TRACE_ALIGNMENT.md`, `PHASE3_PLONKY3.md`, `PROOF_AGGREGATION.md`, `DISTRIBUTION_STARK.md`.
 
 ### Run tests
 
@@ -75,7 +72,6 @@ Use short, descriptive names, for example:
 - Keep proof transcript formats backward-compatible unless a version bump is intentional and documented.
 - Follow common Rust conventions (`cargo fmt`, idiomatic error handling).
 - Add or update tests when changing verifier behavior, AIR constraints, or FFI boundaries.
-- Cross-check trace semantics with `wqc-core/doc/trace-spec.md` when touching execution traces.
 
 ## Checks
 
