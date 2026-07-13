@@ -1,46 +1,71 @@
-//! Plonky3 `Air` for C2b Born-rule zk binding (terminal MEASURE probabilities).
+//! Plonky3 `Air` for C2b/C2c Born-rule zk binding (streaming, fixed-width).
+//!
+//! One active row per computational-basis amplitude. Accumulators fold `|ψ|²` into
+//! each outcome bucket so qubit width no longer explodes the AIR column count
+//! (`O(num_outcomes)` instead of `O(2^n)`).
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
 
-/// Maximum qubit width for in-circuit Born zk (single-row wide trace).
-pub const BORN_ZK_MAX_QUBITS: usize = 5;
+/// Maximum qubit width for Plonky3 Born / marginal zk (matches algebraic `BORN_AIR_MAX_QUBITS`).
+pub const BORN_ZK_MAX_QUBITS: usize = 16;
+
+/// Soft cap on distinct outcomes encoded as one-hot + mass + claim columns.
+pub const BORN_ZK_MAX_OUTCOMES: usize = 64;
 
 /// Fixed-point scale — matches quantum execution AIR (`10_000`).
 pub const BORN_ZK_SCALE: u32 = 10_000;
 
-/// Outcome groups: each inner vec lists computational-basis indices contributing to one outcome.
+/// Column: real amplitude for this basis.
+pub const COL_RE: usize = 0;
+/// Column: imag amplitude for this basis.
+pub const COL_IM: usize = 1;
+
+/// Streaming Born AIR: `dim` active basis rows, `num_outcomes` probability buckets.
 #[derive(Clone, Debug)]
 pub struct DistributionAir {
     pub dim: usize,
-    pub outcome_groups: Vec<Vec<usize>>,
+    pub num_outcomes: usize,
 }
 
 impl DistributionAir {
     pub fn width(&self) -> usize {
-        2 * self.dim + self.outcome_groups.len()
+        // re, im, sel[K], mass[K], claim[K], is_pad
+        2 + 3 * self.num_outcomes + 1
     }
 
-    /// Host-side constraint accumulator (`ZERO` iff the first trace row satisfies Born binding).
-    pub fn evaluate_first_row_sum<FR>(&self, row: &[FR]) -> FR
+    pub fn col_sel(&self, k: usize) -> usize {
+        2 + k
+    }
+
+    pub fn col_mass(&self, k: usize) -> usize {
+        2 + self.num_outcomes + k
+    }
+
+    pub fn col_claim(&self, k: usize) -> usize {
+        2 + 2 * self.num_outcomes + k
+    }
+
+    pub fn col_is_pad(&self) -> usize {
+        2 + 3 * self.num_outcomes
+    }
+
+    /// Host-side check that an active row's local selectors / booleans look sane.
+    pub fn evaluate_active_row_local<FR>(&self, row: &[FR]) -> FR
     where
         FR: Field + PrimeCharacteristicRing + Copy,
     {
-        let scale = FR::from_u32(BORN_ZK_SCALE);
-        let mut acc = FR::ZERO;
-
-        for (outcome_idx, group) in self.outcome_groups.iter().enumerate() {
-            let claimed = row[2 * self.dim + outcome_idx];
-            let mut mass = FR::ZERO;
-            for &basis in group {
-                let re = row[2 * basis];
-                let im = row[2 * basis + 1];
-                mass += re * re + im * im;
-            }
-            // claimed_p and amplitudes use SCALE fixed-point: p*SCALE² = Σ|ψ|².
-            acc += claimed * scale - mass;
+        debug_assert_eq!(row.len(), self.width());
+        let is_pad = row[self.col_is_pad()];
+        let mut acc = is_pad * (is_pad - FR::ONE);
+        let active = FR::ONE - is_pad;
+        let mut sel_sum = FR::ZERO;
+        for k in 0..self.num_outcomes {
+            let sel = row[self.col_sel(k)];
+            acc += active * sel * (sel - FR::ONE);
+            sel_sum += sel;
         }
-
+        acc += active * (sel_sum - FR::ONE);
         acc
     }
 }
@@ -51,30 +76,9 @@ impl<F: Field> BaseAir<F> for DistributionAir {
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {
-        // probability (deg 1) * scale² vs amplitude squares (deg 2).
+        // sel * (re² + im²) is degree 3.
         Some(6)
     }
-}
-
-fn born_constraints_expr<AB: AirBuilder>(air: &DistributionAir, curr: &[AB::Var]) -> AB::Expr
-where
-    AB::F: Field,
-{
-    let scale: AB::Expr = AB::F::from_u32(BORN_ZK_SCALE).into();
-    let mut acc = AB::Expr::ZERO;
-
-    for (outcome_idx, group) in air.outcome_groups.iter().enumerate() {
-        let claimed = curr[2 * air.dim + outcome_idx].into();
-        let mut mass = AB::Expr::ZERO;
-        for &basis in group {
-            let re = curr[2 * basis].into();
-            let im = curr[2 * basis + 1].into();
-            mass = mass + re.clone() * re + im.clone() * im;
-        }
-        acc = acc + claimed * scale.clone() - mass;
-    }
-
-    acc
 }
 
 impl<AB: AirBuilder> Air<AB> for DistributionAir
@@ -84,17 +88,89 @@ where
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let curr = main.current_slice();
+        let next = main.next_slice();
         debug_assert_eq!(curr.len(), self.width());
 
-        let acc = born_constraints_expr::<AB>(self, curr);
-        builder.when_first_row().assert_zero(acc);
+        let is_pad: AB::Expr = curr[self.col_is_pad()].into();
+        let next_is_pad: AB::Expr = next[self.col_is_pad()].into();
+        let active = AB::Expr::ONE - is_pad.clone();
+        let next_active = AB::Expr::ONE - next_is_pad.clone();
+        builder.assert_bool(curr[self.col_is_pad()]);
 
-        // Amplitudes and claimed probabilities are static across padded rows.
-        let next = main.next_slice();
-        for col in 0..self.width() {
+        let re: AB::Expr = curr[COL_RE].into();
+        let im: AB::Expr = curr[COL_IM].into();
+        let amp2 = re.clone() * re + im.clone() * im;
+        let scale: AB::Expr = AB::F::from_u32(BORN_ZK_SCALE).into();
+
+        let mut sel_sum = AB::Expr::ZERO;
+        for k in 0..self.num_outcomes {
+            let sel = curr[self.col_sel(k)];
+            builder.when(active.clone()).assert_bool(sel);
+            sel_sum = sel_sum + sel.into();
+        }
+        builder
+            .when(active.clone())
+            .assert_zero(sel_sum - AB::Expr::ONE);
+
+        // First row: mass_k = sel_k * |amp|²
+        for k in 0..self.num_outcomes {
+            let mass: AB::Expr = curr[self.col_mass(k)].into();
+            let sel: AB::Expr = curr[self.col_sel(k)].into();
+            builder
+                .when_first_row()
+                .when(active.clone())
+                .assert_zero(mass - sel * amp2.clone());
+        }
+
+        // Transitions.
+        for k in 0..self.num_outcomes {
+            let claim: AB::Expr = curr[self.col_claim(k)].into();
+            let next_claim: AB::Expr = next[self.col_claim(k)].into();
             builder
                 .when_transition()
-                .assert_zero(next[col].into() - curr[col].into());
+                .assert_zero(next_claim - claim.clone());
+
+            let mass: AB::Expr = curr[self.col_mass(k)].into();
+            let next_mass: AB::Expr = next[self.col_mass(k)].into();
+            let next_sel: AB::Expr = next[self.col_sel(k)].into();
+            let next_re: AB::Expr = next[COL_RE].into();
+            let next_im: AB::Expr = next[COL_IM].into();
+            let next_amp2 = next_re.clone() * next_re + next_im.clone() * next_im;
+
+            // Active → active: accumulate.
+            builder.when_transition().when(next_active.clone()).assert_zero(
+                next_mass.clone() - mass.clone() - next_sel * next_amp2,
+            );
+
+            // Any → pad: mass frozen (and finalised below when leaving active).
+            builder
+                .when_transition()
+                .when(next_is_pad.clone())
+                .assert_zero(next_mass - mass.clone());
+
+            // Active → pad: final Born check.
+            let entering_pad = next_is_pad.clone() * active.clone();
+            builder.when_transition().when(entering_pad).assert_zero(
+                mass.clone() - claim.clone() * scale.clone(),
+            );
+        }
+
+        // No padding (height == dim power-of-two): last active row must match claims.
+        for k in 0..self.num_outcomes {
+            let mass: AB::Expr = curr[self.col_mass(k)].into();
+            let claim: AB::Expr = curr[self.col_claim(k)].into();
+            builder.when_last_row().when(active.clone()).assert_zero(
+                mass - claim * scale.clone(),
+            );
+        }
+
+        // Pad rows: selectors and amplitudes zero.
+        builder.when(is_pad.clone()).assert_zero(curr[COL_RE]);
+        builder.when(is_pad.clone()).assert_zero(curr[COL_IM]);
+        for k in 0..self.num_outcomes {
+            builder
+                .when(is_pad.clone())
+                .assert_zero(curr[self.col_sel(k)]);
         }
     }
 }

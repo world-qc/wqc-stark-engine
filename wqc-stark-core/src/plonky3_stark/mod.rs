@@ -15,6 +15,8 @@ mod shot_sampling_air;
 #[cfg(feature = "plonky3-stark")]
 mod shot_sampling_stark;
 #[cfg(feature = "plonky3-stark")]
+mod streaming_distribution;
+#[cfg(feature = "plonky3-stark")]
 mod trajectory_stark;
 #[cfg(feature = "plonky3-stark")]
 mod transcript_born;
@@ -30,7 +32,7 @@ pub use config::devnet_circle_config;
 #[cfg(feature = "plonky3-stark")]
 pub use distribution_stark::{
     generate_born_stark_proof, segment_supports_born_zk, verify_born_stark_proof, BornStarkContext,
-    BORN_ZK_MAX_QUBITS,
+    BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS,
 };
 pub use quantum_air::QuantumExecutionAir;
 #[cfg(feature = "plonky3-stark")]

@@ -78,7 +78,7 @@ pub use plonky3_stark::{
     generate_trajectory_stark_bundle, has_born_stark_tail, has_trajectory_shot_sampling_stark,
     has_trajectory_stark_tail, segment_supports_born_zk, segment_supports_trajectory_zk,
     verify_born_stark_proof, verify_trajectory_stark_bundle, BornStarkContext,
-    BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_QUBITS, TRAJ_MARGINAL_ZK_MAX_QUBITS,
+    BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS, TRAJ_MARGINAL_ZK_MAX_QUBITS,
     TRAJ_SHOT_STARK_INNER_MARKER, TRAJ_STARK_TAIL_MARKER,
 };
 

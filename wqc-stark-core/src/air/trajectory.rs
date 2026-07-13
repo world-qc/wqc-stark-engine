@@ -10,8 +10,8 @@ pub const TRAJ_MARGINAL_SCALE: f64 = 10_000.0;
 /// Allowed absolute error when comparing Z marginals (f64).
 pub const TRAJ_MARGINAL_EPSILON: f64 = 1e-5;
 
-/// Maximum qubit width for in-segment trajectory marginal zk (single-row wide trace).
-pub const TRAJ_MARGINAL_ZK_MAX_QUBITS: usize = 5;
+/// Maximum qubit width for in-segment trajectory marginal zk (streaming Born AIR).
+pub const TRAJ_MARGINAL_ZK_MAX_QUBITS: usize = 16;
 
 /// Computational-basis indices where `qubit` reads 0 / 1.
 pub fn z_marginal_basis_groups(

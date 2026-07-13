@@ -1,25 +1,23 @@
 //! C2c trajectory marginal Plonky3 uni-STARK prove / verify (+ per-shot sampling).
 
-pub use super::distribution_air::{DistributionAir, BORN_ZK_SCALE};
+pub use super::distribution_air::DistributionAir;
 pub use super::transcript_trajectory_stark::TrajectoryMarginalStarkContext;
 pub use crate::air::trajectory::TRAJ_MARGINAL_ZK_MAX_QUBITS;
 
-use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
 use crate::air::shot_sampling::{
     collect_shot_sampling_events, segment_supports_shot_sampling_zk,
 };
-use crate::air::trajectory::z_marginal_basis_groups;
-use crate::air::{f64_to_m31, pad_air_matrix_for_uni_stark};
 use crate::trajectory::{TrajectoryMarginalWitness, TrajectorySegment};
 
 use super::config::{devnet_circle_config, WqcStarkConfig};
 use super::shot_sampling_stark::{
     append_shot_sampling_to_bundle, generate_shot_sampling_stark, split_shot_sampling_from_bundle,
     verify_shot_sampling_stark,
+};
+use super::streaming_distribution::{
+    build_streaming_distribution_matrix, streaming_zk_shape_ok,
 };
 use super::transcript_trajectory_stark::{
     decode_trajectory_marginal_stark_owned, encode_trajectory_marginal_stark,
@@ -30,50 +28,30 @@ fn build_marginal_air(
     witness: &TrajectoryMarginalWitness,
     qubit_count: usize,
 ) -> Option<DistributionAir> {
-    if qubit_count > TRAJ_MARGINAL_ZK_MAX_QUBITS {
+    let dim = 1usize << qubit_count;
+    if !streaming_zk_shape_ok(qubit_count, 2, dim) {
         return None;
     }
-    let dim = 1usize << qubit_count;
     if witness.pre_measure_statevector.len() != dim {
         return None;
     }
-    let (group0, group1) = z_marginal_basis_groups(witness.qubit as usize, qubit_count)?;
+    if witness.qubit as usize >= qubit_count {
+        return None;
+    }
     Some(DistributionAir {
         dim,
-        outcome_groups: vec![group0, group1],
+        num_outcomes: 2,
     })
 }
 
 fn build_marginal_matrix(
     air: &DistributionAir,
     witness: &TrajectoryMarginalWitness,
-) -> Option<RowMajorMatrix<Mersenne31>> {
-    let scale = Mersenne31::from_u32(BORN_ZK_SCALE);
-    let scale_inv = scale.inverse();
-    let mut row = Vec::with_capacity(air.width());
-
-    for (re, im) in &witness.pre_measure_statevector {
-        row.push(f64_to_m31(*re));
-        row.push(f64_to_m31(*im));
-    }
-
-    for group in &air.outcome_groups {
-        let mut mass = Mersenne31::ZERO;
-        for &basis in group {
-            let re = row[2 * basis];
-            let im = row[2 * basis + 1];
-            mass += re * re + im * im;
-        }
-        row.push(mass * scale_inv);
-    }
-
-    if air.evaluate_first_row_sum::<Mersenne31>(&row) != Mersenne31::ZERO {
-        return None;
-    }
-
-    let mut values = row.clone();
-    values.extend(row);
-    Some(RowMajorMatrix::new(values, air.width()))
+) -> Option<p3_matrix::dense::RowMajorMatrix<p3_mersenne_31::Mersenne31>> {
+    let measured = witness.qubit as usize;
+    build_streaming_distribution_matrix(air, &witness.pre_measure_statevector, |basis| {
+        Some((basis >> measured) & 1)
+    })
 }
 
 /// Returns true when a trajectory segment can be zk-proved with marginal `DistributionAir`s
@@ -108,9 +86,8 @@ fn prove_one_marginal(
     let air = build_marginal_air(witness, qubit_count)
         .ok_or_else(|| "witness does not support trajectory marginal zk".to_string())?;
     let matrix = build_marginal_matrix(&air, witness)
-        .ok_or_else(|| "marginal constraints not satisfied on trace row".to_string())?;
+        .ok_or_else(|| "marginal constraints not satisfied on streaming trace".to_string())?;
 
-    let matrix = pad_air_matrix_for_uni_stark(matrix);
     let config = devnet_circle_config();
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
@@ -410,5 +387,52 @@ mod tests {
         assert!(verify_trajectory_stark_bundle(
             "sub-traj", &segment, &bundle
         ));
+    }
+
+    #[test]
+    fn streaming_marginal_zk_supports_8_qubits() {
+        let qubit_count = 8usize;
+        let dim = 1usize << qubit_count;
+        let amp = 1.0 / (dim as f64).sqrt();
+        let sv = vec![(amp, 0.0); dim];
+        let digest = crate::distribution::calculate_terminal_statevector_digest(&sv);
+        let witness = TrajectoryMarginalWitness {
+            qubit: 0,
+            reference_p0: 0.5,
+            reference_p1: 0.5,
+            pre_measure_statevector: sv,
+            pre_measure_statevector_digest: digest.clone(),
+        };
+        let mut rng = StdRng::seed_from_u64(11);
+        let u: f64 = rng.gen();
+        let o = if u < 0.5 { 0u8 } else { 1 };
+        let traces = vec![TrajectoryShotTrace {
+            shot_index: 0,
+            shot_seed: 11,
+            final_outcome: format!("{o}"),
+            classical_bits: vec![o],
+            measures: vec![TrajectoryMeasureEvent {
+                gate_index: 0,
+                qubit: 0,
+                cbit: 0,
+                p0: 0.5,
+                p1: 0.5,
+                outcome: o,
+                pre_measure_statevector_digest: digest.clone(),
+            }],
+        }];
+        let segment = TrajectorySegment {
+            sample_seed: 11,
+            shots: 1,
+            measurement_spec_hash: "spec".into(),
+            trajectory_digest: crate::trajectory::calculate_trajectory_digest(&traces),
+            qubit_count: qubit_count as u32,
+            unitary_link_digest: digest,
+            traces,
+            marginal_witnesses: vec![witness],
+        };
+        assert!(segment_supports_trajectory_zk(&segment));
+        let bundle = generate_trajectory_stark_bundle("sub-8q", &segment).expect("prove 8q");
+        assert!(verify_trajectory_stark_bundle("sub-8q", &segment, &bundle));
     }
 }
