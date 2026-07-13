@@ -1,6 +1,7 @@
-//! C2c trajectory marginal Plonky3 STARK tail transcript.
+//! C2c trajectory marginal / shot-sampling Plonky3 STARK tail transcript.
 
 pub const TRAJ_MARG_STARK_INNER_MARKER: &[u8] = b"_M31_TRAJ_MARG_STARK_INNER_V1_";
+pub const TRAJ_SHOT_STARK_INNER_MARKER: &[u8] = b"_M31_TRAJ_SHOT_STARK_INNER_V1_";
 pub const TRAJ_STARK_TAIL_MARKER: &[u8] = b"_M31_TRAJ_STARK_V1_";
 
 fn read_cstr(proof: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -16,6 +17,13 @@ fn read_u32_le(proof: &[u8], offset: usize) -> Option<(u32, usize)> {
     let mut buf = [0u8; 4];
     buf.copy_from_slice(bytes);
     Some((u32::from_le_bytes(buf), offset + 4))
+}
+
+fn read_u64_le(proof: &[u8], offset: usize) -> Option<(u64, usize)> {
+    let bytes = proof.get(offset..offset + 8)?;
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(bytes);
+    Some((u64::from_le_bytes(buf), offset + 8))
 }
 
 /// Public binding for one trajectory marginal STARK inner transcript.
@@ -110,6 +118,85 @@ pub fn has_trajectory_stark_tail(proof: &[u8]) -> bool {
         .any(|w| w == TRAJ_STARK_TAIL_MARKER)
 }
 
+/// Public binding for the per-shot Bernoulli sampling STARK.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrajectoryShotSamplingStarkContext<'a> {
+    pub sub_task_id: &'a str,
+    pub trajectory_digest: &'a str,
+    pub sample_seed: u64,
+    pub shots: u64,
+    pub event_count: u32,
+}
+
+/// Encodes one shot-sampling zk proof bound to trajectory digest + seed/shots.
+pub fn encode_trajectory_shot_sampling_stark(
+    context: &TrajectoryShotSamplingStarkContext<'_>,
+    plonky3_bytes: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(context.sub_task_id.as_bytes());
+    out.push(0);
+    out.extend_from_slice(TRAJ_SHOT_STARK_INNER_MARKER);
+    out.extend_from_slice(context.trajectory_digest.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&context.sample_seed.to_le_bytes());
+    out.extend_from_slice(&context.shots.to_le_bytes());
+    out.extend_from_slice(&context.event_count.to_le_bytes());
+    out.extend_from_slice(&(plonky3_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(plonky3_bytes);
+    out
+}
+
+pub fn decode_trajectory_shot_sampling_stark_owned(
+    proof: &[u8],
+    expected: &TrajectoryShotSamplingStarkContext<'_>,
+) -> Option<Vec<u8>> {
+    if !proof.starts_with(expected.sub_task_id.as_bytes()) {
+        return None;
+    }
+    let marker_pos = proof
+        .windows(TRAJ_SHOT_STARK_INNER_MARKER.len())
+        .position(|w| w == TRAJ_SHOT_STARK_INNER_MARKER)?;
+    let sub_end = marker_pos.saturating_sub(1);
+    let sub_task_id = std::str::from_utf8(&proof[..sub_end]).ok()?;
+    if sub_task_id != expected.sub_task_id {
+        return None;
+    }
+
+    let cursor = marker_pos + TRAJ_SHOT_STARK_INNER_MARKER.len();
+    let (trajectory_digest, cursor) = read_cstr(proof, cursor)?;
+    if trajectory_digest != expected.trajectory_digest {
+        return None;
+    }
+    let (sample_seed, cursor) = read_u64_le(proof, cursor)?;
+    if sample_seed != expected.sample_seed {
+        return None;
+    }
+    let (shots, cursor) = read_u64_le(proof, cursor)?;
+    if shots != expected.shots {
+        return None;
+    }
+    let (event_count, cursor) = read_u32_le(proof, cursor)?;
+    if event_count != expected.event_count {
+        return None;
+    }
+
+    let (len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + len as usize;
+    let payload = proof.get(cursor..end)?.to_vec();
+    if end != proof.len() {
+        return None;
+    }
+    Some(payload)
+}
+
+/// Returns true when a proof transcript includes a shot-sampling STARK inner marker.
+pub fn has_trajectory_shot_sampling_stark(proof: &[u8]) -> bool {
+    proof
+        .windows(TRAJ_SHOT_STARK_INNER_MARKER.len())
+        .any(|w| w == TRAJ_SHOT_STARK_INNER_MARKER)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +227,20 @@ mod tests {
         assert!(has_trajectory_stark_tail(&wrapped));
         let extracted = split_trajectory_stark_tail(&wrapped).expect("split");
         assert_eq!(extracted, inner.as_slice());
+    }
+
+    #[test]
+    fn trajectory_shot_sampling_stark_transcript_roundtrip() {
+        let ctx = TrajectoryShotSamplingStarkContext {
+            sub_task_id: "sub-traj",
+            trajectory_digest: "trajdigest",
+            sample_seed: 42,
+            shots: 512,
+            event_count: 1024,
+        };
+        let encoded = encode_trajectory_shot_sampling_stark(&ctx, b"shot-plonky3");
+        let decoded = decode_trajectory_shot_sampling_stark_owned(&encoded, &ctx).expect("decode");
+        assert_eq!(decoded, b"shot-plonky3");
+        assert!(has_trajectory_shot_sampling_stark(&encoded));
     }
 }

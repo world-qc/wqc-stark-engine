@@ -11,6 +11,10 @@ mod distribution_air;
 mod distribution_stark;
 mod quantum_air;
 #[cfg(feature = "plonky3-stark")]
+mod shot_sampling_air;
+#[cfg(feature = "plonky3-stark")]
+mod shot_sampling_stark;
+#[cfg(feature = "plonky3-stark")]
 mod trajectory_stark;
 #[cfg(feature = "plonky3-stark")]
 mod transcript_born;
@@ -40,8 +44,8 @@ pub use transcript_born::{
 };
 #[cfg(feature = "plonky3-stark")]
 pub use transcript_trajectory_stark::{
-    append_trajectory_stark_tail, has_trajectory_stark_tail, split_trajectory_stark_tail,
-    TRAJ_STARK_TAIL_MARKER,
+    append_trajectory_stark_tail, has_trajectory_shot_sampling_stark, has_trajectory_stark_tail,
+    split_trajectory_stark_tail, TRAJ_SHOT_STARK_INNER_MARKER, TRAJ_STARK_TAIL_MARKER,
 };
 pub use transcript_v2::{decode_proof_v2_owned, decode_proof_v2_plonky3_bytes, encode_proof_v2};
 #[cfg(feature = "plonky3-stark")]

@@ -75,10 +75,11 @@ pub fn generate_plonky3_stark_proof(
 #[cfg(feature = "plonky3-stark")]
 pub use plonky3_stark::{
     append_born_stark_tail, append_trajectory_stark_tail, generate_born_stark_proof,
-    generate_trajectory_stark_bundle, has_born_stark_tail, has_trajectory_stark_tail,
-    segment_supports_born_zk, segment_supports_trajectory_zk, verify_born_stark_proof,
-    verify_trajectory_stark_bundle, BornStarkContext, BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_QUBITS,
-    TRAJ_MARGINAL_ZK_MAX_QUBITS, TRAJ_STARK_TAIL_MARKER,
+    generate_trajectory_stark_bundle, has_born_stark_tail, has_trajectory_shot_sampling_stark,
+    has_trajectory_stark_tail, segment_supports_born_zk, segment_supports_trajectory_zk,
+    verify_born_stark_proof, verify_trajectory_stark_bundle, BornStarkContext,
+    BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_QUBITS, TRAJ_MARGINAL_ZK_MAX_QUBITS,
+    TRAJ_SHOT_STARK_INNER_MARKER, TRAJ_STARK_TAIL_MARKER,
 };
 
 /// Generates a v1 AIR commitment proof: embeds the execution trace and AIR digest.

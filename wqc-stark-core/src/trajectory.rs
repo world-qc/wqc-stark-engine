@@ -522,6 +522,10 @@ pub fn verify_trajectory_segment(segment: &TrajectorySegment) -> bool {
         eprintln!("[STARK Core] Failed: trajectory marginal constraints not satisfied");
         return false;
     }
+    if !crate::air::shot_sampling::evaluate_trajectory_shot_sampling_constraints(segment) {
+        eprintln!("[STARK Core] Failed: trajectory shot sampling constraints not satisfied");
+        return false;
+    }
     true
 }
 
@@ -634,59 +638,47 @@ mod tests {
     use super::*;
 
     fn demo_segment() -> TrajectorySegment {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let make_shot = |shot_index: u64, shot_seed: u64, p0_1: f64, p1_1: f64| {
+            let mut rng = StdRng::seed_from_u64(shot_seed);
+            let u0: f64 = rng.gen();
+            let o0 = if u0 < 0.5 { 0u8 } else { 1 };
+            let u1: f64 = rng.gen();
+            let denom = (p0_1 + p1_1).max(1e-30_f64);
+            let o1 = if u1 < p0_1 / denom { 0u8 } else { 1 };
+            TrajectoryShotTrace {
+                shot_index,
+                shot_seed,
+                final_outcome: format!("{o0}{o1}"),
+                classical_bits: vec![o0, o1],
+                measures: vec![
+                    TrajectoryMeasureEvent {
+                        gate_index: 1,
+                        qubit: 0,
+                        cbit: 0,
+                        p0: 0.5,
+                        p1: 0.5,
+                        outcome: o0,
+                        pre_measure_statevector_digest: String::new(),
+                    },
+                    TrajectoryMeasureEvent {
+                        gate_index: 3,
+                        qubit: 1,
+                        cbit: 1,
+                        p0: p0_1,
+                        p1: p1_1,
+                        outcome: o1,
+                        pre_measure_statevector_digest: String::new(),
+                    },
+                ],
+            }
+        };
+
         let traces = vec![
-            TrajectoryShotTrace {
-                shot_index: 0,
-                shot_seed: 7,
-                final_outcome: "01".into(),
-                classical_bits: vec![1, 0],
-                measures: vec![
-                    TrajectoryMeasureEvent {
-                        gate_index: 1,
-                        qubit: 0,
-                        cbit: 0,
-                        p0: 0.5,
-                        p1: 0.5,
-                        outcome: 1,
-                        pre_measure_statevector_digest: String::new(),
-                    },
-                    TrajectoryMeasureEvent {
-                        gate_index: 3,
-                        qubit: 1,
-                        cbit: 1,
-                        p0: 1.0,
-                        p1: 0.0,
-                        outcome: 0,
-                        pre_measure_statevector_digest: String::new(),
-                    },
-                ],
-            },
-            TrajectoryShotTrace {
-                shot_index: 1,
-                shot_seed: 8,
-                final_outcome: "11".into(),
-                classical_bits: vec![1, 1],
-                measures: vec![
-                    TrajectoryMeasureEvent {
-                        gate_index: 1,
-                        qubit: 0,
-                        cbit: 0,
-                        p0: 0.5,
-                        p1: 0.5,
-                        outcome: 1,
-                        pre_measure_statevector_digest: String::new(),
-                    },
-                    TrajectoryMeasureEvent {
-                        gate_index: 3,
-                        qubit: 1,
-                        cbit: 1,
-                        p0: 0.0,
-                        p1: 1.0,
-                        outcome: 1,
-                        pre_measure_statevector_digest: String::new(),
-                    },
-                ],
-            },
+            make_shot(0, 7, 1.0, 0.0),
+            make_shot(1, 8, 0.0, 1.0),
         ];
         TrajectorySegment {
             sample_seed: 7,

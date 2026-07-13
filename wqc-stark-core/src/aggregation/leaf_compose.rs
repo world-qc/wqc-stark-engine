@@ -316,6 +316,9 @@ mod tests {
     use crate::trajectory::{TrajectoryMeasureEvent, TrajectoryShotTrace};
 
     fn sample_segment() -> TrajectorySegment {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
         let pre_first_raw = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0), (0.0, 0.0)];
         let pre_second_raw = vec![(0.0, 0.0), (0.0, 0.0), (1.0, 0.0), (0.0, 0.0)];
@@ -343,11 +346,20 @@ mod tests {
                 pre_measure_statevector_digest: d2.clone(),
             },
         ];
+
+        let mut rng = StdRng::seed_from_u64(7);
+        let u0: f64 = rng.gen();
+        let denom0 = (p0 + p1).max(1e-30_f64);
+        let o0 = if u0 < p0 / denom0 { 0u8 } else { 1 };
+        let u1: f64 = rng.gen();
+        let denom1 = (p0b + p1b).max(1e-30_f64);
+        let o1 = if u1 < p0b / denom1 { 0u8 } else { 1 };
+
         let traces = vec![TrajectoryShotTrace {
             shot_index: 0,
             shot_seed: 7,
-            final_outcome: "01".into(),
-            classical_bits: vec![1, 0],
+            final_outcome: format!("{o0}{o1}"),
+            classical_bits: vec![o0, o1],
             measures: vec![
                 TrajectoryMeasureEvent {
                     gate_index: 1,
@@ -355,7 +367,7 @@ mod tests {
                     cbit: 0,
                     p0,
                     p1,
-                    outcome: 1,
+                    outcome: o0,
                     pre_measure_statevector_digest: d0.clone(),
                 },
                 TrajectoryMeasureEvent {
@@ -364,7 +376,7 @@ mod tests {
                     cbit: 1,
                     p0: p0b,
                     p1: p1b,
-                    outcome: 1,
+                    outcome: o1,
                     pre_measure_statevector_digest: d2.clone(),
                 },
             ],

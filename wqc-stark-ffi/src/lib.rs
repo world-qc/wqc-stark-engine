@@ -282,6 +282,32 @@ pub unsafe extern "C" fn wqc_has_trajectory_zk_tail(proof_bytes: *const u8, proo
     unwind_to_ffi_code(result)
 }
 
+/// Returns 1 when the proof transcript includes a per-shot sampling STARK inner marker.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_has_trajectory_shot_sampling(
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() {
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if wqc_stark_core::plonky3_stark::has_trajectory_shot_sampling_stark(trajectory_proof_view(
+            proof_slice,
+        )) {
+            return 1;
+        }
+        0
+    });
+
+    unwind_to_ffi_code(result)
+}
+
 /// Returns 1 when the proof transcript includes a non-empty trajectory `unitary_link_digest`.
 ///
 /// # Safety

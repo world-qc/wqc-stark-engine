@@ -2,6 +2,7 @@
 
 mod constraints;
 pub mod distribution;
+pub mod shot_sampling;
 pub mod trajectory;
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};

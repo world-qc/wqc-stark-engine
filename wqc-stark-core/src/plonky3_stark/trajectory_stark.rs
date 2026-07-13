@@ -1,4 +1,4 @@
-//! C2c trajectory marginal Plonky3 uni-STARK prove / verify.
+//! C2c trajectory marginal Plonky3 uni-STARK prove / verify (+ per-shot sampling).
 
 pub use super::distribution_air::{DistributionAir, BORN_ZK_SCALE};
 pub use super::transcript_trajectory_stark::TrajectoryMarginalStarkContext;
@@ -9,13 +9,21 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
+use crate::air::shot_sampling::{
+    collect_shot_sampling_events, segment_supports_shot_sampling_zk,
+};
 use crate::air::trajectory::z_marginal_basis_groups;
 use crate::air::{f64_to_m31, pad_air_matrix_for_uni_stark};
 use crate::trajectory::{TrajectoryMarginalWitness, TrajectorySegment};
 
 use super::config::{devnet_circle_config, WqcStarkConfig};
+use super::shot_sampling_stark::{
+    append_shot_sampling_to_bundle, generate_shot_sampling_stark, split_shot_sampling_from_bundle,
+    verify_shot_sampling_stark,
+};
 use super::transcript_trajectory_stark::{
     decode_trajectory_marginal_stark_owned, encode_trajectory_marginal_stark,
+    TrajectoryShotSamplingStarkContext,
 };
 
 fn build_marginal_air(
@@ -68,7 +76,8 @@ fn build_marginal_matrix(
     Some(RowMajorMatrix::new(values, air.width()))
 }
 
-/// Returns true when a trajectory segment can be zk-proved with marginal `DistributionAir`s.
+/// Returns true when a trajectory segment can be zk-proved with marginal `DistributionAir`s
+/// and per-shot Bernoulli sampling.
 pub fn segment_supports_trajectory_zk(segment: &TrajectorySegment) -> bool {
     if segment.marginal_witnesses.is_empty() {
         return false;
@@ -77,10 +86,14 @@ pub fn segment_supports_trajectory_zk(segment: &TrajectorySegment) -> bool {
     if qubit_count == 0 || qubit_count > TRAJ_MARGINAL_ZK_MAX_QUBITS {
         return false;
     }
-    segment
+    if !segment
         .marginal_witnesses
         .iter()
         .all(|w| build_marginal_air(w, qubit_count).is_some())
+    {
+        return false;
+    }
+    segment_supports_shot_sampling_zk(segment)
 }
 
 fn prove_one_marginal(
@@ -105,7 +118,7 @@ fn prove_one_marginal(
     Ok(encode_trajectory_marginal_stark(context, &plonky3_bytes))
 }
 
-/// Generates one Plonky3 STARK per unique marginal witness and concatenates inner transcripts.
+/// Generates one Plonky3 STARK per unique marginal witness, plus a shot-sampling STARK.
 pub fn generate_trajectory_stark_bundle(
     sub_task_id: &str,
     segment: &TrajectorySegment,
@@ -140,7 +153,17 @@ pub fn generate_trajectory_stark_bundle(
         bundle.extend_from_slice(&inner);
     }
 
-    Ok(bundle)
+    let events = collect_shot_sampling_events(segment)
+        .ok_or_else(|| "failed to collect shot sampling events".to_string())?;
+    let shot_ctx = TrajectoryShotSamplingStarkContext {
+        sub_task_id,
+        trajectory_digest: &segment.trajectory_digest,
+        sample_seed: segment.sample_seed,
+        shots: segment.shots,
+        event_count: events.len() as u32,
+    };
+    let shot_inner = generate_shot_sampling_stark(&shot_ctx, segment)?;
+    Ok(append_shot_sampling_to_bundle(bundle, &shot_inner))
 }
 
 fn verify_one_marginal(
@@ -183,7 +206,7 @@ fn verify_one_marginal(
     }
 }
 
-/// Verifies a trajectory marginal STARK bundle against a trajectory segment.
+/// Verifies a trajectory marginal + shot-sampling STARK bundle against a trajectory segment.
 pub fn verify_trajectory_stark_bundle(
     sub_task_id: &str,
     segment: &TrajectorySegment,
@@ -198,8 +221,13 @@ pub fn verify_trajectory_stark_bundle(
         return false;
     }
 
+    let Some((marginal_bundle, shot_inner)) = split_shot_sampling_from_bundle(bundle) else {
+        eprintln!("[TrajectoryAir] Failed: missing shot sampling section in bundle");
+        return false;
+    };
+
     let qubit_count = segment.qubit_count as usize;
-    let (witness_count, mut cursor) = match read_u32_le(bundle, 0) {
+    let (witness_count, mut cursor) = match read_u32_le(marginal_bundle, 0) {
         Some(v) => v,
         None => {
             eprintln!("[TrajectoryAir] Failed: malformed bundle header");
@@ -212,7 +240,7 @@ pub fn verify_trajectory_stark_bundle(
     }
 
     for witness in &segment.marginal_witnesses {
-        let (inner_len, next) = match read_u32_le(bundle, cursor) {
+        let (inner_len, next) = match read_u32_le(marginal_bundle, cursor) {
             Some(v) => v,
             None => {
                 eprintln!("[TrajectoryAir] Failed: malformed inner length");
@@ -221,7 +249,7 @@ pub fn verify_trajectory_stark_bundle(
         };
         cursor = next;
         let end = cursor + inner_len as usize;
-        let inner = match bundle.get(cursor..end) {
+        let inner = match marginal_bundle.get(cursor..end) {
             Some(slice) => slice,
             None => {
                 eprintln!("[TrajectoryAir] Failed: truncated inner proof");
@@ -248,14 +276,30 @@ pub fn verify_trajectory_stark_bundle(
         }
     }
 
-    if cursor != bundle.len() {
-        eprintln!("[TrajectoryAir] Failed: trailing bundle bytes");
+    if cursor != marginal_bundle.len() {
+        eprintln!("[TrajectoryAir] Failed: trailing marginal bundle bytes");
+        return false;
+    }
+
+    let Some(events) = collect_shot_sampling_events(segment) else {
+        eprintln!("[TrajectoryAir] Failed: collect shot sampling events");
+        return false;
+    };
+    let shot_ctx = TrajectoryShotSamplingStarkContext {
+        sub_task_id,
+        trajectory_digest: &segment.trajectory_digest,
+        sample_seed: segment.sample_seed,
+        shots: segment.shots,
+        event_count: events.len() as u32,
+    };
+    if !verify_shot_sampling_stark(&shot_ctx, segment, shot_inner) {
         return false;
     }
 
     eprintln!(
-        "[TrajectoryAir] Verification success (trajectory marginal zk, witnesses={})",
-        witness_count
+        "[TrajectoryAir] Verification success (marginal + shot sampling zk, witnesses={}, events={})",
+        witness_count,
+        events.len()
     );
     true
 }
@@ -271,6 +315,8 @@ fn read_u32_le(buf: &[u8], offset: usize) -> Option<(u32, usize)> {
 mod tests {
     use super::*;
     use crate::trajectory::{TrajectoryMeasureEvent, TrajectoryShotTrace};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     fn if_demo_segment() -> TrajectorySegment {
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
@@ -280,6 +326,18 @@ mod tests {
         let d0 = crate::distribution::calculate_terminal_statevector_digest(&pre_first);
         let d1 = crate::distribution::calculate_terminal_statevector_digest(&pre_second_branch0);
         let d2 = crate::distribution::calculate_terminal_statevector_digest(&pre_second_branch1);
+
+        let mut rng = StdRng::seed_from_u64(7);
+        let u0: f64 = rng.gen();
+        let o0 = if u0 < 0.5 { 0u8 } else { 1 };
+        let (p0_1, p1_1, digest_1): (f64, f64, String) = if o0 == 0 {
+            (1.0, 0.0, d1.clone())
+        } else {
+            (0.0, 1.0, d2.clone())
+        };
+        let u1: f64 = rng.gen();
+        let denom = (p0_1 + p1_1).max(1e-30);
+        let o1 = if u1 < p0_1 / denom { 0u8 } else { 1 };
 
         let witnesses = vec![
             TrajectoryMarginalWitness {
@@ -308,8 +366,8 @@ mod tests {
         let traces = vec![TrajectoryShotTrace {
             shot_index: 0,
             shot_seed: 7,
-            final_outcome: "01".into(),
-            classical_bits: vec![1, 0],
+            final_outcome: format!("{o0}{o1}"),
+            classical_bits: vec![o0, o1],
             measures: vec![
                 TrajectoryMeasureEvent {
                     gate_index: 1,
@@ -317,17 +375,17 @@ mod tests {
                     cbit: 0,
                     p0: 0.5,
                     p1: 0.5,
-                    outcome: 1,
+                    outcome: o0,
                     pre_measure_statevector_digest: d0.clone(),
                 },
                 TrajectoryMeasureEvent {
                     gate_index: 3,
                     qubit: 1,
                     cbit: 1,
-                    p0: 0.0,
-                    p1: 1.0,
-                    outcome: 1,
-                    pre_measure_statevector_digest: d2.clone(),
+                    p0: p0_1,
+                    p1: p1_1,
+                    outcome: o1,
+                    pre_measure_statevector_digest: digest_1,
                 },
             ],
         }];
@@ -348,6 +406,7 @@ mod tests {
     fn if_demo_trajectory_marginal_stark_roundtrip() {
         let segment = if_demo_segment();
         let bundle = generate_trajectory_stark_bundle("sub-traj", &segment).expect("prove");
+        assert!(split_shot_sampling_from_bundle(&bundle).is_some());
         assert!(verify_trajectory_stark_bundle(
             "sub-traj", &segment, &bundle
         ));
