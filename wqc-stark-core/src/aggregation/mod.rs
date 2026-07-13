@@ -10,6 +10,7 @@
 
 mod leaf;
 mod leaf_compose;
+mod leaf_compose_born;
 mod transcript_v3;
 
 #[cfg(feature = "plonky3-stark")]
@@ -21,10 +22,16 @@ use crate::plonky3_stark::{
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
 #[cfg(feature = "plonky3-stark")]
 pub use leaf_compose::{compose_unitary_trajectory_leaf, verify_unitary_trajectory_leaf_compose};
+#[cfg(feature = "plonky3-stark")]
+pub use leaf_compose_born::{compose_unitary_born_leaf, verify_unitary_born_leaf_compose};
 pub use leaf_compose::{
     encode_trajectory_leaf, is_trajectory_leaf_proof, is_unitary_trajectory_leaf_compose,
     trajectory_child_from_compose, trajectory_proof_view, verify_trajectory_leaf, TRAJ_LEAF_MARKER,
     UNITARY_TRAJ_COMPOSE_LABEL,
+};
+pub use leaf_compose_born::{
+    born_child_from_compose, born_proof_view, encode_born_leaf, is_born_leaf_proof,
+    is_unitary_born_leaf_compose, verify_born_leaf, BORN_LEAF_MARKER, UNITARY_BORN_COMPOSE_LABEL,
 };
 pub use transcript_v3::{
     child_digest, decode_compose_v3, decode_compose_v3_slices, encode_compose_v3, is_compose_v3,
@@ -60,6 +67,10 @@ pub fn verify_child_proof(
         return verify_trajectory_leaf(parent_task_id, child)
             .map_err(|e| format!("trajectory leaf verification failed: {e}"));
     }
+    if is_born_leaf_proof(child) {
+        return verify_born_leaf(parent_task_id, child)
+            .map_err(|e| format!("Born leaf verification failed: {e}"));
+    }
 
     if is_compose_v3(child) {
         let embedded_parent = leaf_compose::is_unitary_trajectory_leaf_compose(child)
@@ -67,6 +78,14 @@ pub fn verify_child_proof(
             .and_then(|v3| {
                 transcript_v3::decode_compose_v3_slices(v3)
                     .map(|(header, _, _)| header.parent_task_id)
+            })
+            .or_else(|| {
+                leaf_compose_born::is_unitary_born_leaf_compose(child)
+                    .then(|| leaf_compose::compose_v3_body(child))
+                    .and_then(|v3| {
+                        transcript_v3::decode_compose_v3_slices(v3)
+                            .map(|(header, _, _)| header.parent_task_id)
+                    })
             });
         return verify_composed_proof(
             &ComposeContext {

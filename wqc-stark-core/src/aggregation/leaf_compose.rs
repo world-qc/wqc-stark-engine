@@ -31,7 +31,7 @@ pub const UNITARY_TRAJ_COMPOSE_LABEL: &str = "leaf:unitary_traj";
 /// Marker prefix on the trajectory-only child transcript.
 pub const TRAJ_LEAF_MARKER: &[u8] = b"_M31_TRAJ_LEAF_V1_";
 
-pub fn compose_v3_body(proof: &[u8]) -> &[u8] {
+pub(crate) fn compose_v3_body(proof: &[u8]) -> &[u8] {
     #[cfg(feature = "plonky3-stark")]
     {
         if let Some((v3, _)) = split_agg_tail(proof) {

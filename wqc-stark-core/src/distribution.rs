@@ -460,7 +460,8 @@ pub fn verify_distribution_binding(
     reported_counts: &std::collections::BTreeMap<String, u64>,
     reported_shots: u64,
 ) -> bool {
-    let Some((_, Some((payload, marker)))) = split_distribution_tail(proof) else {
+    let Some((_, Some((payload, marker)))) = split_distribution_tail(crate::born_proof_view(proof))
+    else {
         eprintln!("[STARK Core] Failed: missing distribution tail");
         return false;
     };

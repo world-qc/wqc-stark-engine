@@ -3,10 +3,10 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    compose_stark_proofs, is_unitary_trajectory_leaf_compose, proof_has_trajectory_unitary_link,
-    proof_has_unitary_statevector_link, trajectory_proof_view, verify_distribution_binding,
-    verify_root_proof, verify_stark_proof_core, verify_trajectory_binding, ComposeContext,
-    RootVerifyContext, StarkContext,
+    compose_stark_proofs, is_unitary_born_leaf_compose, is_unitary_trajectory_leaf_compose,
+    proof_has_trajectory_unitary_link, proof_has_unitary_statevector_link, trajectory_proof_view,
+    verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
+    verify_trajectory_binding, ComposeContext, RootVerifyContext, StarkContext,
 };
 
 fn unwind_to_ffi_code(result: Result<i32, Box<dyn std::any::Any + Send>>) -> i32 {
@@ -323,6 +323,31 @@ pub unsafe extern "C" fn wqc_is_unitary_trajectory_compose(
         }
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
         if is_unitary_trajectory_leaf_compose(proof_slice) {
+            1
+        } else {
+            0
+        }
+    });
+
+    unwind_to_ffi_code(result)
+}
+
+/// Returns 1 when the proof is a v3 `leaf:unitary_born` compose transcript.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_is_unitary_born_compose(
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() {
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if is_unitary_born_leaf_compose(proof_slice) {
             1
         } else {
             0

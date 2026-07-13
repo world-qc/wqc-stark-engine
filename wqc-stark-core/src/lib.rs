@@ -9,12 +9,16 @@ pub mod transcript;
 pub mod plonky3_stark;
 
 pub use aggregation::{
-    compose_stark_proofs, is_unitary_trajectory_leaf_compose, trajectory_proof_view,
-    verify_child_proof, verify_composed_proof, verify_root_proof, ComposeContext, ComposeHeader,
-    ParsedLeafBinding, RootVerifyContext, UNITARY_TRAJ_COMPOSE_LABEL, V3_COMPOSE_MARKER,
+    born_proof_view, compose_stark_proofs, is_unitary_born_leaf_compose,
+    is_unitary_trajectory_leaf_compose, trajectory_proof_view, verify_child_proof,
+    verify_composed_proof, verify_root_proof, ComposeContext, ComposeHeader, ParsedLeafBinding,
+    RootVerifyContext, UNITARY_BORN_COMPOSE_LABEL, UNITARY_TRAJ_COMPOSE_LABEL, V3_COMPOSE_MARKER,
 };
 #[cfg(feature = "plonky3-stark")]
-pub use aggregation::{compose_unitary_trajectory_leaf, verify_unitary_trajectory_leaf_compose};
+pub use aggregation::{
+    compose_unitary_born_leaf, compose_unitary_trajectory_leaf, verify_unitary_born_leaf_compose,
+    verify_unitary_trajectory_leaf_compose,
+};
 pub use air::evaluate_execution_trace;
 pub use air::trajectory::z_marginal_from_statevector;
 pub use distribution::{
@@ -50,7 +54,7 @@ pub fn proof_has_trajectory_unitary_link(proof: &[u8]) -> bool {
 
 /// Reports whether a proof binds unitary v2 and Born tails via `terminal_statevector_digest`.
 pub fn proof_has_unitary_statevector_link(proof: &[u8]) -> bool {
-    distribution::split_distribution_tail(proof)
+    distribution::split_distribution_tail(born_proof_view(proof))
         .and_then(|(_, tail)| tail)
         .and_then(|(payload, marker)| {
             distribution::decode_and_verify_distribution_tail(payload, marker)
@@ -121,6 +125,10 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
     #[cfg(feature = "plonky3-stark")]
     if aggregation::is_unitary_trajectory_leaf_compose(proof) {
         return aggregation::verify_unitary_trajectory_leaf_compose(context, proof);
+    }
+    #[cfg(feature = "plonky3-stark")]
+    if aggregation::is_unitary_born_leaf_compose(proof) {
+        return aggregation::verify_unitary_born_leaf_compose(context, proof);
     }
 
     let (marker_index, marker) = match find_marker(proof, context.sub_task_id) {

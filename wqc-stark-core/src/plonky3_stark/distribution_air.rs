@@ -4,7 +4,7 @@ use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
 
 /// Maximum qubit width for in-circuit Born zk (single-row wide trace).
-pub const BORN_ZK_MAX_QUBITS: usize = 4;
+pub const BORN_ZK_MAX_QUBITS: usize = 5;
 
 /// Fixed-point scale — matches quantum execution AIR (`10_000`).
 pub const BORN_ZK_SCALE: u32 = 10_000;
