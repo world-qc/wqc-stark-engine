@@ -53,6 +53,8 @@ Prior limitation: consecutive rows sampled different target qubits, so amplitude
 
 Old 10-column traces are **not** compatible with the new AIR.
 
-## Next: Phase 3
+## Next
 
-See [PHASE3_PLONKY3.md](./PHASE3_PLONKY3.md) for Plonky3 uni-STARK migration and aggregation.
+- Phase 3 unitary Plonky3: [PHASE3_PLONKY3.md](./PHASE3_PLONKY3.md)
+- Aggregation R1/R2: [PROOF_AGGREGATION.md](./PROOF_AGGREGATION.md)
+- Distribution / trajectory (C2): [DISTRIBUTION_STARK.md](./DISTRIBUTION_STARK.md)

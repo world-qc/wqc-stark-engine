@@ -37,8 +37,10 @@ cargo build
 wqc-stark-engine/
 ├── wqc-stark-core/     # AIR prover/verifier (Rust library)
 ├── wqc-stark-ffi/      # CGO-compatible libwqc_stark_verifier
-└── docs/               # Phase and aggregation design notes
+└── docs/               # Phase, aggregation, and C2 distribution notes
 ```
+
+Key docs: `PHASE2_TRACE_ALIGNMENT.md`, `PHASE3_PLONKY3.md`, `PROOF_AGGREGATION.md`, `DISTRIBUTION_STARK.md`.
 
 ### Run tests
 
