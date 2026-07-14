@@ -106,7 +106,7 @@ where
         for k in 0..self.num_outcomes {
             let sel = curr[self.col_sel(k)];
             builder.when(active.clone()).assert_bool(sel);
-            sel_sum = sel_sum + sel.into();
+            sel_sum += sel.into();
         }
         builder
             .when(active.clone())

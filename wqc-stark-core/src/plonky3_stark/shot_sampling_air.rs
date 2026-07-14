@@ -112,7 +112,7 @@ where
         for i in 0..SHOT_SAMPLING_GAP_BITS {
             let bit = curr[SHOT_SAMPLING_COL_GAP_BITS + i];
             builder.when(active.clone()).assert_bool(bit);
-            recomposed = recomposed + bit.into() * pow.clone();
+            recomposed += bit.into() * pow.clone();
             pow = pow.clone() + pow;
         }
         builder
