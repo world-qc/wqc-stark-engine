@@ -1,5 +1,9 @@
 # wqc-stark-engine
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Status: Beta](https://img.shields.io/badge/Status-Beta-orange.svg)]()
+[![CI](https://github.com/world-qc/wqc-stark-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/world-qc/wqc-stark-engine/actions/workflows/ci.yml)
+
 Cryptographic proof engine for the WQC decentralized quantum compute mesh. Provides Mersenne31 **AIR commitment** proofs and Plonky3 uni-STARKs with recursive compose, distribution binding, and trajectory binding for `sample_counts`.
 
 See the [STARK proof specification](https://github.com/world-qc/wqc-docs/tree/main/spec/stark) for the full protocol definition (transcript format, AIR constraints, distribution binding, proof aggregation).
@@ -89,4 +93,4 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for developmen
 
 ## License
 
-GPLv3 — see `LICENSE`.
+Distributed under the GNU General Public License v3.0 (GPLv3). See `LICENSE` for more information.
