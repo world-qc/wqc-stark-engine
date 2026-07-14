@@ -138,9 +138,10 @@ where
             let next_amp2 = next_re.clone() * next_re + next_im.clone() * next_im;
 
             // Active → active: accumulate.
-            builder.when_transition().when(next_active.clone()).assert_zero(
-                next_mass.clone() - mass.clone() - next_sel * next_amp2,
-            );
+            builder
+                .when_transition()
+                .when(next_active.clone())
+                .assert_zero(next_mass.clone() - mass.clone() - next_sel * next_amp2);
 
             // Any → pad: mass frozen (and finalised below when leaving active).
             builder
@@ -150,18 +151,20 @@ where
 
             // Active → pad: final Born check.
             let entering_pad = next_is_pad.clone() * active.clone();
-            builder.when_transition().when(entering_pad).assert_zero(
-                mass.clone() - claim.clone() * scale.clone(),
-            );
+            builder
+                .when_transition()
+                .when(entering_pad)
+                .assert_zero(mass.clone() - claim.clone() * scale.clone());
         }
 
         // No padding (height == dim power-of-two): last active row must match claims.
         for k in 0..self.num_outcomes {
             let mass: AB::Expr = curr[self.col_mass(k)].into();
             let claim: AB::Expr = curr[self.col_claim(k)].into();
-            builder.when_last_row().when(active.clone()).assert_zero(
-                mass - claim * scale.clone(),
-            );
+            builder
+                .when_last_row()
+                .when(active.clone())
+                .assert_zero(mass - claim * scale.clone());
         }
 
         // Pad rows: selectors and amplitudes zero.

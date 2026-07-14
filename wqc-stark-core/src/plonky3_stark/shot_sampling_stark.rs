@@ -5,11 +5,12 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
-use crate::air::shot_sampling::{
-    collect_shot_sampling_events, fixed_point_bernoulli_witnesses, segment_supports_shot_sampling_zk,
-    ShotSamplingEvent, SHOT_SAMPLING_GAP_BITS, TRAJ_SHOT_SAMPLING_ZK_MAX_EVENTS,
-};
 use crate::air::pad_air_matrix_for_uni_stark;
+use crate::air::shot_sampling::{
+    collect_shot_sampling_events, fixed_point_bernoulli_witnesses,
+    segment_supports_shot_sampling_zk, ShotSamplingEvent, SHOT_SAMPLING_GAP_BITS,
+    TRAJ_SHOT_SAMPLING_ZK_MAX_EVENTS,
+};
 use crate::trajectory::TrajectorySegment;
 
 use super::config::{devnet_circle_config, WqcStarkConfig};
@@ -24,13 +25,9 @@ use super::transcript_trajectory_stark::{
 };
 
 fn fill_row(row: &mut [Mersenne31], event: &ShotSamplingEvent) -> Result<(), String> {
-    let (p0_i, p1_i, u_i, gap) = fixed_point_bernoulli_witnesses(
-        event.p0,
-        event.p1,
-        event.sample_u,
-        event.outcome,
-    )
-    .ok_or_else(|| "fixed-point Bernoulli witnesses unavailable".to_string())?;
+    let (p0_i, p1_i, u_i, gap) =
+        fixed_point_bernoulli_witnesses(event.p0, event.p1, event.sample_u, event.outcome)
+            .ok_or_else(|| "fixed-point Bernoulli witnesses unavailable".to_string())?;
 
     row[SHOT_SAMPLING_COL_P0] = Mersenne31::from_u32(p0_i);
     row[SHOT_SAMPLING_COL_P1] = Mersenne31::from_u32(p1_i);
@@ -50,7 +47,9 @@ fn fill_row(row: &mut [Mersenne31], event: &ShotSamplingEvent) -> Result<(), Str
     Ok(())
 }
 
-fn build_shot_sampling_matrix(events: &[ShotSamplingEvent]) -> Result<RowMajorMatrix<Mersenne31>, String> {
+fn build_shot_sampling_matrix(
+    events: &[ShotSamplingEvent],
+) -> Result<RowMajorMatrix<Mersenne31>, String> {
     if events.is_empty() {
         return Err("shot sampling events empty".to_string());
     }
@@ -115,7 +114,10 @@ pub fn generate_shot_sampling_stark(
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
         postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode failed: {e}"))?;
-    Ok(encode_trajectory_shot_sampling_stark(context, &plonky3_bytes))
+    Ok(encode_trajectory_shot_sampling_stark(
+        context,
+        &plonky3_bytes,
+    ))
 }
 
 /// Verifies a shot-sampling STARK inner transcript against a trajectory segment.
@@ -160,8 +162,7 @@ pub fn verify_shot_sampling_stark(
         return false;
     };
 
-    let p3_proof: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&plonky3_bytes)
-    {
+    let p3_proof: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&plonky3_bytes) {
         Ok(proof) => proof,
         Err(e) => {
             eprintln!("[ShotSamplingAir] Failed: postcard decode: {e}");

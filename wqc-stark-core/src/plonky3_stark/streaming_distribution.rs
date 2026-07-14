@@ -82,7 +82,9 @@ fn pad_streaming_with_inactive(
 ) -> RowMajorMatrix<Mersenne31> {
     let width = matrix.width;
     let height = matrix.values.len() / width;
-    let target = height.next_power_of_two().max(crate::air::MIN_UNI_STARK_HEIGHT);
+    let target = height
+        .next_power_of_two()
+        .max(crate::air::MIN_UNI_STARK_HEIGHT);
     if target == height {
         return matrix;
     }

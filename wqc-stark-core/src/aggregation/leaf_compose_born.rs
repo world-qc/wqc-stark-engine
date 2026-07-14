@@ -117,8 +117,8 @@ pub fn verify_born_leaf(sub_task_id: &str, proof: &[u8]) -> Result<(), String> {
         if !segment_supports_born_zk(&segment) {
             return Err("Born zk tail without zk-capable segment".to_string());
         }
-        let born_bytes = split_born_stark_tail(tail_body)
-            .ok_or_else(|| "malformed Born zk tail".to_string())?;
+        let born_bytes =
+            split_born_stark_tail(tail_body).ok_or_else(|| "malformed Born zk tail".to_string())?;
         let sv = segment
             .born_binding
             .as_ref()
@@ -344,9 +344,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
         }
     }
 
-    eprintln!(
-        "[LeafCompose] Verification success (unitary+Born v3 compose, link={link})"
-    );
+    eprintln!("[LeafCompose] Verification success (unitary+Born v3 compose, link={link})");
     true
 }
 
@@ -358,8 +356,8 @@ mod tests {
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
         let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
         let probs = vec![("00".into(), 0.5), ("11".into(), 0.5)];
-        let binding =
-            crate::distribution::BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv).expect("bind");
+        let binding = crate::distribution::BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv)
+            .expect("bind");
         DistributionSegment {
             sample_seed: 42,
             shots: 128,

@@ -259,7 +259,7 @@ mod integration_tests {
             slice_id: "0",
             output_hash: "out-hash",
             terminal_statevector_digest: "",
-        measurement_spec_hash: "",
+            measurement_spec_hash: "",
         }
     }
 

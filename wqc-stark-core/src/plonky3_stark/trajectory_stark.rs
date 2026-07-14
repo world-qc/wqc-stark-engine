@@ -6,9 +6,7 @@ pub use crate::air::trajectory::TRAJ_MARGINAL_ZK_MAX_QUBITS;
 
 use p3_uni_stark::{prove, verify};
 
-use crate::air::shot_sampling::{
-    collect_shot_sampling_events, segment_supports_shot_sampling_zk,
-};
+use crate::air::shot_sampling::{collect_shot_sampling_events, segment_supports_shot_sampling_zk};
 use crate::trajectory::{TrajectoryMarginalWitness, TrajectorySegment};
 
 use super::config::{devnet_circle_config, WqcStarkConfig};
@@ -16,9 +14,7 @@ use super::shot_sampling_stark::{
     append_shot_sampling_to_bundle, generate_shot_sampling_stark, split_shot_sampling_from_bundle,
     verify_shot_sampling_stark,
 };
-use super::streaming_distribution::{
-    build_streaming_distribution_matrix, streaming_zk_shape_ok,
-};
+use super::streaming_distribution::{build_streaming_distribution_matrix, streaming_zk_shape_ok};
 use super::transcript_trajectory_stark::{
     decode_trajectory_marginal_stark_owned, encode_trajectory_marginal_stark,
     TrajectoryShotSamplingStarkContext,

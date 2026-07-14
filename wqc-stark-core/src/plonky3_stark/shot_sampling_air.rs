@@ -98,9 +98,7 @@ where
         builder.assert_bool(curr[SHOT_SAMPLING_COL_IS_PAD]);
 
         let outcome = curr[SHOT_SAMPLING_COL_OUTCOME];
-        builder
-            .when(active.clone())
-            .assert_bool(outcome);
+        builder.when(active.clone()).assert_bool(outcome);
 
         let p0: AB::Expr = curr[SHOT_SAMPLING_COL_P0].into();
         let p1: AB::Expr = curr[SHOT_SAMPLING_COL_P1].into();
@@ -128,8 +126,6 @@ where
         builder
             .when(active.clone())
             .assert_zero((AB::Expr::ONE - outcome_e.clone()) * zero_branch);
-        builder
-            .when(active)
-            .assert_zero(outcome_e * one_branch);
+        builder.when(active).assert_zero(outcome_e * one_branch);
     }
 }

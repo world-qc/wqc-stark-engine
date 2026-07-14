@@ -1,8 +1,6 @@
 //! C2b Born-rule Plonky3 uni-STARK prove / verify (streaming DistributionAir).
 
-pub use super::distribution_air::{
-    DistributionAir, BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS,
-};
+pub use super::distribution_air::{DistributionAir, BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS};
 
 use p3_uni_stark::{prove, verify};
 
@@ -48,7 +46,11 @@ pub fn outcome_index_of_basis(
 fn streaming_outcome_keys(segment: &DistributionSegment) -> Option<Vec<String>> {
     use std::collections::BTreeSet;
     let binding = segment.born_binding.as_ref()?;
-    let mut keys: BTreeSet<String> = segment.probabilities.iter().map(|(k, _)| k.clone()).collect();
+    let mut keys: BTreeSet<String> = segment
+        .probabilities
+        .iter()
+        .map(|(k, _)| k.clone())
+        .collect();
     let dim = 1usize << binding.qubit_count as usize;
     let measures: Vec<BornMeasureSpec> = binding
         .measures
@@ -262,8 +264,7 @@ mod tests {
         let amp = 1.0 / (dim as f64).sqrt();
         let sv = vec![(amp, 0.0); dim];
         let probs = vec![("0".into(), 0.5), ("1".into(), 0.5)];
-        let binding =
-            BornBinding::from_specs(qubit_count as u32, 1, &[(0, 0)], sv).expect("bind");
+        let binding = BornBinding::from_specs(qubit_count as u32, 1, &[(0, 0)], sv).expect("bind");
         DistributionSegment {
             sample_seed: 7,
             shots: 64,

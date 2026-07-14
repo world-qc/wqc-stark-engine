@@ -22,8 +22,6 @@ use crate::plonky3_stark::{
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
 #[cfg(feature = "plonky3-stark")]
 pub use leaf_compose::{compose_unitary_trajectory_leaf, verify_unitary_trajectory_leaf_compose};
-#[cfg(feature = "plonky3-stark")]
-pub use leaf_compose_born::{compose_unitary_born_leaf, verify_unitary_born_leaf_compose};
 pub use leaf_compose::{
     encode_trajectory_leaf, is_trajectory_leaf_proof, is_unitary_trajectory_leaf_compose,
     trajectory_child_from_compose, trajectory_proof_view, verify_trajectory_leaf, TRAJ_LEAF_MARKER,
@@ -33,6 +31,8 @@ pub use leaf_compose_born::{
     born_child_from_compose, born_proof_view, encode_born_leaf, is_born_leaf_proof,
     is_unitary_born_leaf_compose, verify_born_leaf, BORN_LEAF_MARKER, UNITARY_BORN_COMPOSE_LABEL,
 };
+#[cfg(feature = "plonky3-stark")]
+pub use leaf_compose_born::{compose_unitary_born_leaf, verify_unitary_born_leaf_compose};
 pub use transcript_v3::{
     child_digest, decode_compose_v3, decode_compose_v3_slices, encode_compose_v3, is_compose_v3,
     ComposeHeader, CHILD_HASH_LEN, V3_COMPOSE_MARKER,
@@ -300,7 +300,7 @@ mod integration_tests {
             slice_id: slice,
             output_hash: "out-hash",
             terminal_statevector_digest: "",
-        measurement_spec_hash: "",
+            measurement_spec_hash: "",
         }
     }
 

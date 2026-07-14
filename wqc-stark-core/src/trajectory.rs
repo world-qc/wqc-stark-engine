@@ -676,10 +676,7 @@ mod tests {
             }
         };
 
-        let traces = vec![
-            make_shot(0, 7, 1.0, 0.0),
-            make_shot(1, 8, 0.0, 1.0),
-        ];
+        let traces = vec![make_shot(0, 7, 1.0, 0.0), make_shot(1, 8, 0.0, 1.0)];
         TrajectorySegment {
             sample_seed: 7,
             shots: 2,

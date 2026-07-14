@@ -42,7 +42,7 @@ fn optional_leaf_context<'a>(
         slice_id: cstr_or_empty(slice_id),
         output_hash: cstr_or_empty(output_hash),
         terminal_statevector_digest: "",
-    measurement_spec_hash: "",
+        measurement_spec_hash: "",
     })
 }
 
@@ -88,7 +88,7 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
             slice_id: cstr_or_empty(slice_id),
             output_hash: cstr_or_empty(output_hash),
             terminal_statevector_digest: "",
-        measurement_spec_hash: "",
+            measurement_spec_hash: "",
         };
 
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);

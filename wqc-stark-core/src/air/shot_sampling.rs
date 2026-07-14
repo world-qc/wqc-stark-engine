@@ -179,7 +179,7 @@ pub fn fixed_point_bernoulli_witnesses(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trajectory::{TrajectoryShotTrace, TrajectoryMeasureEvent};
+    use crate::trajectory::{TrajectoryMeasureEvent, TrajectoryShotTrace};
 
     fn demo_segment(outcome0: u8) -> TrajectorySegment {
         let mut rng = StdRng::seed_from_u64(7);
