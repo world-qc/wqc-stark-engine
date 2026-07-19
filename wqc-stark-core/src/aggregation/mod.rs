@@ -17,9 +17,11 @@ mod transcript_v3;
 
 #[cfg(feature = "plonky3-stark")]
 use crate::plonky3_stark::{
-    append_rec_tail, child_stark_binding, generate_recursive_aggregation_proof, split_agg_tail,
-    split_rec_tail, verify_aggregation_proof, verify_recursive_aggregation_proof,
-    AggregationContext, RecursiveAggregationContext,
+    append_agg_tail, append_rec_tail, build_agg_pcs_certificate, child_aggregation_transcript,
+    child_stark_binding, generate_aggregation_proof, generate_recursive_aggregation_proof,
+    split_agg_tail, split_rec_tail, verify_agg_pcs_certificate, verify_aggregation_proof,
+    verify_recursive_aggregation_proof, AggregationContext, RecursiveAggregationContext,
+    REC_KIND_AGG, REC_KIND_LEAF,
 };
 
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
@@ -144,8 +146,36 @@ pub fn compose_stark_proofs(
 
     #[cfg(feature = "plonky3-stark")]
     {
+        // R2 AggregationAir (needed so parents can build R3-M2 PCS certificates).
+        let agg_ctx = AggregationContext {
+            parent_task_id: context.parent_task_id,
+            compose_label: context.compose_label,
+            manifest_root_hash: context.manifest_root_hash,
+            left_child_hash: left_hash,
+            right_child_hash: right_hash,
+        };
+        let agg_proof = generate_aggregation_proof(&agg_ctx)
+            .map_err(|e| format!("aggregation STARK prove failed: {e}"))?;
+        out = append_agg_tail(out, &agg_proof);
+
         let left_bind = child_stark_binding(left_child);
         let right_bind = child_stark_binding(right_child);
+        let left_agg_cert = cert_for_child(left_child, context.parent_task_id)?;
+        let right_agg_cert = cert_for_child(right_child, context.parent_task_id)?;
+
+        // Align kinds with certificate availability (compose without V4 stays leaf-binding).
+        let left_kind = if left_agg_cert.is_some() {
+            REC_KIND_AGG
+        } else {
+            REC_KIND_LEAF
+        };
+        let right_kind = if right_agg_cert.is_some() {
+            REC_KIND_AGG
+        } else {
+            REC_KIND_LEAF
+        };
+        let _ = (left_bind.kind, right_bind.kind);
+
         let rec_ctx = RecursiveAggregationContext {
             parent_task_id: context.parent_task_id,
             compose_label: context.compose_label,
@@ -154,15 +184,44 @@ pub fn compose_stark_proofs(
             right_child_hash: right_hash,
             left_stark_digest: left_bind.stark_digest,
             right_stark_digest: right_bind.stark_digest,
-            left_kind: left_bind.kind,
-            right_kind: right_bind.kind,
+            left_kind,
+            right_kind,
+            left_agg_cert,
+            right_agg_cert,
         };
         let rec_proof = generate_recursive_aggregation_proof(&rec_ctx)
-            .map_err(|e| format!("R3-M1 recursive aggregation STARK prove failed: {e}"))?;
+            .map_err(|e| format!("R3-M2 recursive aggregation STARK prove failed: {e}"))?;
         out = append_rec_tail(out, &rec_proof);
     }
 
     Ok(out)
+}
+
+#[cfg(feature = "plonky3-stark")]
+fn cert_for_child(
+    child: &[u8],
+    _parent_task_id: &str,
+) -> Result<Option<crate::plonky3_stark::AggPcsCertificate>, String> {
+    use crate::plonky3_stark::parse_agg_v4_header_any;
+
+    let Some(agg) = child_aggregation_transcript(child) else {
+        return Ok(None);
+    };
+    let header = parse_agg_v4_header_any(agg)
+        .ok_or_else(|| "cannot parse child AggregationAir V4 header".to_string())?;
+    let agg_ctx = AggregationContext {
+        parent_task_id: header.parent_task_id.as_str(),
+        compose_label: header.compose_label.as_str(),
+        manifest_root_hash: header.manifest_root_hash.as_str(),
+        left_child_hash: header.left_child_hash,
+        right_child_hash: header.right_child_hash,
+    };
+    let cert = build_agg_pcs_certificate(&agg_ctx, agg)
+        .map_err(|e| format!("R3-M2 AggregationAir PCS certificate failed: {e}"))?;
+    if !verify_agg_pcs_certificate(&agg_ctx, agg, &cert) {
+        return Err("R3-M2 AggregationAir PCS certificate self-check failed".to_string());
+    }
+    Ok(Some(cert))
 }
 
 /// Recursively verifies a v3 compose tree (all embedded leaves).
@@ -221,21 +280,17 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
 
     #[cfg(feature = "plonky3-stark")]
     if let Some(rec_bytes) = rec_tail {
-        let left_bind = child_stark_binding(&left_child);
-        let right_bind = child_stark_binding(&right_child);
-        let rec_ctx = RecursiveAggregationContext {
-            parent_task_id: context.parent_task_id,
-            compose_label: header.compose_label.as_str(),
-            manifest_root_hash: header.manifest_root_hash.as_str(),
-            left_child_hash: header.left_child_hash,
-            right_child_hash: header.right_child_hash,
-            left_stark_digest: left_bind.stark_digest,
-            right_stark_digest: right_bind.stark_digest,
-            left_kind: left_bind.kind,
-            right_kind: right_bind.kind,
-        };
+        let rec_ctx = rebuild_rec_context(
+            context.parent_task_id,
+            header.compose_label.as_str(),
+            header.manifest_root_hash.as_str(),
+            header.left_child_hash,
+            header.right_child_hash,
+            &left_child,
+            &right_child,
+        )?;
         if !verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
-            return Err("R3-M1 recursive aggregation STARK verification failed".to_string());
+            return Err("R3-M2 recursive aggregation STARK verification failed".to_string());
         }
     } else if let Some(agg_bytes) = agg_tail {
         let agg_ctx = AggregationContext {
@@ -251,6 +306,45 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
     }
 
     Ok(())
+}
+
+#[cfg(feature = "plonky3-stark")]
+fn rebuild_rec_context<'a>(
+    parent_task_id: &'a str,
+    compose_label: &'a str,
+    manifest_root_hash: &'a str,
+    left_child_hash: [u8; CHILD_HASH_LEN],
+    right_child_hash: [u8; CHILD_HASH_LEN],
+    left_child: &'a [u8],
+    right_child: &'a [u8],
+) -> Result<RecursiveAggregationContext<'a>, String> {
+    let left_bind = child_stark_binding(left_child);
+    let right_bind = child_stark_binding(right_child);
+    let left_agg_cert = cert_for_child(left_child, parent_task_id)?;
+    let right_agg_cert = cert_for_child(right_child, parent_task_id)?;
+    let left_kind = if left_agg_cert.is_some() {
+        REC_KIND_AGG
+    } else {
+        REC_KIND_LEAF
+    };
+    let right_kind = if right_agg_cert.is_some() {
+        REC_KIND_AGG
+    } else {
+        REC_KIND_LEAF
+    };
+    Ok(RecursiveAggregationContext {
+        parent_task_id,
+        compose_label,
+        manifest_root_hash,
+        left_child_hash,
+        right_child_hash,
+        left_stark_digest: left_bind.stark_digest,
+        right_stark_digest: right_bind.stark_digest,
+        left_kind,
+        right_kind,
+        left_agg_cert,
+        right_agg_cert,
+    })
 }
 
 /// Verifies a task root proof tree.
@@ -276,27 +370,31 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                         eprintln!("[Aggregation] Failed: manifest_root_hash mismatch");
                         return false;
                     }
-                    let left_bind = child_stark_binding(&left_child);
-                    let right_bind = child_stark_binding(&right_child);
-                    let rec_ctx = RecursiveAggregationContext {
-                        parent_task_id: context.parent_task_id,
-                        compose_label: "root",
-                        manifest_root_hash: context.manifest_root_hash,
-                        left_child_hash: header.left_child_hash,
-                        right_child_hash: header.right_child_hash,
-                        left_stark_digest: left_bind.stark_digest,
-                        right_stark_digest: right_bind.stark_digest,
-                        left_kind: left_bind.kind,
-                        right_kind: right_bind.kind,
-                    };
-                    if verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
-                        eprintln!(
-                            "[Aggregation] Root proof verified (R3-M1 fast path) for task {}",
-                            context.parent_task_id
-                        );
-                        return true;
+                    match rebuild_rec_context(
+                        context.parent_task_id,
+                        "root",
+                        context.manifest_root_hash,
+                        header.left_child_hash,
+                        header.right_child_hash,
+                        &left_child,
+                        &right_child,
+                    ) {
+                        Ok(rec_ctx) => {
+                            if verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
+                                eprintln!(
+                                    "[Aggregation] Root proof verified (R3-M2 fast path) for task {}",
+                                    context.parent_task_id
+                                );
+                                return true;
+                            }
+                            eprintln!(
+                                "[Aggregation] Root R3-M2 STARK failed; falling back to audit walk"
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("[Aggregation] Root R3-M2 context rebuild failed: {e}");
+                        }
                     }
-                    eprintln!("[Aggregation] Root R3-M1 STARK failed; falling back to audit walk");
                 }
             }
         }

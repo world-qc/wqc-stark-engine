@@ -27,7 +27,7 @@ fn byte_to_m31(b: u8) -> Mersenne31 {
     Mersenne31::from_u32(b as u32)
 }
 
-fn build_agg_matrix(
+pub(crate) fn build_agg_matrix(
     left_hash: [u8; CHILD_HASH_LEN],
     right_hash: [u8; CHILD_HASH_LEN],
 ) -> RowMajorMatrix<Mersenne31> {

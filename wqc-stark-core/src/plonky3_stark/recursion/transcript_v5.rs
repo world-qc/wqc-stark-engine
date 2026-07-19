@@ -42,6 +42,7 @@ fn locate_inner_marker(proof: &[u8]) -> Option<usize> {
     Some(pos)
 }
 
+#[allow(dead_code)] // retained for legacy V5 transcript builders / tests
 pub fn encode_rec_agg_proof(
     context: &RecursiveAggregationContext<'_>,
     plonky3_bytes: &[u8],
@@ -114,13 +115,6 @@ pub fn decode_rec_agg_proof_owned(
     Some(payload)
 }
 
-pub fn append_rec_tail(mut body: Vec<u8>, rec_proof: &[u8]) -> Vec<u8> {
-    body.extend_from_slice(V5_REC_TAIL_MARKER);
-    body.extend_from_slice(&(rec_proof.len() as u32).to_le_bytes());
-    body.extend_from_slice(rec_proof);
-    body
-}
-
 pub fn split_rec_tail(proof: &[u8]) -> Option<(&[u8], &[u8])> {
     let pos = proof
         .windows(V5_REC_TAIL_MARKER.len())
@@ -145,6 +139,13 @@ pub fn has_rec_tail(proof: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub fn append_rec_tail(mut body: Vec<u8>, rec_proof: &[u8]) -> Vec<u8> {
+        body.extend_from_slice(V5_REC_TAIL_MARKER);
+        body.extend_from_slice(&(rec_proof.len() as u32).to_le_bytes());
+        body.extend_from_slice(rec_proof);
+        body
+    }
 
     #[test]
     fn rec_tail_roundtrip() {

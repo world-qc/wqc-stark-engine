@@ -344,16 +344,20 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
                 right_child_hash: header.right_child_hash,
                 left_stark_digest: left_bind.stark_digest,
                 right_stark_digest: right_bind.stark_digest,
-                left_kind: left_bind.kind,
-                right_kind: right_bind.kind,
+                left_kind: crate::plonky3_stark::REC_KIND_LEAF,
+                right_kind: crate::plonky3_stark::REC_KIND_LEAF,
+                left_agg_cert: None,
+                right_agg_cert: None,
             };
             if !verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
                 eprintln!(
-                    "[LeafCompose] Failed: R3-M1 recursive aggregation STARK verification failed"
+                    "[LeafCompose] Failed: R3-M2 recursive aggregation STARK verification failed"
                 );
                 return false;
             }
-        } else if let Some(agg_bytes) = split_agg_tail(proof).map(|(_, agg)| agg) {
+        }
+        let body = split_rec_tail(proof).map(|(b, _)| b).unwrap_or(proof);
+        if let Some(agg_bytes) = split_agg_tail(body).map(|(_, agg)| agg) {
             let agg_ctx = AggregationContext {
                 parent_task_id: context.sub_task_id,
                 compose_label: UNITARY_BORN_COMPOSE_LABEL,

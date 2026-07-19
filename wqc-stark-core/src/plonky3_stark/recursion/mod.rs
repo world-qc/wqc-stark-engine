@@ -1,13 +1,16 @@
-//! R3-M1: recursive aggregation (child STARK digest binding).
+//! R3-M1 / R3-M2 recursive aggregation.
 //!
-//! See `doc/R3_RECURSION.md`. Full FRI-in-circuit verification is M2+.
+//! See `doc/R3_RECURSION.md`. Full FRI-in-circuit fold verification remains M2.5+.
 
 mod agg_constraints;
 mod air;
+mod air_m1;
 mod child_binding;
 mod context;
+mod opening_cert;
 mod prove;
 mod transcript_v5;
+mod transcript_v6;
 
 pub use agg_constraints::aggregation_air_constraints_hold;
 pub use air::{
@@ -17,7 +20,13 @@ pub use air::{
 };
 pub use child_binding::{child_stark_binding, ChildStarkBinding, STARK_DIGEST_LEN};
 pub use context::RecursiveAggregationContext;
-pub use prove::{generate_recursive_aggregation_proof, verify_recursive_aggregation_proof};
-pub use transcript_v5::{
-    append_rec_tail, has_rec_tail, split_rec_tail, V5_REC_AGG_INNER_MARKER, V5_REC_TAIL_MARKER,
+pub use opening_cert::{
+    build_agg_pcs_certificate, child_aggregation_transcript, parse_agg_v4_header,
+    parse_agg_v4_header_any, verify_agg_pcs_certificate, AggPcsCertificate,
 };
+pub use prove::{
+    append_rec_tail, generate_recursive_aggregation_proof, has_rec_tail, split_rec_tail,
+    verify_recursive_aggregation_proof,
+};
+pub use transcript_v5::{V5_REC_AGG_INNER_MARKER, V5_REC_TAIL_MARKER};
+pub use transcript_v6::{V6_REC_AGG_INNER_MARKER, V6_REC_TAIL_MARKER};
