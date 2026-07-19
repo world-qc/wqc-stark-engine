@@ -1,4 +1,4 @@
-//! R3 recursive aggregation (M1–M2.5b).
+//! R3 recursive aggregation (M1–M3a).
 //!
 //! See `doc/R3_RECURSION.md`.
 
@@ -7,6 +7,9 @@ mod air;
 mod air_m1;
 mod child_binding;
 mod context;
+mod fri_fold_air;
+mod fri_fold_bind;
+mod fri_fold_native;
 mod keccak256_air;
 mod keccak_f_air;
 mod keccak_f_native;
@@ -25,6 +28,9 @@ pub use air::{
 };
 pub use child_binding::{child_stark_binding, ChildStarkBinding, STARK_DIGEST_LEN};
 pub use context::RecursiveAggregationContext;
+pub use fri_fold_air::{
+    generate_fri_fold_proof, verify_fri_fold_proof, FriFoldAir, FriFoldStepProof,
+};
 pub use keccak256_air::{
     prove_compress, prove_keccak256, prove_lde_leaf, verify_compress_digest, verify_keccak256,
     verify_lde_leaf_digest, Keccak256SpongeAir, Keccak256StarkProof,

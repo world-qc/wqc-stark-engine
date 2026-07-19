@@ -1,5 +1,5 @@
-//! V6 recursive aggregation transcript (R3-M2 / M2.5): M1 fields + AggregationAir PCS certs
-//! (including in-circuit Merkle fold STARK).
+//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3a): M1 fields + AggregationAir
+//! PCS certs (Merkle fold + Keccak sponges + FRI fold step).
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mersenne_31::Mersenne31;
@@ -9,6 +9,7 @@ use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 
 use super::air::{REC_KIND_AGG, REC_KIND_LEAF};
 use super::context::RecursiveAggregationContext;
+use super::fri_fold_air::FriFoldStepProof;
 use super::keccak256_air::Keccak256StarkProof;
 use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS};
@@ -135,6 +136,52 @@ fn decode_merkle_fold(proof: &[u8], offset: usize) -> Option<(KeccakMerklePathPr
     ))
 }
 
+fn encode_fri_fold(out: &mut Vec<u8>, fold: &FriFoldStepProof) {
+    out.extend_from_slice(&fold.index.to_le_bytes());
+    out.extend_from_slice(&fold.log_folded_height.to_le_bytes());
+    out.extend_from_slice(&fold.t_inv.as_canonical_u32().to_le_bytes());
+    write_m31_row(out, &fold.beta_limbs);
+    write_m31_row(out, &fold.v0_limbs);
+    write_m31_row(out, &fold.v1_limbs);
+    write_m31_row(out, &fold.out_limbs);
+    out.extend_from_slice(&(fold.fold_stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&fold.fold_stark);
+}
+
+fn decode_fri_fold(proof: &[u8], offset: usize) -> Option<(FriFoldStepProof, usize)> {
+    let (index, cursor) = read_u32_le(proof, offset)?;
+    let (log_folded_height, cursor) = read_u32_le(proof, cursor)?;
+    let (t_vec, cursor) = read_m31_row(proof, cursor, 1)?;
+    let (beta_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (v0_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (v1_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (out_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let fold_stark = proof.get(cursor..end)?.to_vec();
+    let mut beta_limbs = [Mersenne31::ZERO; 3];
+    let mut v0_limbs = [Mersenne31::ZERO; 3];
+    let mut v1_limbs = [Mersenne31::ZERO; 3];
+    let mut out_limbs = [Mersenne31::ZERO; 3];
+    beta_limbs.copy_from_slice(&beta_vec);
+    v0_limbs.copy_from_slice(&v0_vec);
+    v1_limbs.copy_from_slice(&v1_vec);
+    out_limbs.copy_from_slice(&out_vec);
+    Some((
+        FriFoldStepProof {
+            index,
+            log_folded_height,
+            t_inv: t_vec[0],
+            beta_limbs,
+            v0_limbs,
+            v1_limbs,
+            out_limbs,
+            fold_stark,
+        },
+        end,
+    ))
+}
+
 fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
     match cert {
         None => out.push(0),
@@ -152,6 +199,7 @@ fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
                 out.extend_from_slice(sib);
             }
             encode_merkle_fold(out, &c.merkle_fold);
+            encode_fri_fold(out, &c.fri_fold);
         }
     }
 }
@@ -189,6 +237,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
         cursor = next;
     }
     let (merkle_fold, cursor) = decode_merkle_fold(proof, cursor)?;
+    let (fri_fold, cursor) = decode_fri_fold(proof, cursor)?;
     Some((
         Some(AggPcsCertificate {
             stmt_left_hash,
@@ -199,6 +248,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
             lde_row,
             siblings,
             merkle_fold,
+            fri_fold,
         }),
         cursor,
     ))

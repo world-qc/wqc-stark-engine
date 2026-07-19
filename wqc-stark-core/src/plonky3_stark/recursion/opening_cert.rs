@@ -1,9 +1,9 @@
-//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3a).
 //!
 //! Rebuild Circle PCS commitment, open an LDE row, host-check `Mmcs::verify_batch`,
-//! and attach a [`KeccakMerklePathProof`] (MerkleFoldAir + in-circuit Keccak-256
-//! leaf/compress sponges). FRI fold-checks remain host-side via
-//! [`crate::plonky3_stark::verify_aggregation_proof`].
+//! attach a [`KeccakMerklePathProof`] (MerkleFoldAir + in-circuit Keccak-256
+//! leaf/compress sponges), and a [`FriFoldStepProof`] bound to FRI
+//! `final_poly` + last sibling (M3a; FS β replay is M3b).
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -21,6 +21,8 @@ use crate::plonky3_stark::config::{devnet_circle_config, ValMmcs, WqcStarkConfig
 use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
 use super::agg_constraints::aggregation_air_constraints_hold;
+use super::fri_fold_air::{verify_fri_fold_proof, FriFoldStepProof};
+use super::fri_fold_bind::fri_fold_step_from_agg_proof;
 use super::keccak_merkle_air::{
     generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
 };
@@ -46,6 +48,8 @@ pub struct AggPcsCertificate {
     pub siblings: Vec<[u8; 32]>,
     /// R3-M2.5b: Merkle fold + in-circuit Keccak-256 leaf/compress sponges.
     pub merkle_fold: KeccakMerklePathProof,
+    /// R3-M3a: in-circuit Circle FRI `fold_x` step bound to FRI openings.
+    pub fri_fold: FriFoldStepProof,
 }
 
 fn commitment_root(com: &<ValMmcs as Mmcs<Mersenne31>>::Commitment) -> Result<[u8; 32], String> {
@@ -168,6 +172,12 @@ pub fn build_agg_pcs_certificate(
         return Err("R3-M2.5 Merkle fold self-check failed".into());
     }
 
+    let fri_fold = fri_fold_step_from_agg_proof(&proof)
+        .map_err(|e| format!("R3-M3a FRI fold prove failed: {e}"))?;
+    if !verify_fri_fold_proof(&fri_fold) {
+        return Err("R3-M3a FRI fold self-check failed".into());
+    }
+
     Ok(AggPcsCertificate {
         stmt_left_hash: context.left_child_hash,
         stmt_right_hash: context.right_child_hash,
@@ -177,6 +187,7 @@ pub fn build_agg_pcs_certificate(
         lde_row,
         siblings: batch.opening_proof,
         merkle_fold,
+        fri_fold,
     })
 }
 
@@ -208,6 +219,7 @@ pub fn verify_agg_pcs_certificate(
                 || rebuilt.lde_row != cert.lde_row
                 || rebuilt.siblings != cert.siblings
                 || rebuilt.merkle_fold != cert.merkle_fold
+                || rebuilt.fri_fold != cert.fri_fold
             {
                 eprintln!("[AggPcsCertificate] Failed: rebuilt certificate mismatch");
                 return false;
@@ -220,6 +232,10 @@ pub fn verify_agg_pcs_certificate(
                 &cert.merkle_fold,
             ) {
                 eprintln!("[AggPcsCertificate] Failed: Merkle fold STARK");
+                return false;
+            }
+            if !verify_fri_fold_proof(&cert.fri_fold) {
+                eprintln!("[AggPcsCertificate] Failed: FRI fold STARK");
                 return false;
             }
             true

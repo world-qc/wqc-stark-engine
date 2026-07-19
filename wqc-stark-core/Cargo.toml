@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-plonky3-stark = ["p3-uni-stark", "p3-air", "p3-circle", "p3-commit", "p3-challenger", "p3-fri", "p3-keccak", "p3-merkle-tree", "p3-symmetric", "p3-util", "postcard"]
+plonky3-stark = ["p3-uni-stark", "p3-air", "p3-circle", "p3-commit", "p3-challenger", "p3-fri", "p3-keccak", "p3-merkle-tree", "p3-symmetric", "p3-util", "postcard", "serde"]
 
 [dependencies]
 p3-field = "0.6.1"
@@ -25,3 +25,4 @@ p3-merkle-tree = { version = "0.6.1", optional = true }
 p3-symmetric = { version = "0.6.1", optional = true }
 p3-util = { version = "0.6.1", optional = true }
 postcard = { version = "1.1", optional = true, features = ["alloc"] }
+serde = { version = "1", optional = true, features = ["derive"] }
