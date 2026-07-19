@@ -1,5 +1,5 @@
-//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3a): M1 fields + AggregationAir
-//! PCS certs (Merkle fold + Keccak sponges + FRI fold step).
+//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b1): M1 fields + AggregationAir
+//! PCS certs (Merkle fold + Keccak sponges + FS-bound FRI fold steps).
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mersenne_31::Mersenne31;
@@ -10,6 +10,7 @@ use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use super::air::{REC_KIND_AGG, REC_KIND_LEAF};
 use super::context::RecursiveAggregationContext;
 use super::fri_fold_air::FriFoldStepProof;
+use super::fri_fold_bind::{AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES};
 use super::keccak256_air::Keccak256StarkProof;
 use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS};
@@ -182,6 +183,29 @@ fn decode_fri_fold(proof: &[u8], offset: usize) -> Option<(FriFoldStepProof, usi
     ))
 }
 
+fn encode_fri_folds(out: &mut Vec<u8>, folds: &[FriFoldStepProof]) {
+    out.extend_from_slice(&(folds.len() as u32).to_le_bytes());
+    for fold in folds {
+        encode_fri_fold(out, fold);
+    }
+}
+
+fn decode_fri_folds(proof: &[u8], offset: usize) -> Option<(Vec<FriFoldStepProof>, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    let max = AGG_FRI_MAX_ROUNDS * AGG_FRI_PROVEN_QUERIES;
+    if len as usize == 0 || len as usize > max {
+        return None;
+    }
+    let mut folds = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (fold, next) = decode_fri_fold(proof, cursor)?;
+        folds.push(fold);
+        cursor = next;
+    }
+    Some((folds, cursor))
+}
+
 fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
     match cert {
         None => out.push(0),
@@ -199,7 +223,7 @@ fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
                 out.extend_from_slice(sib);
             }
             encode_merkle_fold(out, &c.merkle_fold);
-            encode_fri_fold(out, &c.fri_fold);
+            encode_fri_folds(out, &c.fri_folds);
         }
     }
 }
@@ -237,7 +261,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
         cursor = next;
     }
     let (merkle_fold, cursor) = decode_merkle_fold(proof, cursor)?;
-    let (fri_fold, cursor) = decode_fri_fold(proof, cursor)?;
+    let (fri_folds, cursor) = decode_fri_folds(proof, cursor)?;
     Some((
         Some(AggPcsCertificate {
             stmt_left_hash,
@@ -248,7 +272,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
             lde_row,
             siblings,
             merkle_fold,
-            fri_fold,
+            fri_folds,
         }),
         cursor,
     ))

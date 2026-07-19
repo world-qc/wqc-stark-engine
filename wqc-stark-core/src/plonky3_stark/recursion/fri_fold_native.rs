@@ -105,6 +105,22 @@ pub fn solve_v0_for_fold(
     numer * coeff_v0.inverse()
 }
 
+/// Solve for `v1` such that `fold_x_row(index, log_h, beta, v0, v1) == out`.
+pub fn solve_v1_for_fold(
+    index: usize,
+    log_folded_height: usize,
+    beta: Challenge,
+    v0: Challenge,
+    out: Challenge,
+) -> Challenge {
+    let t = Challenge::from(fold_x_twiddle_inv(index, log_folded_height));
+    let one = Challenge::ONE;
+    let coeff_v0 = one + beta * t;
+    let coeff_v1 = one - beta * t;
+    let numer = out.double() - v0 * coeff_v0;
+    numer * coeff_v1.inverse()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +150,33 @@ mod tests {
                 let out = fold_x_row(index, log_h, beta, v0, v1);
                 let recovered = solve_v0_for_fold(index, log_h, beta, v1, out);
                 assert_eq!(recovered, v0);
+            }
+        }
+    }
+
+    #[test]
+    fn fold_roundtrip_solve_v1() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(9);
+        for log_h in [1usize, 2, 3] {
+            for index in 0..(1 << log_h).min(8) {
+                let beta = Challenge::new([
+                    Val::from_u32(rng.gen()),
+                    Val::from_u32(rng.gen()),
+                    Val::from_u32(rng.gen()),
+                ]);
+                let v0 = Challenge::new([
+                    Val::from_u32(rng.gen()),
+                    Val::from_u32(rng.gen()),
+                    Val::from_u32(rng.gen()),
+                ]);
+                let v1 = Challenge::new([
+                    Val::from_u32(rng.gen()),
+                    Val::from_u32(rng.gen()),
+                    Val::from_u32(rng.gen()),
+                ]);
+                let out = fold_x_row(index, log_h, beta, v0, v1);
+                let recovered = solve_v1_for_fold(index, log_h, beta, v0, out);
+                assert_eq!(recovered, v1);
             }
         }
     }

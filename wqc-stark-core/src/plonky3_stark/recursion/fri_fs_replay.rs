@@ -1,0 +1,202 @@
+//! Fiat-Shamir replay for AggregationAir Circle FRI (R3-M3b1).
+//!
+//! Mirrors `p3-uni-stark::verify` → `CirclePcs::verify` → `p3_circle::verifier::verify`
+//! far enough to recover folding betas and query indices. Does not verify openings.
+
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_commit::Mmcs;
+use p3_field::PrimeCharacteristicRing;
+use p3_uni_stark::{Proof, StarkGenericConfig};
+use serde::Deserialize;
+
+use crate::plonky3_stark::aggregation_air::AggregationAir;
+use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
+use crate::plonky3_stark::config::{
+    devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
+};
+
+use p3_air::BaseAir;
+use p3_circle::{CircleFriProof, CircleInputProof};
+
+type AggInputProof = CircleInputProof<Val, Challenge, ValMmcs, ChallengeMmcs>;
+type AggFriProof = CircleFriProof<Challenge, ChallengeMmcs, Val, AggInputProof>;
+
+/// Postcard mirror of private `CirclePcsProof`.
+#[derive(Deserialize)]
+#[serde(bound = "")]
+pub(crate) struct CirclePcsProofView {
+    pub(crate) first_layer_commitment: <ChallengeMmcs as Mmcs<Challenge>>::Commitment,
+    #[allow(dead_code)]
+    pub(crate) lambdas: Vec<Challenge>,
+    pub(crate) fri_proof: AggFriProof,
+}
+
+/// Fiat-Shamir challenges recovered from an AggregationAir proof.
+#[derive(Debug, Clone)]
+pub struct AggFriChallenges {
+    /// First-layer `fold_y` challenge (bound in M3b2; sampled here for FS fidelity).
+    #[allow(dead_code)]
+    pub bivariate_beta: Challenge,
+    pub betas: Vec<Challenge>,
+    pub query_indices: Vec<usize>,
+    /// `log_blowup + sum(log_arities)` used inside FRI (before extra circle bit).
+    pub fri_log_max_height: usize,
+    pub log_blowup: usize,
+    pub extra_query_index_bits: usize,
+}
+
+pub(crate) fn decode_pcs_view(proof: &Proof<WqcStarkConfig>) -> Result<CirclePcsProofView, String> {
+    let bytes = postcard::to_allocvec(&proof.opening_proof)
+        .map_err(|e| format!("postcard encode opening_proof: {e}"))?;
+    postcard::from_bytes(&bytes).map_err(|e| format!("postcard decode CirclePcsProof: {e}"))
+}
+
+/// Replay the AggregationAir FS transcript through FRI query sampling.
+pub fn replay_agg_fri_challenges(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<AggFriChallenges, String> {
+    let air = AggregationAir;
+    if <AggregationAir as BaseAir<Val>>::width(&air) != AGG_WIDTH {
+        return Err("unexpected AggregationAir width".into());
+    }
+    if <AggregationAir as BaseAir<Val>>::num_public_values(&air) != 0 {
+        return Err("AggregationAir must have zero public values".into());
+    }
+    if proof.commitments.random.is_some() || proof.opened_values.random.is_some() {
+        return Err("unexpected ZK randomization on AggregationAir proof".into());
+    }
+    if proof.opened_values.preprocessed_local.is_some()
+        || proof.opened_values.preprocessed_next.is_some()
+    {
+        return Err("unexpected preprocessed openings on AggregationAir proof".into());
+    }
+    let trace_next = proof
+        .opened_values
+        .trace_next
+        .as_ref()
+        .ok_or_else(|| "AggregationAir proof missing trace_next openings".to_string())?;
+    if proof.opened_values.trace_local.len() != AGG_WIDTH || trace_next.len() != AGG_WIDTH {
+        return Err("AggregationAir opened trace width mismatch".into());
+    }
+
+    let config = devnet_circle_config();
+    let log_blowup = config.pcs().fri_params.log_blowup;
+    let degree_bits = proof.degree_bits;
+    // Circle PCS is non-ZK → base_degree_bits == degree_bits.
+    let base_degree_bits = degree_bits;
+    let preprocessed_width = 0usize;
+
+    let mut challenger = config.initialise_challenger();
+    challenger.observe(Val::from_usize(degree_bits));
+    challenger.observe(Val::from_usize(base_degree_bits));
+    challenger.observe(Val::from_usize(preprocessed_width));
+    challenger.observe(proof.commitments.trace.clone());
+    // public_values empty
+    let _constraint_alpha: Challenge = challenger.sample_algebra_element();
+    challenger.observe(proof.commitments.quotient_chunks.clone());
+    let _zeta: Challenge = challenger.sample_algebra_element();
+
+    // PCS observes opened values in `coms_to_verify` order: trace then quotient.
+    challenger.observe_algebra_slice(&proof.opened_values.trace_local);
+    challenger.observe_algebra_slice(trace_next);
+    for chunk in &proof.opened_values.quotient_chunks {
+        challenger.observe_algebra_slice(chunk);
+    }
+
+    let _batch_alpha: Challenge = challenger.sample_algebra_element();
+    let view = decode_pcs_view(proof)?;
+    challenger.observe(view.first_layer_commitment.clone());
+    let bivariate_beta: Challenge = challenger.sample_algebra_element();
+
+    let fri = &view.fri_proof;
+    if fri.commit_pow_witnesses.len() != fri.commit_phase_commits.len() {
+        return Err("FRI commit PoW witness count mismatch".into());
+    }
+    let fri_params = &config.pcs().fri_params;
+    let mut betas = Vec::with_capacity(fri.commit_phase_commits.len());
+    for (comm, witness) in fri
+        .commit_phase_commits
+        .iter()
+        .zip(&fri.commit_pow_witnesses)
+    {
+        challenger.observe(comm.clone());
+        if !challenger.check_witness(fri_params.commit_proof_of_work_bits, *witness) {
+            return Err("invalid FRI commit PoW witness".into());
+        }
+        betas.push(challenger.sample_algebra_element());
+    }
+    challenger.observe_algebra_element(fri.final_poly);
+    if !challenger.check_witness(fri_params.query_proof_of_work_bits, fri.pow_witness) {
+        return Err("invalid FRI query PoW witness".into());
+    }
+
+    let log_arities: Vec<usize> = fri
+        .query_proofs
+        .first()
+        .map(|qp| {
+            qp.commit_phase_openings
+                .iter()
+                .map(|o| o.log_arity as usize)
+                .collect()
+        })
+        .unwrap_or_default();
+    if log_arities
+        .iter()
+        .any(|&a| a == 0 || a > fri_params.max_log_arity)
+    {
+        return Err("invalid FRI log_arity schedule".into());
+    }
+    let fri_log_max_height: usize = log_arities.iter().sum::<usize>() + log_blowup;
+    let extra_query_index_bits = 1usize; // CircleFriFolding
+    let num_index_bits = fri_log_max_height + extra_query_index_bits;
+
+    if fri.query_proofs.len() != fri_params.num_queries {
+        return Err(format!(
+            "FRI query count mismatch: got {}, want {}",
+            fri.query_proofs.len(),
+            fri_params.num_queries
+        ));
+    }
+    let mut query_indices = Vec::with_capacity(fri_params.num_queries);
+    for _ in 0..fri_params.num_queries {
+        query_indices.push(challenger.sample_bits(num_index_bits));
+    }
+
+    Ok(AggFriChallenges {
+        bivariate_beta,
+        betas,
+        query_indices,
+        fri_log_max_height,
+        log_blowup,
+        extra_query_index_bits,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aggregation::CHILD_HASH_LEN;
+    use crate::plonky3_stark::aggregation::AggregationContext;
+    use crate::plonky3_stark::generate_aggregation_proof;
+    use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
+
+    #[test]
+    fn replay_agg_fri_shape() {
+        let ctx = AggregationContext {
+            parent_task_id: "parent",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+        };
+        let transcript = generate_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_agg_fri_challenges(&proof).expect("replay");
+        assert_eq!(chal.betas.len(), 2);
+        assert_eq!(chal.query_indices.len(), 40);
+        assert_eq!(chal.log_blowup, 1);
+        assert_eq!(chal.fri_log_max_height, 3);
+        assert_eq!(chal.extra_query_index_bits, 1);
+    }
+}
