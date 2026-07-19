@@ -1,11 +1,13 @@
-//! Proof-tree aggregation (v3 compose transcripts + R2 AggregationAir).
+//! Proof-tree aggregation (v3 compose transcripts + R2/R3 aggregation STARKs).
 //!
 //! ## Model
 //!
 //! - **Leaf proofs** (v1/v2) are verified at node ingest before rewards.
 //! - **Compose** pairs two already-valid child proofs into a v3 container.
-//! - **R2**: each compose step also emits an `AggregationAir` STARK tail binding child digests.
-//! - **Root verify (fast path)**: single aggregation STARK verify at the root (O(1) STARK).
+//! - **R2**: optional legacy `AggregationAir` STARK tail (digest + OK flags).
+//! - **R3-M1**: `RecursiveAggregationAir` STARK tail binding child digests **and**
+//!   SHA3 digests of the verified child Plonky3 payloads (see `doc/R3_RECURSION.md`).
+//! - **Root verify (fast path)**: single rec-agg (or legacy agg) STARK at the root.
 //! - **Root verify (audit)**: walks the v3 tree and re-checks every leaf STARK.
 
 mod leaf;
@@ -15,8 +17,9 @@ mod transcript_v3;
 
 #[cfg(feature = "plonky3-stark")]
 use crate::plonky3_stark::{
-    append_agg_tail, generate_aggregation_proof, split_agg_tail, verify_aggregation_proof,
-    AggregationContext,
+    append_rec_tail, child_stark_binding, generate_recursive_aggregation_proof, split_agg_tail,
+    split_rec_tail, verify_aggregation_proof, verify_recursive_aggregation_proof,
+    AggregationContext, RecursiveAggregationContext,
 };
 
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
@@ -141,16 +144,22 @@ pub fn compose_stark_proofs(
 
     #[cfg(feature = "plonky3-stark")]
     {
-        let agg_ctx = AggregationContext {
+        let left_bind = child_stark_binding(left_child);
+        let right_bind = child_stark_binding(right_child);
+        let rec_ctx = RecursiveAggregationContext {
             parent_task_id: context.parent_task_id,
             compose_label: context.compose_label,
             manifest_root_hash: context.manifest_root_hash,
             left_child_hash: left_hash,
             right_child_hash: right_hash,
+            left_stark_digest: left_bind.stark_digest,
+            right_stark_digest: right_bind.stark_digest,
+            left_kind: left_bind.kind,
+            right_kind: right_bind.kind,
         };
-        let agg_proof = generate_aggregation_proof(&agg_ctx)
-            .map_err(|e| format!("aggregation STARK prove failed: {e}"))?;
-        out = append_agg_tail(out, &agg_proof);
+        let rec_proof = generate_recursive_aggregation_proof(&rec_ctx)
+            .map_err(|e| format!("R3-M1 recursive aggregation STARK prove failed: {e}"))?;
+        out = append_rec_tail(out, &rec_proof);
     }
 
     Ok(out)
@@ -159,9 +168,18 @@ pub fn compose_stark_proofs(
 /// Recursively verifies a v3 compose tree (all embedded leaves).
 pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Result<(), String> {
     #[cfg(feature = "plonky3-stark")]
-    let (v3_proof, agg_tail) = match split_agg_tail(proof) {
-        Some((v3, agg)) => (v3, Some(agg)),
-        None => (proof, None),
+    let (v3_proof, rec_tail, agg_tail) = {
+        if let Some((body, rec)) = split_rec_tail(proof) {
+            let (v3, agg) = match split_agg_tail(body) {
+                Some((v3, agg)) => (v3, Some(agg)),
+                None => (body, None),
+            };
+            (v3, Some(rec), agg)
+        } else if let Some((v3, agg)) = split_agg_tail(proof) {
+            (v3, None, Some(agg))
+        } else {
+            (proof, None, None)
+        }
     };
     #[cfg(not(feature = "plonky3-stark"))]
     let v3_proof = proof;
@@ -202,7 +220,24 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
     verify_child_proof(&right_child, context.parent_task_id, None)?;
 
     #[cfg(feature = "plonky3-stark")]
-    if let Some(agg_bytes) = agg_tail {
+    if let Some(rec_bytes) = rec_tail {
+        let left_bind = child_stark_binding(&left_child);
+        let right_bind = child_stark_binding(&right_child);
+        let rec_ctx = RecursiveAggregationContext {
+            parent_task_id: context.parent_task_id,
+            compose_label: header.compose_label.as_str(),
+            manifest_root_hash: header.manifest_root_hash.as_str(),
+            left_child_hash: header.left_child_hash,
+            right_child_hash: header.right_child_hash,
+            left_stark_digest: left_bind.stark_digest,
+            right_stark_digest: right_bind.stark_digest,
+            left_kind: left_bind.kind,
+            right_kind: right_bind.kind,
+        };
+        if !verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
+            return Err("R3-M1 recursive aggregation STARK verification failed".to_string());
+        }
+    } else if let Some(agg_bytes) = agg_tail {
         let agg_ctx = AggregationContext {
             parent_task_id: context.parent_task_id,
             compose_label: header.compose_label.as_str(),
@@ -220,8 +255,8 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
 
 /// Verifies a task root proof tree.
 ///
-/// With `plonky3-stark`, tries the R2 aggregation STARK fast path first (single STARK verify).
-/// Falls back to the v3 audit walk when no aggregation tail is present.
+/// With `plonky3-stark`, tries the R3-M1 recursive aggregation STARK fast path first,
+/// then the legacy R2 aggregation STARK, then falls back to the v3 audit walk.
 pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool {
     if context.parent_task_id.is_empty() {
         eprintln!("[Aggregation] Failed: parent_task_id is empty");
@@ -230,6 +265,43 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
 
     #[cfg(feature = "plonky3-stark")]
     {
+        // R3-M1 fast path: recursive aggregation STARK at root.
+        if let Some((body, rec_bytes)) = split_rec_tail(proof) {
+            let v3_part = split_agg_tail(body).map(|(v3, _)| v3).unwrap_or(body);
+            if let Some((header, left_child, right_child)) = decode_compose_v3(v3_part) {
+                if header.compose_label == "root" {
+                    if !context.manifest_root_hash.is_empty()
+                        && header.manifest_root_hash != context.manifest_root_hash
+                    {
+                        eprintln!("[Aggregation] Failed: manifest_root_hash mismatch");
+                        return false;
+                    }
+                    let left_bind = child_stark_binding(&left_child);
+                    let right_bind = child_stark_binding(&right_child);
+                    let rec_ctx = RecursiveAggregationContext {
+                        parent_task_id: context.parent_task_id,
+                        compose_label: "root",
+                        manifest_root_hash: context.manifest_root_hash,
+                        left_child_hash: header.left_child_hash,
+                        right_child_hash: header.right_child_hash,
+                        left_stark_digest: left_bind.stark_digest,
+                        right_stark_digest: right_bind.stark_digest,
+                        left_kind: left_bind.kind,
+                        right_kind: right_bind.kind,
+                    };
+                    if verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
+                        eprintln!(
+                            "[Aggregation] Root proof verified (R3-M1 fast path) for task {}",
+                            context.parent_task_id
+                        );
+                        return true;
+                    }
+                    eprintln!("[Aggregation] Root R3-M1 STARK failed; falling back to audit walk");
+                }
+            }
+        }
+
+        // Legacy R2 fast path.
         if let Some((v3_part, agg_bytes)) = split_agg_tail(proof) {
             if let Some((header, _, _)) = decode_compose_v3(v3_part) {
                 if header.compose_label == "root" {
@@ -261,7 +333,16 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
         }
     }
 
-    if !is_compose_v3(proof) {
+    // Strip optional STARK tails before checking the v3 marker on the audit path.
+    #[cfg(feature = "plonky3-stark")]
+    let audit_proof = {
+        let body = split_rec_tail(proof).map(|(b, _)| b).unwrap_or(proof);
+        split_agg_tail(body).map(|(v3, _)| v3).unwrap_or(body)
+    };
+    #[cfg(not(feature = "plonky3-stark"))]
+    let audit_proof = proof;
+
+    if !is_compose_v3(audit_proof) {
         eprintln!("[Aggregation] Failed: root proof is not v3 compose");
         return false;
     }

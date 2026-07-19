@@ -4,7 +4,8 @@
 //! - **Left child**: v2 Plonky3 unitary transcript (`terminal_statevector_digest` = Born binding digest)
 //! - **Right child**: DIST segment + Born zk tail (`_M31_BORN_LEAF_V1_`)
 //!
-//! An R2 `AggregationAir` tail binds the two child SHA3-256 digests.
+//! An R3-M1 `RecursiveAggregationAir` tail (legacy R2 `AggregationAir` still accepted) binds
+//! child digests and verified child STARK digests.
 
 use crate::aggregation::leaf::{parse_leaf_binding, parsed_to_stark_context};
 use crate::aggregation::transcript_v3::{
@@ -18,11 +19,11 @@ use crate::distribution::{
 use crate::transcript::StarkContext;
 
 #[cfg(feature = "plonky3-stark")]
-use crate::plonky3_stark::split_agg_tail;
-#[cfg(feature = "plonky3-stark")]
 use crate::plonky3_stark::{
-    append_born_stark_tail, has_born_stark_tail, segment_supports_born_zk, split_born_stark_tail,
-    verify_born_stark_proof, verify_plonky3_proof, BornStarkContext,
+    append_born_stark_tail, child_stark_binding, has_born_stark_tail, segment_supports_born_zk,
+    split_agg_tail, split_born_stark_tail, split_rec_tail, verify_aggregation_proof,
+    verify_born_stark_proof, verify_plonky3_proof, verify_recursive_aggregation_proof,
+    AggregationContext, BornStarkContext, RecursiveAggregationContext,
 };
 
 use super::leaf_compose::compose_v3_body;
@@ -35,10 +36,10 @@ pub const BORN_LEAF_MARKER: &[u8] = b"_M31_BORN_LEAF_V1_";
 
 /// Returns true when `proof` is a v3 compose node with label `leaf:unitary_born`.
 pub fn is_unitary_born_leaf_compose(proof: &[u8]) -> bool {
-    if !is_compose_v3(proof) {
+    let v3 = compose_v3_body(proof);
+    if !is_compose_v3(v3) {
         return false;
     }
-    let v3 = compose_v3_body(proof);
     decode_compose_v3(v3)
         .is_some_and(|(header, _, _)| header.compose_label == UNITARY_BORN_COMPOSE_LABEL)
 }
@@ -330,17 +331,40 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
         return false;
     }
 
-    if let Some(agg_bytes) = split_agg_tail(proof).map(|(_, agg)| agg) {
-        let agg_ctx = crate::plonky3_stark::AggregationContext {
-            parent_task_id: context.sub_task_id,
-            compose_label: UNITARY_BORN_COMPOSE_LABEL,
-            manifest_root_hash: "",
-            left_child_hash: header.left_child_hash,
-            right_child_hash: header.right_child_hash,
-        };
-        if !crate::plonky3_stark::verify_aggregation_proof(&agg_ctx, agg_bytes) {
-            eprintln!("[LeafCompose] Failed: aggregation STARK verification failed");
-            return false;
+    #[cfg(feature = "plonky3-stark")]
+    {
+        if let Some((_, rec_bytes)) = split_rec_tail(proof) {
+            let left_bind = child_stark_binding(left_child);
+            let right_bind = child_stark_binding(right_child);
+            let rec_ctx = RecursiveAggregationContext {
+                parent_task_id: context.sub_task_id,
+                compose_label: UNITARY_BORN_COMPOSE_LABEL,
+                manifest_root_hash: "",
+                left_child_hash: header.left_child_hash,
+                right_child_hash: header.right_child_hash,
+                left_stark_digest: left_bind.stark_digest,
+                right_stark_digest: right_bind.stark_digest,
+                left_kind: left_bind.kind,
+                right_kind: right_bind.kind,
+            };
+            if !verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
+                eprintln!(
+                    "[LeafCompose] Failed: R3-M1 recursive aggregation STARK verification failed"
+                );
+                return false;
+            }
+        } else if let Some(agg_bytes) = split_agg_tail(proof).map(|(_, agg)| agg) {
+            let agg_ctx = AggregationContext {
+                parent_task_id: context.sub_task_id,
+                compose_label: UNITARY_BORN_COMPOSE_LABEL,
+                manifest_root_hash: "",
+                left_child_hash: header.left_child_hash,
+                right_child_hash: header.right_child_hash,
+            };
+            if !verify_aggregation_proof(&agg_ctx, agg_bytes) {
+                eprintln!("[LeafCompose] Failed: aggregation STARK verification failed");
+                return false;
+            }
         }
     }
 

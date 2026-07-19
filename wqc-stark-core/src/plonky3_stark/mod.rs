@@ -11,6 +11,8 @@ mod distribution_air;
 mod distribution_stark;
 mod quantum_air;
 #[cfg(feature = "plonky3-stark")]
+pub mod recursion;
+#[cfg(feature = "plonky3-stark")]
 mod shot_sampling_air;
 #[cfg(feature = "plonky3-stark")]
 mod shot_sampling_stark;
@@ -35,6 +37,11 @@ pub use distribution_stark::{
     BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS,
 };
 pub use quantum_air::QuantumExecutionAir;
+#[cfg(feature = "plonky3-stark")]
+pub use recursion::{
+    append_rec_tail, child_stark_binding, generate_recursive_aggregation_proof, has_rec_tail,
+    split_rec_tail, verify_recursive_aggregation_proof, RecursiveAggregationContext,
+};
 #[cfg(feature = "plonky3-stark")]
 pub use trajectory_stark::{
     generate_trajectory_stark_bundle, segment_supports_trajectory_zk,
