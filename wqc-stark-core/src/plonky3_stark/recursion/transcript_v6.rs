@@ -1,4 +1,5 @@
-//! V6 recursive aggregation transcript (R3-M2): M1 fields + AggregationAir PCS certs.
+//! V6 recursive aggregation transcript (R3-M2 / M2.5): M1 fields + AggregationAir PCS certs
+//! (including in-circuit Merkle fold STARK).
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mersenne_31::Mersenne31;
@@ -8,6 +9,7 @@ use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 
 use super::air::{REC_KIND_AGG, REC_KIND_LEAF};
 use super::context::RecursiveAggregationContext;
+use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS};
 use super::STARK_DIGEST_LEN;
 
@@ -54,6 +56,42 @@ fn read_m31_row(proof: &[u8], offset: usize, len: usize) -> Option<(Vec<Mersenne
     Some((row, offset + need))
 }
 
+fn encode_merkle_fold(out: &mut Vec<u8>, fold: &KeccakMerklePathProof) {
+    out.extend_from_slice(&fold.leaf_digest);
+    out.extend_from_slice(&(fold.layer_digests.len() as u32).to_le_bytes());
+    for d in &fold.layer_digests {
+        out.extend_from_slice(d);
+    }
+    out.extend_from_slice(&(fold.fold_stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&fold.fold_stark);
+}
+
+fn decode_merkle_fold(proof: &[u8], offset: usize) -> Option<(KeccakMerklePathProof, usize)> {
+    let (leaf_digest, cursor) = read_fixed::<32>(proof, offset)?;
+    let (layer_len, cursor) = read_u32_le(proof, cursor)?;
+    if layer_len as usize != MERKLE_FOLD_DEPTH {
+        return None;
+    }
+    let mut layer_digests = Vec::with_capacity(MERKLE_FOLD_DEPTH);
+    let mut cursor = cursor;
+    for _ in 0..MERKLE_FOLD_DEPTH {
+        let (d, next) = read_fixed::<32>(proof, cursor)?;
+        layer_digests.push(d);
+        cursor = next;
+    }
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let fold_stark = proof.get(cursor..end)?.to_vec();
+    Some((
+        KeccakMerklePathProof {
+            leaf_digest,
+            layer_digests,
+            fold_stark,
+        },
+        end,
+    ))
+}
+
 fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
     match cert {
         None => out.push(0),
@@ -70,6 +108,7 @@ fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
             for sib in &c.siblings {
                 out.extend_from_slice(sib);
             }
+            encode_merkle_fold(out, &c.merkle_fold);
         }
     }
 }
@@ -106,6 +145,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
         siblings.push(sib);
         cursor = next;
     }
+    let (merkle_fold, cursor) = decode_merkle_fold(proof, cursor)?;
     Some((
         Some(AggPcsCertificate {
             stmt_left_hash,
@@ -115,6 +155,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
             lde_index,
             lde_row,
             siblings,
+            merkle_fold,
         }),
         cursor,
     ))

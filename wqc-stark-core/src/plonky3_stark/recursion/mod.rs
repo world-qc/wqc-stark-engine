@@ -1,12 +1,14 @@
-//! R3-M1 / R3-M2 recursive aggregation.
+//! R3 recursive aggregation (M1–M2.5).
 //!
-//! See `doc/R3_RECURSION.md`. Full FRI-in-circuit fold verification remains M2.5+.
+//! See `doc/R3_RECURSION.md`.
 
 mod agg_constraints;
 mod air;
 mod air_m1;
 mod child_binding;
 mod context;
+mod keccak_merkle_air;
+mod merkle_keccak;
 mod opening_cert;
 mod prove;
 mod transcript_v5;
@@ -20,6 +22,13 @@ pub use air::{
 };
 pub use child_binding::{child_stark_binding, ChildStarkBinding, STARK_DIGEST_LEN};
 pub use context::RecursiveAggregationContext;
+pub use keccak_merkle_air::{
+    generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
+    MerkleFoldAir, MERKLE_FOLD_DEPTH,
+};
+pub use merkle_keccak::{
+    compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
+};
 pub use opening_cert::{
     build_agg_pcs_certificate, child_aggregation_transcript, parse_agg_v4_header,
     parse_agg_v4_header_any, verify_agg_pcs_certificate, AggPcsCertificate,

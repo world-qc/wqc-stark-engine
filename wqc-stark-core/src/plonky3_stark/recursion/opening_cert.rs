@@ -1,10 +1,11 @@
-//! AggregationAir PCS opening certificates (R3-M2).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5).
 //!
 //! For AggregationAir-sized traces (height 4 after pad), rebuild the Circle PCS
 //! commitment from the public statement, open an LDE row, and host-verify the
-//! Merkle path. The natural AggregationAir row is constrained in-circuit by
-//! [`super::air::RecursiveAggregationAir`]; full FRI fold-checks remain host-side
-//! via [`crate::plonky3_stark::verify_aggregation_proof`].
+//! ValMmcs Keccak Merkle path. R3-M2.5 attaches a [`KeccakMerklePathProof`]
+//! (`MerkleFoldAir` + host digest equality). The natural AggregationAir row is
+//! constrained in-circuit by [`super::air::RecursiveAggregationAir`]; full FRI
+//! fold-checks remain host-side via [`crate::plonky3_stark::verify_aggregation_proof`].
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -22,6 +23,10 @@ use crate::plonky3_stark::config::{devnet_circle_config, ValMmcs, WqcStarkConfig
 use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
 use super::agg_constraints::aggregation_air_constraints_hold;
+use super::keccak_merkle_air::{
+    generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
+};
+use super::merkle_keccak::verify_agg_merkle_path;
 
 /// Max Merkle siblings for AggregationAir LDE (height 8 with log_blowup=1).
 pub const AGG_PCS_MAX_SIBLINGS: usize = 8;
@@ -41,6 +46,8 @@ pub struct AggPcsCertificate {
     pub lde_row: Vec<Mersenne31>,
     /// Merkle siblings authenticating `lde_row` to `trace_commitment`.
     pub siblings: Vec<[u8; 32]>,
+    /// R3-M2.5: in-circuit Merkle fold STARK over ValMmcs Keccak digests.
+    pub merkle_fold: KeccakMerklePathProof,
 }
 
 fn commitment_root(com: &<ValMmcs as Mmcs<Mersenne31>>::Commitment) -> Result<[u8; 32], String> {
@@ -143,6 +150,26 @@ pub fn build_agg_pcs_certificate(
         ));
     }
 
+    if !verify_agg_merkle_path(&lde_row, &batch.opening_proof, lde_index, &trace_commitment) {
+        return Err("ValMmcs Keccak Merkle path self-check failed".into());
+    }
+    let merkle_fold = generate_keccak_merkle_path_proof(
+        &lde_row,
+        &batch.opening_proof,
+        lde_index,
+        &trace_commitment,
+    )
+    .map_err(|e| format!("R3-M2.5 Merkle fold prove failed: {e}"))?;
+    if !verify_keccak_merkle_path_proof(
+        &lde_row,
+        &batch.opening_proof,
+        lde_index,
+        &trace_commitment,
+        &merkle_fold,
+    ) {
+        return Err("R3-M2.5 Merkle fold self-check failed".into());
+    }
+
     Ok(AggPcsCertificate {
         stmt_left_hash: context.left_child_hash,
         stmt_right_hash: context.right_child_hash,
@@ -151,6 +178,7 @@ pub fn build_agg_pcs_certificate(
         lde_index: lde_index as u32,
         lde_row,
         siblings: batch.opening_proof,
+        merkle_fold,
     })
 }
 
@@ -181,8 +209,19 @@ pub fn verify_agg_pcs_certificate(
                 || rebuilt.lde_index != cert.lde_index
                 || rebuilt.lde_row != cert.lde_row
                 || rebuilt.siblings != cert.siblings
+                || rebuilt.merkle_fold != cert.merkle_fold
             {
                 eprintln!("[AggPcsCertificate] Failed: rebuilt certificate mismatch");
+                return false;
+            }
+            if !verify_keccak_merkle_path_proof(
+                &cert.lde_row,
+                &cert.siblings,
+                cert.lde_index as usize,
+                &cert.trace_commitment,
+                &cert.merkle_fold,
+            ) {
+                eprintln!("[AggPcsCertificate] Failed: Merkle fold STARK");
                 return false;
             }
             true
