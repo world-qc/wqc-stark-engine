@@ -9,6 +9,7 @@ use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 
 use super::air::{REC_KIND_AGG, REC_KIND_LEAF};
 use super::context::RecursiveAggregationContext;
+use super::keccak256_air::Keccak256StarkProof;
 use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS};
 use super::STARK_DIGEST_LEN;
@@ -56,6 +57,29 @@ fn read_m31_row(proof: &[u8], offset: usize, len: usize) -> Option<(Vec<Mersenne
     Some((row, offset + need))
 }
 
+fn encode_keccak256_stark(out: &mut Vec<u8>, proof: &Keccak256StarkProof) {
+    out.extend_from_slice(&proof.msg_len.to_le_bytes());
+    out.extend_from_slice(&proof.digest);
+    out.extend_from_slice(&(proof.stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&proof.stark);
+}
+
+fn decode_keccak256_stark(proof: &[u8], offset: usize) -> Option<(Keccak256StarkProof, usize)> {
+    let (msg_len, cursor) = read_u32_le(proof, offset)?;
+    let (digest, cursor) = read_fixed::<32>(proof, cursor)?;
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let stark = proof.get(cursor..end)?.to_vec();
+    Some((
+        Keccak256StarkProof {
+            msg_len,
+            digest,
+            stark,
+        },
+        end,
+    ))
+}
+
 fn encode_merkle_fold(out: &mut Vec<u8>, fold: &KeccakMerklePathProof) {
     out.extend_from_slice(&fold.leaf_digest);
     out.extend_from_slice(&(fold.layer_digests.len() as u32).to_le_bytes());
@@ -64,6 +88,11 @@ fn encode_merkle_fold(out: &mut Vec<u8>, fold: &KeccakMerklePathProof) {
     }
     out.extend_from_slice(&(fold.fold_stark.len() as u32).to_le_bytes());
     out.extend_from_slice(&fold.fold_stark);
+    encode_keccak256_stark(out, &fold.leaf_keccak);
+    out.extend_from_slice(&(fold.compress_starks.len() as u32).to_le_bytes());
+    for c in &fold.compress_starks {
+        encode_keccak256_stark(out, c);
+    }
 }
 
 fn decode_merkle_fold(proof: &[u8], offset: usize) -> Option<(KeccakMerklePathProof, usize)> {
@@ -82,13 +111,27 @@ fn decode_merkle_fold(proof: &[u8], offset: usize) -> Option<(KeccakMerklePathPr
     let (stark_len, cursor) = read_u32_le(proof, cursor)?;
     let end = cursor + stark_len as usize;
     let fold_stark = proof.get(cursor..end)?.to_vec();
+    let (leaf_keccak, cursor) = decode_keccak256_stark(proof, end)?;
+    let (comp_len, cursor) = read_u32_le(proof, cursor)?;
+    if comp_len as usize != MERKLE_FOLD_DEPTH {
+        return None;
+    }
+    let mut compress_starks = Vec::with_capacity(MERKLE_FOLD_DEPTH);
+    let mut cursor = cursor;
+    for _ in 0..MERKLE_FOLD_DEPTH {
+        let (c, next) = decode_keccak256_stark(proof, cursor)?;
+        compress_starks.push(c);
+        cursor = next;
+    }
     Some((
         KeccakMerklePathProof {
             leaf_digest,
             layer_digests,
             fold_stark,
+            leaf_keccak,
+            compress_starks,
         },
-        end,
+        cursor,
     ))
 }
 

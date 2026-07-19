@@ -26,13 +26,24 @@ pub type WqcStarkConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 /// Devnet-oriented parameters: modest query count for fast verification.
 pub fn devnet_circle_config() -> WqcStarkConfig {
+    circle_config_with_blowup(1)
+}
+
+/// Higher blowup for degree-heavy AIRs (R3-M2.5b Keccak sponge).
+///
+/// `log_blowup = 4` ⇒ blowup 16 ⇒ constraint degree up to 17.
+pub fn keccak_circle_config() -> WqcStarkConfig {
+    circle_config_with_blowup(4)
+}
+
+fn circle_config_with_blowup(log_blowup: usize) -> WqcStarkConfig {
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(byte_hash);
     let compress = Compress::new(byte_hash);
     let val_mmcs = ValMmcs::new(field_hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let fri_params = FriParameters {
-        log_blowup: 1,
+        log_blowup,
         log_final_poly_len: 0,
         max_log_arity: 1,
         num_queries: 40,

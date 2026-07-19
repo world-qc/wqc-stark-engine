@@ -1,16 +1,13 @@
-//! R3-M2.5: in-circuit Merkle fold over ValMmcs Keccak digests.
+//! R3-M2.5 / M2.5b: in-circuit Merkle fold + Keccak-256 sponge STARKs.
 //!
-//! ## What is in-circuit
-//! - Index bits and public binding of leaf / layer digests / root inside
-//!   [`MerkleFoldAir`] (carried on `AggPcsCertificate` in V6).
+//! ## In-circuit
+//! - [`MerkleFoldAir`]: index bits / depth / public digest binding
+//! - Nested [`Keccak256StarkProof`] for LDE leaf hash and each sibling compress
+//!   (bit-level Keccak-f[1600] via [`super::keccak256_air`])
 //!
-//! ## What stays host-side (ValMmcs Keccak-256)
-//! - `hash_lde_leaf` and `compress_digests` equality checks on those public digests
-//!   (identical to `SerializingHasher<Keccak256Hash>` / binary compress).
-//!
-//! Full Keccak-f[1600] round constraints inside the AIR remain **M2.5b** (bit-level
-//! θ/ρ/π/χ/ι). This milestone makes the Merkle *tree algebra* in-circuit and forces
-//! every verify path to re-check Keccak digests against ValMmcs.
+//! ## Host (witness only)
+//! - May call ValMmcs helpers while building witnesses.
+//! - Verify path does **not** rely on host digest equality for soundness.
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -22,9 +19,12 @@ use crate::air::pad_air_matrix_for_uni_stark;
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
 
-use super::merkle_keccak::{
-    compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
+use super::keccak256_air::{
+    prove_compress, prove_lde_leaf, verify_compress_digest, verify_lde_leaf_digest,
+    Keccak256StarkProof,
 };
+use super::keccak_f_native::{keccak256_compress, keccak256_lde_leaf};
+use super::merkle_keccak::AGG_LDE_MERKLE_DEPTH;
 
 /// Max depth supported in the fold AIR (AggregationAir LDE uses 3).
 pub const MERKLE_FOLD_DEPTH: usize = AGG_LDE_MERKLE_DEPTH;
@@ -32,7 +32,7 @@ pub const MERKLE_FOLD_DEPTH: usize = AGG_LDE_MERKLE_DEPTH;
 /// Public: leaf[32] | root[32] | index | depth | layer_digests[depth*32] | siblings[depth*32]
 pub const MERKLE_FOLD_NUM_PUBLIC: usize = 32 + 32 + 1 + 1 + MERKLE_FOLD_DEPTH * 32 * 2;
 
-/// Trace width: index bits[depth] | mux flags reused from bits (stable statement row).
+/// Trace width: index bits[depth].
 pub const MERKLE_FOLD_WIDTH: usize = MERKLE_FOLD_DEPTH;
 
 #[derive(Copy, Clone, Debug)]
@@ -62,13 +62,11 @@ where
         let next = main.next_slice();
         let one = AB::Expr::ONE;
 
-        // Snapshot publics before mutable asserts (borrow checker).
         let (pv_index, pv_depth): (AB::Expr, AB::Expr) = {
             let pv = builder.public_values();
             (pv[64].into(), pv[65].into())
         };
 
-        // Index bits boolean and stable.
         for i in 0..MERKLE_FOLD_WIDTH {
             let b: AB::Expr = curr[i].into();
             builder.assert_zero(b.clone() * (b - one.clone()));
@@ -77,11 +75,9 @@ where
                 .assert_zero(next[i].into() - curr[i].into());
         }
 
-        // depth public must equal MERKLE_FOLD_DEPTH for AggregationAir paths we prove.
         let expected_depth: AB::Expr = AB::F::from_u32(MERKLE_FOLD_DEPTH as u32).into();
         builder.assert_zero(pv_depth - expected_depth);
 
-        // index = sum bit_i * 2^i (public pv[64])
         let mut acc = AB::Expr::ZERO;
         let mut pow = AB::Expr::ONE;
         let two = one.clone() + one.clone();
@@ -139,12 +135,16 @@ fn build_fold_matrix(index: usize) -> RowMajorMatrix<Mersenne31> {
     RowMajorMatrix::new(values, MERKLE_FOLD_WIDTH)
 }
 
-/// Proof that a ValMmcs Merkle path folds correctly (in-circuit bits + host Keccak digests).
+/// Proof that a ValMmcs Merkle path is correct (fold AIR + in-circuit Keccak sponges).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeccakMerklePathProof {
     pub leaf_digest: [u8; 32],
     pub layer_digests: Vec<[u8; 32]>,
     pub fold_stark: Vec<u8>,
+    /// R3-M2.5b: Keccak-256 sponge STARK for the LDE leaf hash.
+    pub leaf_keccak: Keccak256StarkProof,
+    /// R3-M2.5b: one compress sponge STARK per Merkle layer.
+    pub compress_starks: Vec<Keccak256StarkProof>,
 }
 
 pub fn generate_keccak_merkle_path_proof(
@@ -162,22 +162,30 @@ pub fn generate_keccak_merkle_path_proof(
             siblings.len()
         ));
     }
-    if !verify_agg_merkle_path(lde_row, siblings, index, expected_root) {
-        return Err("Merkle path does not match commitment root".into());
+
+    let leaf_keccak = prove_lde_leaf(lde_row)?;
+    let leaf_digest = leaf_keccak.digest;
+    if leaf_digest != keccak256_lde_leaf(lde_row) {
+        return Err("leaf sponge digest mismatch vs native".into());
     }
 
-    let leaf_digest = hash_lde_leaf(lde_row);
     let mut digest = leaf_digest;
     let mut idx = index;
     let mut layer_digests = Vec::with_capacity(MERKLE_FOLD_DEPTH);
+    let mut compress_starks = Vec::with_capacity(MERKLE_FOLD_DEPTH);
     for sib in siblings {
         let (left, right) = if idx.is_multiple_of(2) {
             (digest, *sib)
         } else {
             (*sib, digest)
         };
-        digest = compress_digests(left, right);
+        let cproof = prove_compress(left, right)?;
+        if cproof.digest != keccak256_compress(left, right) {
+            return Err("compress sponge digest mismatch vs native".into());
+        }
+        digest = cproof.digest;
         layer_digests.push(digest);
+        compress_starks.push(cproof);
         idx /= 2;
     }
     if &digest != expected_root {
@@ -202,6 +210,8 @@ pub fn generate_keccak_merkle_path_proof(
         leaf_digest,
         layer_digests,
         fold_stark,
+        leaf_keccak,
+        compress_starks,
     })
 }
 
@@ -216,19 +226,21 @@ pub fn verify_keccak_merkle_path_proof(
         eprintln!("[MerkleFold] Failed: sibling depth");
         return false;
     }
-    if !verify_agg_merkle_path(lde_row, siblings, index, expected_root) {
-        eprintln!("[MerkleFold] Failed: ValMmcs Keccak path");
+    if proof.layer_digests.len() != MERKLE_FOLD_DEPTH
+        || proof.compress_starks.len() != MERKLE_FOLD_DEPTH
+    {
+        eprintln!("[MerkleFold] Failed: layer/compress count");
         return false;
     }
-    if hash_lde_leaf(lde_row) != proof.leaf_digest {
-        eprintln!("[MerkleFold] Failed: leaf digest");
+    if proof.leaf_digest != proof.leaf_keccak.digest {
+        eprintln!("[MerkleFold] Failed: leaf_digest vs leaf_keccak");
         return false;
     }
-    if proof.layer_digests.len() != MERKLE_FOLD_DEPTH {
+    if !verify_lde_leaf_digest(lde_row, &proof.leaf_digest, &proof.leaf_keccak) {
+        eprintln!("[MerkleFold] Failed: leaf Keccak sponge");
         return false;
     }
 
-    // Host Keccak layer checks (ValMmcs compress).
     let mut digest = proof.leaf_digest;
     let mut idx = index;
     for (i, sib) in siblings.iter().enumerate() {
@@ -237,15 +249,16 @@ pub fn verify_keccak_merkle_path_proof(
         } else {
             (*sib, digest)
         };
-        let out = compress_digests(left, right);
-        if out != proof.layer_digests[i] {
-            eprintln!("[MerkleFold] Failed: Keccak compress layer {i}");
+        let expected = proof.layer_digests[i];
+        if !verify_compress_digest(left, right, &expected, &proof.compress_starks[i]) {
+            eprintln!("[MerkleFold] Failed: compress sponge layer {i}");
             return false;
         }
-        digest = out;
+        digest = expected;
         idx /= 2;
     }
     if &digest != expected_root {
+        eprintln!("[MerkleFold] Failed: root mismatch");
         return false;
     }
 

@@ -1,4 +1,4 @@
-//! R3 recursive aggregation (M1–M2.5).
+//! R3 recursive aggregation (M1–M2.5b).
 //!
 //! See `doc/R3_RECURSION.md`.
 
@@ -7,6 +7,9 @@ mod air;
 mod air_m1;
 mod child_binding;
 mod context;
+mod keccak256_air;
+mod keccak_f_air;
+mod keccak_f_native;
 mod keccak_merkle_air;
 mod merkle_keccak;
 mod opening_cert;
@@ -22,6 +25,12 @@ pub use air::{
 };
 pub use child_binding::{child_stark_binding, ChildStarkBinding, STARK_DIGEST_LEN};
 pub use context::RecursiveAggregationContext;
+pub use keccak256_air::{
+    prove_compress, prove_keccak256, prove_lde_leaf, verify_compress_digest, verify_keccak256,
+    verify_lde_leaf_digest, Keccak256SpongeAir, Keccak256StarkProof,
+};
+pub use keccak_f_air::{apply_round_bits, KeccakFRoundAir, KECCAK_F_WIDTH};
+pub use keccak_f_native::{keccak256, keccak256_compress, keccak256_lde_leaf};
 pub use keccak_merkle_air::{
     generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
     MerkleFoldAir, MERKLE_FOLD_DEPTH,

@@ -1,11 +1,9 @@
-//! AggregationAir PCS opening certificates (R3-M2 / M2.5).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b).
 //!
-//! For AggregationAir-sized traces (height 4 after pad), rebuild the Circle PCS
-//! commitment from the public statement, open an LDE row, and host-verify the
-//! ValMmcs Keccak Merkle path. R3-M2.5 attaches a [`KeccakMerklePathProof`]
-//! (`MerkleFoldAir` + host digest equality). The natural AggregationAir row is
-//! constrained in-circuit by [`super::air::RecursiveAggregationAir`]; full FRI
-//! fold-checks remain host-side via [`crate::plonky3_stark::verify_aggregation_proof`].
+//! Rebuild Circle PCS commitment, open an LDE row, host-check `Mmcs::verify_batch`,
+//! and attach a [`KeccakMerklePathProof`] (MerkleFoldAir + in-circuit Keccak-256
+//! leaf/compress sponges). FRI fold-checks remain host-side via
+//! [`crate::plonky3_stark::verify_aggregation_proof`].
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -46,7 +44,7 @@ pub struct AggPcsCertificate {
     pub lde_row: Vec<Mersenne31>,
     /// Merkle siblings authenticating `lde_row` to `trace_commitment`.
     pub siblings: Vec<[u8; 32]>,
-    /// R3-M2.5: in-circuit Merkle fold STARK over ValMmcs Keccak digests.
+    /// R3-M2.5b: Merkle fold + in-circuit Keccak-256 leaf/compress sponges.
     pub merkle_fold: KeccakMerklePathProof,
 }
 
