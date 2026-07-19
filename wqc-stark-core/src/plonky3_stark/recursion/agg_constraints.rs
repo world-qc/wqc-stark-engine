@@ -36,6 +36,7 @@ mod tests {
     #[test]
     fn honest_agg_rows_pass() {
         let mut row = vec![Mersenne31::ZERO; AGG_WIDTH];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..64 {
             row[i] = Mersenne31::from_u32(i as u32);
         }

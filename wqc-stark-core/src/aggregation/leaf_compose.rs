@@ -39,7 +39,7 @@ pub(crate) fn compose_v3_body(proof: &[u8]) -> &[u8] {
         if let Some((v3, _)) = split_agg_tail(body) {
             return v3;
         }
-        return body;
+        body
     }
     #[cfg(not(feature = "plonky3-stark"))]
     {

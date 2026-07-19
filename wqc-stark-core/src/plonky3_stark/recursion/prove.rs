@@ -5,7 +5,6 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
-use crate::aggregation::CHILD_HASH_LEN;
 use crate::air::pad_air_matrix_for_uni_stark;
 use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
 
@@ -13,7 +12,6 @@ use super::air::{
     RecursiveAggregationAir, REC_AGG_WIDTH, REC_LEFT_KIND_COL, REC_LEFT_OK_COL,
     REC_LEFT_STARK_DIGEST_COL, REC_RIGHT_KIND_COL, REC_RIGHT_OK_COL, REC_RIGHT_STARK_DIGEST_COL,
 };
-use super::child_binding::STARK_DIGEST_LEN;
 use super::context::RecursiveAggregationContext;
 use super::transcript_v5::{decode_rec_agg_proof_owned, encode_rec_agg_proof};
 
@@ -111,6 +109,8 @@ pub fn verify_recursive_aggregation_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregation::CHILD_HASH_LEN;
+    use crate::plonky3_stark::recursion::child_binding::STARK_DIGEST_LEN;
 
     #[test]
     fn recursive_agg_roundtrip() {
