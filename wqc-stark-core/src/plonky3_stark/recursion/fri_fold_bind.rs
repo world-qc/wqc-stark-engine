@@ -1,23 +1,27 @@
-//! Bind FriFoldAir steps to AggregationAir Circle FRI openings (R3-M3b1).
+//! Bind FriFoldAir / fold_y steps to AggregationAir Circle FRI (R3-M3b2).
 //!
-//! Replays Fiat-Shamir β / query indices, then for **query 0** extracts every
-//! commit-phase arity-2 fold (siblings + FS β). Intermediate queried values are
-//! recovered by solving the fold equation backward from `final_poly` (reduced
-//! openings / first-layer `fold_y` are not yet reconstructed — honesty bound).
+//! Replays Fiat-Shamir challenges, reconstructs query-0 reduced openings via
+//! DEEP + λ + `fold_y`, then extracts commit-phase `fold_x` witnesses with real
+//! queried evals (no `solve_v0`).
 
+use p3_field::PrimeCharacteristicRing;
 use p3_uni_stark::Proof;
 
 use crate::plonky3_stark::config::{Challenge, WqcStarkConfig};
 
-use super::fri_fold_air::{generate_fri_fold_proof, FriFoldStepProof};
-use super::fri_fold_native::{solve_v0_for_fold, solve_v1_for_fold};
+use super::fri_fold_air::{generate_fri_fold_proof, generate_fri_fold_y_proof, FriFoldStepProof};
+use super::fri_fold_native::fold_x_row;
 use super::fri_fs_replay::{decode_pcs_view, replay_agg_fri_challenges};
+use super::fri_ro::reconstruct_agg_query_ro;
 
-/// Number of FRI queries whose fold chains are STARK-proven in the cert (M3b1).
+/// Number of FRI queries whose fold chains are STARK-proven in the cert.
 pub const AGG_FRI_PROVEN_QUERIES: usize = 1;
 
-/// Max commit-phase rounds for AggregationAir-sized FRI (`log_blowup=1`, height 4).
+/// Max commit-phase rounds for AggregationAir-sized FRI.
 pub const AGG_FRI_MAX_ROUNDS: usize = 4;
+
+/// Max first-layer fold_y steps (one per LDE height; Agg has 2).
+pub const AGG_FRI_MAX_FOLD_YS: usize = 4;
 
 #[derive(Debug, Clone)]
 struct FoldWitness {
@@ -28,24 +32,26 @@ struct FoldWitness {
     v1: Challenge,
 }
 
-/// Builds in-circuit fold proofs for AggregationAir FRI query 0 (all commit rounds).
-pub fn fri_fold_steps_from_agg_proof(
+/// Query-0 FRI fold proofs: first-layer `fold_y`s then commit-phase `fold_x`s.
+#[derive(Debug, Clone)]
+pub struct AggFriFoldBundle {
+    pub fold_ys: Vec<FriFoldStepProof>,
+    pub fold_xs: Vec<FriFoldStepProof>,
+}
+
+/// Builds in-circuit fold proofs for AggregationAir FRI query 0.
+pub fn fri_fold_bundle_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
-) -> Result<Vec<FriFoldStepProof>, String> {
+) -> Result<AggFriFoldBundle, String> {
     let chal = replay_agg_fri_challenges(proof)?;
     let view = decode_pcs_view(proof)?;
     let fri = &view.fri_proof;
     if chal.betas.len() != fri.commit_phase_commits.len() {
         return Err("beta count != commit-phase rounds".into());
     }
-    if fri.query_proofs.is_empty() {
-        return Err("FRI proof has no queries".into());
-    }
-    if chal.query_indices.is_empty() {
-        return Err("no FS query indices".into());
-    }
 
-    let mut all_steps = Vec::new();
+    let mut fold_ys = Vec::new();
+    let mut fold_xs = Vec::new();
     for q in 0..AGG_FRI_PROVEN_QUERIES {
         let qp = fri
             .query_proofs
@@ -55,16 +61,30 @@ pub fn fri_fold_steps_from_agg_proof(
             .query_indices
             .get(q)
             .ok_or_else(|| format!("missing FS query index {q}"))?;
-        let witnesses = extract_query_fold_chain(
+        let (reduced, y_wits) = reconstruct_agg_query_ro(proof, &chal, &view, q)?;
+        if y_wits.len() > AGG_FRI_MAX_FOLD_YS {
+            return Err(format!("too many fold_y steps: {}", y_wits.len()));
+        }
+        for w in &y_wits {
+            fold_ys.push(generate_fri_fold_y_proof(
+                w.index,
+                w.log_folded_height,
+                w.beta,
+                w.v0,
+                w.v1,
+            )?);
+        }
+        let x_wits = extract_query_fold_chain_forward(
             qp,
             &chal.betas,
             query_index,
             chal.extra_query_index_bits,
             chal.log_blowup,
             fri.final_poly,
+            &reduced,
         )?;
-        for w in witnesses {
-            all_steps.push(generate_fri_fold_proof(
+        for w in x_wits {
+            fold_xs.push(generate_fri_fold_proof(
                 w.index,
                 w.log_folded_height,
                 w.beta,
@@ -73,10 +93,17 @@ pub fn fri_fold_steps_from_agg_proof(
             )?);
         }
     }
-    Ok(all_steps)
+    Ok(AggFriFoldBundle { fold_ys, fold_xs })
 }
 
-fn extract_query_fold_chain(
+/// Legacy helper: commit-phase fold_x steps only.
+pub fn fri_fold_steps_from_agg_proof(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<Vec<FriFoldStepProof>, String> {
+    Ok(fri_fold_bundle_from_agg_proof(proof)?.fold_xs)
+}
+
+fn extract_query_fold_chain_forward(
     qp: &p3_circle::CircleQueryProof<
         Challenge,
         crate::plonky3_stark::config::ChallengeMmcs,
@@ -92,6 +119,7 @@ fn extract_query_fold_chain(
     extra_bits: usize,
     log_blowup: usize,
     final_poly: Challenge,
+    reduced: &[(usize, Challenge)],
 ) -> Result<Vec<FoldWitness>, String> {
     let openings = &qp.commit_phase_openings;
     if openings.len() != betas.len() {
@@ -103,35 +131,23 @@ fn extract_query_fold_chain(
             openings.len()
         ));
     }
-
-    let log_arities: Vec<usize> = openings.iter().map(|o| o.log_arity as usize).collect();
-    if log_arities.iter().any(|&a| a != 1) {
-        return Err("M3b1 only supports arity-2 (log_arity=1) rounds".into());
+    if openings.iter().any(|o| o.log_arity != 1) {
+        return Err("M3b2 only supports arity-2 (log_arity=1) rounds".into());
     }
 
-    // Forward schedule of parent indices / index_in_group / log_folded_height.
     let mut index = query_index >> extra_bits;
-    let mut log_current = log_arities.iter().sum::<usize>() + log_blowup;
-    let mut schedule = Vec::with_capacity(openings.len());
-    for &log_arity in &log_arities {
-        let arity = 1 << log_arity;
-        let index_in_group = index % arity;
-        let log_folded = log_current - log_arity;
-        index >>= log_arity;
-        schedule.push((index, index_in_group, log_folded));
-        log_current = log_folded;
-    }
-    if log_current != log_blowup {
-        return Err(format!(
-            "final fold height {log_current} != log_blowup {log_blowup}"
-        ));
-    }
+    let mut log_current = openings.len() + log_blowup; // sum(log_arities)=rounds when all 1
+    let mut folded_eval = Challenge::ZERO;
+    let mut ro_iter = reduced.iter().peekable();
+    let mut witnesses = Vec::with_capacity(openings.len());
 
-    // Backward: start from final_poly, solve queried eval each round.
-    let mut out = final_poly;
-    let mut rev_witnesses = Vec::with_capacity(openings.len());
-    for round in (0..openings.len()).rev() {
-        let opening = &openings[round];
+    for (round, opening) in openings.iter().enumerate() {
+        if let Some(&&(lh, ro)) = ro_iter.peek() {
+            if lh == log_current {
+                folded_eval += ro;
+                ro_iter.next();
+            }
+        }
         if opening.sibling_values.len() != 1 {
             return Err(format!(
                 "round {round}: expected 1 sibling, got {}",
@@ -139,31 +155,37 @@ fn extract_query_fold_chain(
             ));
         }
         let sibling = opening.sibling_values[0];
-        let beta = betas[round];
-        let (parent_idx, index_in_group, log_folded) = schedule[round];
+        let index_in_group = index % 2;
         let (v0, v1) = if index_in_group == 0 {
-            let v0 = solve_v0_for_fold(parent_idx, log_folded, beta, sibling, out);
-            (v0, sibling)
-        } else if index_in_group == 1 {
-            let v1 = solve_v1_for_fold(parent_idx, log_folded, beta, sibling, out);
-            (sibling, v1)
+            (folded_eval, sibling)
         } else {
-            return Err(format!("unexpected index_in_group {index_in_group}"));
+            (sibling, folded_eval)
         };
-        // Queried eval at this round becomes the previous round's `out` when going backward
-        // (ignoring reduced-opening roll-in — M3b1 honesty bound).
-        let queried = if index_in_group == 0 { v0 } else { v1 };
-        rev_witnesses.push(FoldWitness {
-            index: parent_idx,
+        let log_folded = log_current - 1;
+        index >>= 1;
+        let out = fold_x_row(index, log_folded, betas[round], v0, v1);
+        witnesses.push(FoldWitness {
+            index,
             log_folded_height: log_folded,
-            beta,
+            beta: betas[round],
             v0,
             v1,
         });
-        out = queried;
+        folded_eval = out;
+        log_current = log_folded;
     }
-    rev_witnesses.reverse();
-    Ok(rev_witnesses)
+    if log_current != log_blowup {
+        return Err(format!(
+            "final fold height {log_current} != log_blowup {log_blowup}"
+        ));
+    }
+    if folded_eval != final_poly {
+        return Err("forward FRI fold chain does not match final_poly".into());
+    }
+    if ro_iter.next().is_some() {
+        return Err("unused reduced openings remain".into());
+    }
+    Ok(witnesses)
 }
 
 #[cfg(test)]
@@ -172,14 +194,16 @@ mod tests {
     use crate::aggregation::CHILD_HASH_LEN;
     use crate::plonky3_stark::aggregation::AggregationContext;
     use crate::plonky3_stark::generate_aggregation_proof;
-    use crate::plonky3_stark::recursion::fri_fold_air::verify_fri_fold_proof;
+    use crate::plonky3_stark::recursion::fri_fold_air::{
+        verify_fri_fold_proof, verify_fri_fold_y_proof,
+    };
     use crate::plonky3_stark::recursion::fri_fold_native::{
-        challenge_to_limbs, fold_x_row, limbs_to_challenge,
+        challenge_to_limbs, limbs_to_challenge,
     };
     use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
     #[test]
-    fn fri_fold_chain_query0_uses_fs_betas() {
+    fn fri_fold_bundle_query0_matches_final_poly() {
         let ctx = AggregationContext {
             parent_task_id: "parent",
             compose_label: "L1:0",
@@ -191,30 +215,18 @@ mod tests {
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_agg_fri_challenges(&proof).expect("fs");
-        let steps = fri_fold_steps_from_agg_proof(&proof).expect("folds");
-        assert_eq!(steps.len(), chal.betas.len());
-        for (step, beta) in steps.iter().zip(&chal.betas) {
+        let bundle = fri_fold_bundle_from_agg_proof(&proof).expect("bundle");
+        assert_eq!(bundle.fold_ys.len(), 2);
+        assert_eq!(bundle.fold_xs.len(), chal.betas.len());
+        for y in &bundle.fold_ys {
+            assert!(verify_fri_fold_y_proof(y));
+            assert_eq!(y.beta_limbs, challenge_to_limbs(chal.bivariate_beta));
+        }
+        for (step, beta) in bundle.fold_xs.iter().zip(&chal.betas) {
             assert!(verify_fri_fold_proof(step));
             assert_eq!(step.beta_limbs, challenge_to_limbs(*beta));
         }
-        // Chain links: out of round i equals queried input of round i+1 (by construction).
-        for win in steps.windows(2) {
-            let out = limbs_to_challenge(win[0].out_limbs);
-            let v0 = limbs_to_challenge(win[1].v0_limbs);
-            let v1 = limbs_to_challenge(win[1].v1_limbs);
-            let beta = limbs_to_challenge(win[1].beta_limbs);
-            let folded = fold_x_row(
-                win[1].index as usize,
-                win[1].log_folded_height as usize,
-                beta,
-                v0,
-                v1,
-            );
-            assert_eq!(folded, limbs_to_challenge(win[1].out_limbs));
-            // Previous out equals one of the next inputs (queried slot).
-            assert!(out == v0 || out == v1);
-        }
-        let last_out = limbs_to_challenge(steps.last().unwrap().out_limbs);
+        let last_out = limbs_to_challenge(bundle.fold_xs.last().unwrap().out_limbs);
         let view = decode_pcs_view(&proof).unwrap();
         assert_eq!(last_out, view.fri_proof.final_poly);
     }

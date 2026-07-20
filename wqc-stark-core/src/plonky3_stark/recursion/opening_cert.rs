@@ -1,10 +1,8 @@
-//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b1).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b2).
 //!
 //! Rebuild Circle PCS commitment, open an LDE row, host-check `Mmcs::verify_batch`,
-//! attach a [`KeccakMerklePathProof`] (MerkleFoldAir + in-circuit Keccak-256
-//! leaf/compress sponges), and FS-bound [`FriFoldStepProof`]s for FRI query 0
-//! (all commit-phase rounds). Full query coverage / first-layer `fold_y` / leaf
-//! wrap remain later M3b slices.
+//! attach a [`KeccakMerklePathProof`], first-layer [`FriFoldStepProof`] `fold_y`s,
+//! and FS+RO-bound commit-phase `fold_x`s for FRI query 0.
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -22,9 +20,9 @@ use crate::plonky3_stark::config::{devnet_circle_config, ValMmcs, WqcStarkConfig
 use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
 use super::agg_constraints::aggregation_air_constraints_hold;
-use super::fri_fold_air::{verify_fri_fold_proof, FriFoldStepProof};
+use super::fri_fold_air::{verify_fri_fold_proof, verify_fri_fold_y_proof, FriFoldStepProof};
 use super::fri_fold_bind::{
-    fri_fold_steps_from_agg_proof, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
+    fri_fold_bundle_from_agg_proof, AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
 };
 use super::keccak_merkle_air::{
     generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
@@ -51,7 +49,9 @@ pub struct AggPcsCertificate {
     pub siblings: Vec<[u8; 32]>,
     /// R3-M2.5b: Merkle fold + in-circuit Keccak-256 leaf/compress sponges.
     pub merkle_fold: KeccakMerklePathProof,
-    /// R3-M3b1: in-circuit Circle FRI `fold_x` steps (query 0, all rounds) with FS β.
+    /// R3-M3b2: first-layer Circle FRI `fold_y` steps (query 0).
+    pub fri_fold_ys: Vec<FriFoldStepProof>,
+    /// R3-M3b2: commit-phase Circle FRI `fold_x` steps (query 0, all rounds) with FS β + RO.
     pub fri_folds: Vec<FriFoldStepProof>,
 }
 
@@ -175,14 +175,30 @@ pub fn build_agg_pcs_certificate(
         return Err("R3-M2.5 Merkle fold self-check failed".into());
     }
 
-    let fri_folds = fri_fold_steps_from_agg_proof(&proof)
-        .map_err(|e| format!("R3-M3b1 FRI fold prove failed: {e}"))?;
-    if fri_folds.is_empty() || fri_folds.len() > AGG_FRI_MAX_ROUNDS * AGG_FRI_PROVEN_QUERIES {
-        return Err(format!("unexpected FRI fold count: {}", fri_folds.len()));
+    let fri_bundle = fri_fold_bundle_from_agg_proof(&proof)
+        .map_err(|e| format!("R3-M3b2 FRI fold prove failed: {e}"))?;
+    if fri_bundle.fold_ys.is_empty() || fri_bundle.fold_ys.len() > AGG_FRI_MAX_FOLD_YS {
+        return Err(format!(
+            "unexpected FRI fold_y count: {}",
+            fri_bundle.fold_ys.len()
+        ));
     }
-    for (i, fold) in fri_folds.iter().enumerate() {
+    if fri_bundle.fold_xs.is_empty()
+        || fri_bundle.fold_xs.len() > AGG_FRI_MAX_ROUNDS * AGG_FRI_PROVEN_QUERIES
+    {
+        return Err(format!(
+            "unexpected FRI fold_x count: {}",
+            fri_bundle.fold_xs.len()
+        ));
+    }
+    for (i, fold) in fri_bundle.fold_ys.iter().enumerate() {
+        if !verify_fri_fold_y_proof(fold) {
+            return Err(format!("R3-M3b2 FRI fold_y self-check failed at step {i}"));
+        }
+    }
+    for (i, fold) in fri_bundle.fold_xs.iter().enumerate() {
         if !verify_fri_fold_proof(fold) {
-            return Err(format!("R3-M3b1 FRI fold self-check failed at step {i}"));
+            return Err(format!("R3-M3b2 FRI fold_x self-check failed at step {i}"));
         }
     }
 
@@ -195,7 +211,8 @@ pub fn build_agg_pcs_certificate(
         lde_row,
         siblings: batch.opening_proof,
         merkle_fold,
-        fri_folds,
+        fri_fold_ys: fri_bundle.fold_ys,
+        fri_folds: fri_bundle.fold_xs,
     })
 }
 
@@ -227,6 +244,7 @@ pub fn verify_agg_pcs_certificate(
                 || rebuilt.lde_row != cert.lde_row
                 || rebuilt.siblings != cert.siblings
                 || rebuilt.merkle_fold != cert.merkle_fold
+                || rebuilt.fri_fold_ys != cert.fri_fold_ys
                 || rebuilt.fri_folds != cert.fri_folds
             {
                 eprintln!("[AggPcsCertificate] Failed: rebuilt certificate mismatch");
@@ -241,6 +259,12 @@ pub fn verify_agg_pcs_certificate(
             ) {
                 eprintln!("[AggPcsCertificate] Failed: Merkle fold STARK");
                 return false;
+            }
+            for (i, fold) in cert.fri_fold_ys.iter().enumerate() {
+                if !verify_fri_fold_y_proof(fold) {
+                    eprintln!("[AggPcsCertificate] Failed: FRI fold_y STARK at {i}");
+                    return false;
+                }
             }
             for (i, fold) in cert.fri_folds.iter().enumerate() {
                 if !verify_fri_fold_proof(fold) {

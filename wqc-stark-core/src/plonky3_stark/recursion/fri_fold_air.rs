@@ -14,7 +14,8 @@ use crate::air::pad_air_matrix_for_uni_stark;
 use crate::plonky3_stark::config::{devnet_circle_config, Challenge, WqcStarkConfig};
 
 use super::fri_fold_native::{
-    challenge_to_limbs, fold_x_row, fold_x_twiddle_inv, limbs_to_challenge,
+    challenge_to_limbs, fold_x_row, fold_x_twiddle_inv, fold_y_row, fold_y_twiddle_inv,
+    limbs_to_challenge,
 };
 
 /// Public layout length.
@@ -269,6 +270,95 @@ pub fn verify_fri_fold_proof(proof: &FriFoldStepProof) -> bool {
     }
 }
 
+pub fn generate_fri_fold_y_proof(
+    index: usize,
+    log_folded_height: usize,
+    beta: Challenge,
+    v0: Challenge,
+    v1: Challenge,
+) -> Result<FriFoldStepProof, String> {
+    if log_folded_height == 0 || log_folded_height > 16 {
+        return Err("log_folded_height out of range".into());
+    }
+    if index >= (1 << log_folded_height) {
+        return Err("index out of range for log_folded_height".into());
+    }
+    let t_inv = fold_y_twiddle_inv(index, log_folded_height);
+    let out = fold_y_row(index, log_folded_height, beta, v0, v1);
+    let pv = build_public_values(
+        index as u32,
+        log_folded_height as u32,
+        t_inv,
+        beta,
+        v0,
+        v1,
+        out,
+    );
+    let matrix = pad_air_matrix_for_uni_stark(build_matrix());
+    p3_air::check_constraints(&FriFoldAir, &matrix, &pv);
+    let config = devnet_circle_config();
+    let proof = prove(&config, &FriFoldAir, matrix, &pv);
+    let fold_stark =
+        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri fold_y: {e}"))?;
+    Ok(FriFoldStepProof {
+        index: index as u32,
+        log_folded_height: log_folded_height as u32,
+        t_inv,
+        beta_limbs: challenge_to_limbs(beta),
+        v0_limbs: challenge_to_limbs(v0),
+        v1_limbs: challenge_to_limbs(v1),
+        out_limbs: challenge_to_limbs(out),
+        fold_stark,
+    })
+}
+
+pub fn verify_fri_fold_y_proof(proof: &FriFoldStepProof) -> bool {
+    let beta = limbs_to_challenge(proof.beta_limbs);
+    let v0 = limbs_to_challenge(proof.v0_limbs);
+    let v1 = limbs_to_challenge(proof.v1_limbs);
+    let out = limbs_to_challenge(proof.out_limbs);
+    let expect_t = fold_y_twiddle_inv(proof.index as usize, proof.log_folded_height as usize);
+    if proof.t_inv != expect_t {
+        eprintln!("[FriFoldY] Failed: twiddle mismatch");
+        return false;
+    }
+    let expect_out = fold_y_row(
+        proof.index as usize,
+        proof.log_folded_height as usize,
+        beta,
+        v0,
+        v1,
+    );
+    if out != expect_out {
+        eprintln!("[FriFoldY] Failed: native fold mismatch");
+        return false;
+    }
+    let pv = build_public_values(
+        proof.index,
+        proof.log_folded_height,
+        proof.t_inv,
+        beta,
+        v0,
+        v1,
+        out,
+    );
+    let stark: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&proof.fold_stark) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[FriFoldY] postcard: {e}");
+            return false;
+        }
+    };
+    let config = devnet_circle_config();
+    match verify(&config, &FriFoldAir, &stark, &pv) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("[FriFoldY] STARK: {e:?}");
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +387,30 @@ mod tests {
         ]);
         let proof = generate_fri_fold_proof(index, log_h, beta, v0, v1).expect("prove");
         assert!(verify_fri_fold_proof(&proof));
+    }
+
+    #[test]
+    fn fri_fold_y_stark_roundtrip() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(13);
+        let log_h = 2usize;
+        let index = 0usize;
+        let beta = Challenge::new([
+            Mersenne31::from_u32(rng.gen()),
+            Mersenne31::from_u32(rng.gen()),
+            Mersenne31::from_u32(rng.gen()),
+        ]);
+        let v0 = Challenge::new([
+            Mersenne31::from_u32(rng.gen()),
+            Mersenne31::from_u32(rng.gen()),
+            Mersenne31::from_u32(rng.gen()),
+        ]);
+        let v1 = Challenge::new([
+            Mersenne31::from_u32(rng.gen()),
+            Mersenne31::from_u32(rng.gen()),
+            Mersenne31::from_u32(rng.gen()),
+        ]);
+        let proof = generate_fri_fold_y_proof(index, log_h, beta, v0, v1).expect("prove");
+        assert!(verify_fri_fold_y_proof(&proof));
+        assert!(!verify_fri_fold_proof(&proof)); // x-twiddle check must fail
     }
 }

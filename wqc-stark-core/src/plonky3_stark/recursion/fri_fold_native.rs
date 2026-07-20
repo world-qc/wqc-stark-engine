@@ -14,9 +14,9 @@ use crate::plonky3_stark::config::Challenge;
 pub type Val = Mersenne31;
 
 #[derive(Copy, Clone)]
-struct CircPoint {
-    x: Val,
-    y: Val,
+pub(crate) struct CircPoint {
+    pub(crate) x: Val,
+    pub(crate) y: Val,
 }
 
 impl CircPoint {
@@ -79,6 +79,67 @@ pub fn fold_x_row(
     (sum + beta * diff).halve()
 }
 
+/// Twiddle inverse `t` for `fold_y_row` (y-twiddle, CFFT-permuted).
+pub fn fold_y_twiddle_inv(index: usize, log_folded_height: usize) -> Val {
+    let log_n = log_folded_height + 1;
+    let twiddle_idx = cfft_permute_index(index << 1, log_n);
+    let p = standard_nth_point(log_n, twiddle_idx);
+    p.y.inverse()
+}
+
+/// Circle FRI arity-2 `fold_y_row` (first-layer bivariate fold).
+pub fn fold_y_row(
+    index: usize,
+    log_folded_height: usize,
+    beta: Challenge,
+    v0: Challenge,
+    v1: Challenge,
+) -> Challenge {
+    let t = fold_y_twiddle_inv(index, log_folded_height);
+    let t_ef = Challenge::from(t);
+    let sum = v0 + v1;
+    let diff = (v0 - v1) * t_ef;
+    (sum + beta * diff).halve()
+}
+
+/// CFFT index permutation (mirrors `p3_circle::ordering::cfft_permute_index`).
+pub fn cfft_permute_index(index: usize, log_n: usize) -> usize {
+    let (index, lsb) = (index >> 1, index & 1);
+    reverse_bits_len(
+        if lsb == 0 {
+            index
+        } else {
+            (1 << log_n) - index - 1
+        },
+        log_n,
+    )
+}
+
+/// `CircleDomain::standard(log_n).nth_point(idx)` (p3-circle nth_point is crate-private).
+pub(crate) fn standard_nth_point(log_n: usize, idx: usize) -> CircPoint {
+    let shift = CircPoint::generator(log_n + 1);
+    let gen = CircPoint::generator(log_n - 1);
+    let (half, lsb) = (idx >> 1, idx & 1);
+    if lsb == 0 {
+        shift.add(gen.mul_usize(half))
+    } else {
+        CircPoint {
+            x: -shift.x,
+            y: -shift.y,
+        }
+        .add(gen.mul_usize(half + 1))
+    }
+}
+
+/// Vanishing `v_n` on the standard coset (Point::v_n).
+pub(crate) fn point_v_n(mut x: Val, log_n: usize) -> Val {
+    debug_assert!(log_n >= 1);
+    for _ in 0..log_n.saturating_sub(1) {
+        x = x.square().double() - Val::ONE;
+    }
+    x
+}
+
 /// Pack a challenge into three M31 limbs (binomial basis).
 pub fn challenge_to_limbs(c: Challenge) -> [Val; 3] {
     let s = c.as_basis_coefficients_slice();
@@ -90,6 +151,7 @@ pub fn limbs_to_challenge(limbs: [Val; 3]) -> Challenge {
 }
 
 /// Solve for `v0` such that `fold_x_row(index, log_h, beta, v0, v1) == out`.
+#[allow(dead_code)] // retained for debugging / comparing against RO-forward witnesses
 pub fn solve_v0_for_fold(
     index: usize,
     log_folded_height: usize,
@@ -106,6 +168,7 @@ pub fn solve_v0_for_fold(
 }
 
 /// Solve for `v1` such that `fold_x_row(index, log_h, beta, v0, v1) == out`.
+#[allow(dead_code)] // retained for debugging / comparing against RO-forward witnesses
 pub fn solve_v1_for_fold(
     index: usize,
     log_folded_height: usize,

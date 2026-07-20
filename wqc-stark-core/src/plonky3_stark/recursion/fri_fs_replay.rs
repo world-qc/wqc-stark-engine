@@ -26,7 +26,6 @@ type AggFriProof = CircleFriProof<Challenge, ChallengeMmcs, Val, AggInputProof>;
 #[serde(bound = "")]
 pub(crate) struct CirclePcsProofView {
     pub(crate) first_layer_commitment: <ChallengeMmcs as Mmcs<Challenge>>::Commitment,
-    #[allow(dead_code)]
     pub(crate) lambdas: Vec<Challenge>,
     pub(crate) fri_proof: AggFriProof,
 }
@@ -34,8 +33,11 @@ pub(crate) struct CirclePcsProofView {
 /// Fiat-Shamir challenges recovered from an AggregationAir proof.
 #[derive(Debug, Clone)]
 pub struct AggFriChallenges {
-    /// First-layer `fold_y` challenge (bound in M3b2; sampled here for FS fidelity).
-    #[allow(dead_code)]
+    /// OOD evaluation point (projective-line coordinate).
+    pub zeta: Challenge,
+    /// PCS batch-combination challenge.
+    pub batch_alpha: Challenge,
+    /// First-layer `fold_y` challenge.
     pub bivariate_beta: Challenge,
     pub betas: Vec<Challenge>,
     pub query_indices: Vec<usize>,
@@ -94,7 +96,7 @@ pub fn replay_agg_fri_challenges(
     // public_values empty
     let _constraint_alpha: Challenge = challenger.sample_algebra_element();
     challenger.observe(proof.commitments.quotient_chunks.clone());
-    let _zeta: Challenge = challenger.sample_algebra_element();
+    let zeta: Challenge = challenger.sample_algebra_element();
 
     // PCS observes opened values in `coms_to_verify` order: trace then quotient.
     challenger.observe_algebra_slice(&proof.opened_values.trace_local);
@@ -103,7 +105,7 @@ pub fn replay_agg_fri_challenges(
         challenger.observe_algebra_slice(chunk);
     }
 
-    let _batch_alpha: Challenge = challenger.sample_algebra_element();
+    let batch_alpha: Challenge = challenger.sample_algebra_element();
     let view = decode_pcs_view(proof)?;
     challenger.observe(view.first_layer_commitment.clone());
     let bivariate_beta: Challenge = challenger.sample_algebra_element();
@@ -163,6 +165,8 @@ pub fn replay_agg_fri_challenges(
     }
 
     Ok(AggFriChallenges {
+        zeta,
+        batch_alpha,
         bivariate_beta,
         betas,
         query_indices,
