@@ -13,6 +13,46 @@ pub const BORN_ZK_MAX_QUBITS: usize = 16;
 /// Soft cap on distinct outcomes encoded as one-hot + mass + claim columns.
 pub const BORN_ZK_MAX_OUTCOMES: usize = 64;
 
+/// Max trace width W for R3 in-circuit ValMmcs Keccak (≤ 2× rate = 272 bytes = 68 M31).
+pub const BORN_RECURSION_MAX_TRACE_WIDTH: usize = 68;
+/// Max outcome buckets K with W = 2 + 3K + 1 ≤ [`BORN_RECURSION_MAX_TRACE_WIDTH`].
+pub const BORN_RECURSION_MAX_OUTCOMES: usize = (BORN_RECURSION_MAX_TRACE_WIDTH - 3) / 3;
+
+/// DistributionAir trace width for K outcome buckets.
+pub fn born_distribution_width(num_outcomes: usize) -> usize {
+    2 + 3 * num_outcomes + 1
+}
+
+/// Inverse of [`born_distribution_width`] when W uses the Born layout.
+pub fn born_num_outcomes_from_width(width: usize) -> Option<usize> {
+    if width < 3 || !(width - 3).is_multiple_of(3) {
+        return None;
+    }
+    Some((width - 3) / 3)
+}
+
+/// True when K is valid for R3 leaf PCS (in-circuit Keccak sponge over W M31 limbs).
+pub fn born_recursion_outcomes_ok(num_outcomes: usize) -> bool {
+    num_outcomes > 0 && born_distribution_width(num_outcomes) <= BORN_RECURSION_MAX_TRACE_WIDTH
+}
+
+pub fn validate_born_recursion_outcomes(num_outcomes: usize) -> Result<(), String> {
+    if born_recursion_outcomes_ok(num_outcomes) {
+        return Ok(());
+    }
+    Err(format!(
+        "Born K={num_outcomes} exceeds recursion cap K≤{BORN_RECURSION_MAX_OUTCOMES} \
+         (W=2+3K+1≤{BORN_RECURSION_MAX_TRACE_WIDTH} for in-circuit Keccak)"
+    ))
+}
+
+pub fn validate_born_recursion_width(width: usize) -> Result<usize, String> {
+    let k = born_num_outcomes_from_width(width)
+        .ok_or_else(|| format!("invalid DistributionAir trace width {width}"))?;
+    validate_born_recursion_outcomes(k)?;
+    Ok(k)
+}
+
 /// Fixed-point scale — matches quantum execution AIR (`10_000`).
 pub const BORN_ZK_SCALE: u32 = 10_000;
 
@@ -175,5 +215,27 @@ where
                 .when(is_pad.clone())
                 .assert_zero(curr[self.col_sel(k)]);
         }
+    }
+}
+
+#[cfg(test)]
+mod born_recursion_width_tests {
+    use super::*;
+
+    #[test]
+    fn born_recursion_k21_fits_keccak_cap() {
+        assert_eq!(BORN_RECURSION_MAX_OUTCOMES, 21);
+        assert_eq!(born_distribution_width(21), 66);
+        assert!(born_recursion_outcomes_ok(21));
+        validate_born_recursion_outcomes(21).expect("K=21");
+        validate_born_recursion_width(66).expect("W=66");
+    }
+
+    #[test]
+    fn born_recursion_k22_exceeds_keccak_cap() {
+        assert_eq!(born_distribution_width(22), 69);
+        assert!(!born_recursion_outcomes_ok(22));
+        assert!(validate_born_recursion_outcomes(22).is_err());
+        assert!(validate_born_recursion_width(69).is_err());
     }
 }

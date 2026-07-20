@@ -111,3 +111,13 @@ pub fn streaming_zk_shape_ok(qubit_count: usize, num_outcomes: usize, dim: usize
         && num_outcomes <= BORN_ZK_MAX_OUTCOMES
         && dim == (1usize << qubit_count)
 }
+
+/// Like [`streaming_zk_shape_ok`], plus R3 recursion Keccak width cap (K ≤ 21).
+pub fn streaming_recursion_zk_shape_ok(
+    qubit_count: usize,
+    num_outcomes: usize,
+    dim: usize,
+) -> bool {
+    streaming_zk_shape_ok(qubit_count, num_outcomes, dim)
+        && crate::plonky3_stark::distribution_air::born_recursion_outcomes_ok(num_outcomes)
+}

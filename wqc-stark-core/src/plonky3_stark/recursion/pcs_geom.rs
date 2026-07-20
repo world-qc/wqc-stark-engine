@@ -3,16 +3,21 @@
 use p3_uni_stark::{Proof, StarkGenericConfig};
 
 use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
-use crate::plonky3_stark::distribution_air::DistributionAir;
 use crate::plonky3_stark::shot_sampling_air::SHOT_SAMPLING_AIR_WIDTH;
 use crate::trace_spec::AIR_WIDTH;
 
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
 
+pub use crate::plonky3_stark::distribution_air::{
+    born_distribution_width, born_num_outcomes_from_width, born_recursion_outcomes_ok,
+    validate_born_recursion_outcomes, validate_born_recursion_width, BORN_RECURSION_MAX_OUTCOMES,
+    BORN_RECURSION_MAX_TRACE_WIDTH,
+};
+
 /// Max rows in a multi-chunk quotient [`FriChalBatchPathProof`] (chunks + optional concat).
 pub const MAX_QUOT_BATCH_LEAF_ROWS: usize = 64;
 /// Limited by 2-block Keccak sponge (`≤ 2·136` bytes ⇒ 68 M31). Born K≤21.
-pub const LEAF_DEEP_RO_MAX_WIDTH: usize = 68;
+pub const LEAF_DEEP_RO_MAX_WIDTH: usize = BORN_RECURSION_MAX_TRACE_WIDTH;
 
 /// Unitary / traj-marginal / shot fixed widths.
 pub const UNITARY_TRACE_WIDTH: usize = AIR_WIDTH; // 21
@@ -50,11 +55,7 @@ impl PcsGeom {
     }
 
     pub fn born_width(num_outcomes: usize) -> usize {
-        DistributionAir {
-            dim: 1,
-            num_outcomes,
-        }
-        .width()
+        born_distribution_width(num_outcomes)
     }
 }
 

@@ -40,7 +40,9 @@ use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_leaf_ood_step;
 use super::ood_native::generate_leaf_ood_proof;
 use super::opening_cert::LEAF_PCS_MAX_SIBLINGS;
-use super::pcs_geom::{LeafKind, UNITARY_TRACE_WIDTH};
+use super::pcs_geom::{
+    validate_born_recursion_width, LeafKind, LEAF_DEEP_RO_MAX_WIDTH, UNITARY_TRACE_WIDTH,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeafPcsCertificate {
@@ -116,10 +118,29 @@ fn path_self_check_chal(qp: &FriChalMmcsQueryProof) -> bool {
 }
 
 fn num_outcomes_from_width(width: usize) -> Result<usize, String> {
-    if width < 3 || !(width - 3).is_multiple_of(3) {
-        return Err(format!("invalid DistributionAir width {width}"));
+    validate_born_recursion_width(width)
+}
+
+fn validate_leaf_recursion_trace_width(kind: LeafKind, trace_width: usize) -> Result<(), String> {
+    if trace_width == 0 || trace_width > LEAF_DEEP_RO_MAX_WIDTH {
+        return Err(format!(
+            "unsupported leaf trace width {trace_width} (max W={LEAF_DEEP_RO_MAX_WIDTH} for in-circuit Keccak)"
+        ));
     }
-    Ok((width - 3) / 3)
+    match kind {
+        LeafKind::Unitary => {
+            if trace_width != UNITARY_TRACE_WIDTH {
+                return Err(format!(
+                    "unitary width {trace_width} != {UNITARY_TRACE_WIDTH}"
+                ));
+            }
+        }
+        LeafKind::Born | LeafKind::TrajMarginal => {
+            validate_born_recursion_width(trace_width)?;
+        }
+        LeafKind::ShotSampling => {}
+    }
+    Ok(())
 }
 
 enum LeafOodParams {
@@ -155,14 +176,7 @@ pub fn build_leaf_pcs_certificate(
         return Err("stmt_digest mismatch".into());
     }
     let trace_width = proof.opened_values.trace_local.len();
-    if trace_width == 0 || trace_width > super::pcs_geom::LEAF_DEEP_RO_MAX_WIDTH {
-        return Err(format!("unsupported leaf trace width {trace_width}"));
-    }
-    if matches!(kind, LeafKind::Unitary) && trace_width != UNITARY_TRACE_WIDTH {
-        return Err(format!(
-            "unitary width {trace_width} != {UNITARY_TRACE_WIDTH}"
-        ));
-    }
+    validate_leaf_recursion_trace_width(kind, trace_width)?;
 
     let ood_params = ood_params_for_kind(kind, proof)?;
     let num_outcomes = match ood_params {
@@ -293,6 +307,10 @@ pub fn verify_leaf_pcs_certificate(
     let trace_width = proof.opened_values.trace_local.len();
     if cert.trace_width as usize != trace_width || cert.degree_bits as usize != proof.degree_bits {
         eprintln!("[LeafPcsCertificate] Failed: geom mismatch");
+        return false;
+    }
+    if validate_leaf_recursion_trace_width(cert.kind, trace_width).is_err() {
+        eprintln!("[LeafPcsCertificate] Failed: trace width exceeds recursion Keccak cap");
         return false;
     }
     let root = match commitment_root(&proof.commitments.trace) {

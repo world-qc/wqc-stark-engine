@@ -578,4 +578,22 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn val_leaf_keccak_max_born_width_roundtrip() {
+        use crate::plonky3_stark::distribution_air::{
+            born_distribution_width, BORN_RECURSION_MAX_OUTCOMES,
+        };
+        let w = born_distribution_width(BORN_RECURSION_MAX_OUTCOMES);
+        assert_eq!(w, 66);
+        let row = vec![Mersenne31::from_u32(7); w];
+        let proof = prove_val_leaf(&row).expect("prove born-max width");
+        assert!(verify_val_leaf(&row, &proof));
+    }
+
+    #[test]
+    fn val_leaf_keccak_rejects_over_max_width() {
+        let row = vec![Mersenne31::ZERO; LEAF_DEEP_RO_MAX_WIDTH + 1];
+        assert!(prove_val_leaf(&row).is_err());
+    }
 }

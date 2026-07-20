@@ -111,6 +111,23 @@ pub fn segment_supports_born_zk(segment: &DistributionSegment) -> bool {
     build_distribution_air(segment).is_some()
 }
 
+/// Born zk segment that also fits R3 leaf PCS (K ≤ 21, W ≤ 68 for in-circuit Keccak).
+pub fn segment_supports_born_recursion_zk(segment: &DistributionSegment) -> bool {
+    let air = match build_distribution_air(segment) {
+        Some(a) => a,
+        None => return false,
+    };
+    let binding = match segment.born_binding.as_ref() {
+        Some(b) => b,
+        None => return false,
+    };
+    super::streaming_distribution::streaming_recursion_zk_shape_ok(
+        binding.qubit_count as usize,
+        air.num_outcomes,
+        air.dim,
+    )
+}
+
 /// Generates a Born-rule Plonky3 STARK transcript bound to `probability_digest`.
 pub fn generate_born_stark_proof(
     context: &BornStarkContext<'_>,

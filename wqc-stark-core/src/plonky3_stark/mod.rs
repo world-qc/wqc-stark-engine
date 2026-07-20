@@ -33,8 +33,8 @@ pub use aggregation::{generate_aggregation_proof, verify_aggregation_proof, Aggr
 pub use config::devnet_circle_config;
 #[cfg(feature = "plonky3-stark")]
 pub use distribution_stark::{
-    generate_born_stark_proof, segment_supports_born_zk, verify_born_stark_proof, BornStarkContext,
-    BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS,
+    generate_born_stark_proof, segment_supports_born_recursion_zk, segment_supports_born_zk,
+    verify_born_stark_proof, BornStarkContext, BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS,
 };
 pub use quantum_air::QuantumExecutionAir;
 #[cfg(feature = "plonky3-stark")]

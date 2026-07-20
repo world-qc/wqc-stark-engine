@@ -120,8 +120,10 @@ pub use opening_cert::{
     parse_agg_v4_header_any, verify_agg_pcs_certificate, AggPcsCertificate,
 };
 pub use pcs_geom::{
-    LeafKind, PcsGeom, LEAF_DEEP_RO_MAX_WIDTH, SHOT_TRACE_WIDTH, TRAJ_MARGINAL_TRACE_WIDTH,
-    UNITARY_TRACE_WIDTH,
+    born_distribution_width, born_num_outcomes_from_width, born_recursion_outcomes_ok,
+    validate_born_recursion_outcomes, validate_born_recursion_width, LeafKind, PcsGeom,
+    BORN_RECURSION_MAX_OUTCOMES, BORN_RECURSION_MAX_TRACE_WIDTH, LEAF_DEEP_RO_MAX_WIDTH,
+    SHOT_TRACE_WIDTH, TRAJ_MARGINAL_TRACE_WIDTH, UNITARY_TRACE_WIDTH,
 };
 pub use prove::{
     append_rec_tail, generate_recursive_aggregation_proof, has_rec_tail, split_rec_tail,
