@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use p3_commit::{BatchOpening, Mmcs, Pcs, PolynomialSpace};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::PrimeCharacteristicRing;
 use p3_uni_stark::{Proof, StarkGenericConfig};
 use serde::Deserialize;
 
@@ -18,6 +18,7 @@ use crate::plonky3_stark::config::{
     devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
 };
 
+use super::deep_ro_native::deep_quotient_reduce_row;
 use super::fri_fold_native::{cfft_permute_index, fold_y_row, point_v_n, standard_nth_point};
 use super::fri_fs_replay::{AggFriChallenges, CirclePcsProofView};
 
@@ -45,45 +46,6 @@ pub(crate) fn decode_input_proof(
     let bytes = postcard::to_allocvec(fri_qp_input)
         .map_err(|e| format!("postcard encode input_proof: {e}"))?;
     postcard::from_bytes(&bytes).map_err(|e| format!("postcard decode input_proof: {e}"))
-}
-
-/// Projective-line → circle point over Challenge (mirrors `Point::from_projective_line`).
-fn ef_from_projective_line(t: Challenge) -> (Challenge, Challenge) {
-    let t2 = t.square();
-    let inv_denom = (Challenge::ONE + t2).try_inverse().expect("t^2 = -1");
-    ((Challenge::ONE - t2) * inv_denom, t.double() * inv_denom)
-}
-
-/// `Point::v_p` for base point (sx,sy) at extension point `at`.
-fn v_p(sx: Val, sy: Val, at_x: Challenge, at_y: Challenge) -> (Challenge, Challenge) {
-    // diff = -at + self  (Neg flips y; Add is complex multiply)
-    let neg_at_x = at_x;
-    let neg_at_y = -at_y;
-    let diff_x = neg_at_x * Challenge::from(sx) - neg_at_y * Challenge::from(sy);
-    let diff_y = neg_at_x * Challenge::from(sy) + neg_at_y * Challenge::from(sx);
-    (Challenge::ONE - diff_x, -diff_y)
-}
-
-fn deep_quotient_reduce_row(
-    alpha: Challenge,
-    sx: Val,
-    sy: Val,
-    zeta: Challenge,
-    ps_at_x: &[Val],
-    ps_at_zeta: &[Challenge],
-) -> Challenge {
-    let (at_x, at_y) = ef_from_projective_line(zeta);
-    let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
-    let (re_v_zeta, im_v_zeta) = v_p(sx, sy, at_x, at_y);
-    let numerator = re_v_zeta - alpha_pow_width * im_v_zeta;
-    let denominator = re_v_zeta.square() + im_v_zeta.square();
-    let mut constraint = Challenge::ZERO;
-    let mut a = Challenge::ONE;
-    for (&px, &pz) in ps_at_x.iter().zip(ps_at_zeta.iter()) {
-        constraint += a * (Challenge::from(px) - pz);
-        a *= alpha;
-    }
-    (numerator / denominator) * constraint
 }
 
 /// FRI reduced openings after first-layer fold_y: `(log_height, value)`.

@@ -13,6 +13,9 @@ use p3_uni_stark::{prove, verify};
 use crate::air::pad_air_matrix_for_uni_stark;
 use crate::plonky3_stark::config::{devnet_circle_config, Challenge, WqcStarkConfig};
 
+use super::ef_limbs::{
+    ef_add_limbs, ef_assert_eq, ef_halve_limbs, ef_mul_limbs, ef_scale_by_base, ef_sub_limbs,
+};
 use super::fri_fold_native::{
     challenge_to_limbs, fold_x_row, fold_x_twiddle_inv, fold_y_row, fold_y_twiddle_inv,
     limbs_to_challenge,
@@ -39,65 +42,6 @@ impl<F: Field> BaseAir<F> for FriFoldAir {
     fn num_public_values(&self) -> usize {
         FRI_FOLD_NUM_PUBLIC
     }
-}
-
-/// Extension mul of two EF elements (binomial X^3 − 5 over Mersenne31).
-fn ef_mul_limbs<AB: AirBuilder>(a: &[AB::Expr; 3], b: &[AB::Expr; 3]) -> [AB::Expr; 3]
-where
-    AB::F: PrimeCharacteristicRing,
-{
-    let w: AB::Expr = AB::F::from_u32(5).into();
-    let a0_b0 = a[0].clone() * b[0].clone();
-    let a1_b1 = a[1].clone() * b[1].clone();
-    let a2_b2 = a[2].clone() * b[2].clone();
-    let c0 = a0_b0.clone()
-        + ((a[1].clone() + a[2].clone()) * (b[1].clone() + b[2].clone())
-            - a1_b1.clone()
-            - a2_b2.clone())
-            * w.clone();
-    let c1 = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
-        - a0_b0.clone()
-        - a1_b1.clone()
-        + a2_b2.clone() * w;
-    let c2 = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
-    [c0, c1, c2]
-}
-
-fn ef_add_limbs<AB: AirBuilder>(a: &[AB::Expr; 3], b: &[AB::Expr; 3]) -> [AB::Expr; 3] {
-    [
-        a[0].clone() + b[0].clone(),
-        a[1].clone() + b[1].clone(),
-        a[2].clone() + b[2].clone(),
-    ]
-}
-
-fn ef_sub_limbs<AB: AirBuilder>(a: &[AB::Expr; 3], b: &[AB::Expr; 3]) -> [AB::Expr; 3] {
-    [
-        a[0].clone() - b[0].clone(),
-        a[1].clone() - b[1].clone(),
-        a[2].clone() - b[2].clone(),
-    ]
-}
-
-fn ef_halve_limbs<AB: AirBuilder>(a: &[AB::Expr; 3]) -> [AB::Expr; 3]
-where
-    AB::F: Field + PrimeCharacteristicRing,
-{
-    // 2^{-1} = 2^{30} over Mersenne31.
-    let inv2: AB::Expr = AB::F::from_u32(1u32 << 30).into();
-    [
-        a[0].clone() * inv2.clone(),
-        a[1].clone() * inv2.clone(),
-        a[2].clone() * inv2,
-    ]
-}
-
-fn ef_scale_by_base<AB: AirBuilder>(a: &[AB::Expr; 3], s: AB::Expr) -> [AB::Expr; 3] {
-    [
-        a[0].clone() * s.clone(),
-        a[1].clone() * s.clone(),
-        a[2].clone() * s,
-    ]
 }
 
 impl<AB: AirBuilder> Air<AB> for FriFoldAir
@@ -137,9 +81,7 @@ where
         let sum_plus = ef_add_limbs::<AB>(&sum, &beta_diff_t);
         let expected = ef_halve_limbs::<AB>(&sum_plus);
 
-        for i in 0..3 {
-            builder.assert_zero(expected[i].clone() - out[i].clone());
-        }
+        ef_assert_eq(builder, &expected, &out);
     }
 }
 
