@@ -1,6 +1,6 @@
 //! R3 recursive aggregation (M1–M3e).
 //!
-//! See `doc/R3_RECURSION.md`.
+//! Protocol: `wqc-docs/spec/zk-STARK.md` §8. Module map: crate README.
 
 mod agg_constraints;
 mod air;

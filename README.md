@@ -6,7 +6,7 @@
 
 Cryptographic proof engine for the WQC decentralized quantum compute mesh. Provides Mersenne31 **AIR commitment** proofs and Plonky3 uni-STARKs with recursive compose, distribution binding, and trajectory binding for `sample_counts`.
 
-See the [STARK proof specification](https://github.com/world-qc/wqc-docs/tree/main/spec/stark) for the full protocol definition (transcript format, AIR constraints, distribution binding, proof aggregation).
+See the [STARK proof specification](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md) for the full protocol definition (transcript format, AIR constraints, distribution binding, proof aggregation).
 
 ## Architecture
 
@@ -16,7 +16,7 @@ wqc-stark-engine/
 └── wqc-stark-ffi/      # CGO-compatible `libwqc_stark_verifier`
 ```
 
-* **`wqc-stark-core`**: Quantum execution AIR over Plonky3 Mersenne31 field types. Supports embedded trace verification, FRI STARKs via Plonky3 Circle PCS, distribution / trajectory segments, Born and shot-sampling AIRs, and leaf compose proofs.
+* **`wqc-stark-core`**: Quantum execution AIR over Plonky3 Mersenne31 field types. Supports embedded trace verification, FRI STARKs via Plonky3 Circle PCS, distribution / trajectory segments, Born and shot-sampling AIRs, leaf compose proofs, and **R3 in-circuit recursion** (RecAgg V6, agg/leaf PCS certificates, in-circuit OOD / FriFold / DeepRo / Keccak Mmcs; Born K≤21, W≤68).
 * **`wqc-stark-ffi`**: Panic-safe C ABI for the Go orchestrator (leaf verify, compose, root verify, distribution/trajectory binding, scheme detection).
 
 ## Public inputs (`StarkContext`)
@@ -31,39 +31,22 @@ wqc-stark-engine/
 | `terminal_statevector_digest` | Optional; SHA3-256 hex linking unitary leaf ↔ Born / trajectory distribution (empty when unbound) |
 | `measurement_spec_hash` | Optional; SHA3-256 hex of canonical measurement spec JSON bound in the proof transcript (empty when unbound) |
 
-## Proof transcript (v1)
+## Proof transcripts
 
-```text
-<sub_task_id><_M31_QUANTUM_AIR_V1_><circuit_id\0><node_id\0><slice_id\0><output_hash\0>
-<trace_rows: u32 LE><trace f64 LE><air_sum: u32 LE><boundary v0_re,v0_im,v1_re,v1_im: u32 LE each>
-```
+| Version | Marker | Role |
+|---------|--------|------|
+| v1 | `_M31_QUANTUM_AIR_V1_` | Legacy embedded-trace AIR (unitary only); **rejected** by current verifiers |
+| v2 | `_M31_PLONKY3_STARK_V2_` | Plonky3 Circle PCS uni-STARK (unitary); still the primary leaf proof |
+| v3 | `_WQC_COMPOSE_V3_` | Proof-tree compose — binds two child proofs by SHA3-256 hash (leaf or agg pairs) |
+| v4 | `_WQC_AGG_STARK_V4_` / `_WQC_AGG_TAIL_V4_` | AggregationAir Plonky3 STARK (R2); parent of two child digests |
+| v5 | `_WQC_REC_AGG_V5_` / `_WQC_REC_TAIL_V5_` | Recursive aggregation (R3-M1); wraps AggregationAir proof + child metadata |
+| v6 | `_WQC_REC_AGG_V6_` / `_WQC_REC_TAIL_V6_` | Recursive aggregation (R3-M2–M3e); agg/leaf PCS certificates with in-circuit OOD, FriFold, DeepRo, FRI Val/Challenge Mmcs STARKs |
 
-Optional binding fields (`terminal_statevector_digest`, `MSH1`+`measurement_spec_hash`) follow the same rules as v2 when non-empty.
+**Layout** — v2/v4 carry a postcard-encoded Plonky3 proof after C-string public inputs. v3/v5/v6 embed compose headers (`parent_task_id`, `compose_label`, child hashes/digests/kinds) followed by the child proof bytes.
 
-## Proof transcript (v2)
+**Auxiliary segments** — Distribution (`_M31_DIST_V1_` / `_M31_DIST_V2_`), Born-zk (`_M31_BORN_STARK_V1_` / `_M31_BORN_LEAF_V1_`), trajectory (`_M31_TRAJ_V1_` / `_M31_TRAJ_V2_`), and trajectory-zk (`_M31_TRAJ_MARG_STARK_INNER_V1_` / `_M31_TRAJ_STARK_V1_` / `_M31_TRAJ_LEAF_V1_`) segments may follow or precede the unitary proof body.
 
-```text
-<sub_task_id><_M31_PLONKY3_STARK_V2_>
-<circuit_id\0><node_id\0><slice_id\0><output_hash\0>
-[optional terminal_statevector_digest\0]   # 64-char hex
-[optional MSH1||measurement_spec_hash\0] # prefix + 64-char hex
-<postcard_len: u32 LE><p3 proof bytes>
-```
-
-Real FRI STARK via Plonky3 Circle PCS (Mersenne31).
-
-Auxiliary distribution, Born zk, trajectory, and trajectory zk segments may follow the unitary proof body.
-
-The verifier (v1):
-
-1. Checks public-input binding
-2. Re-expands the embedded trace to AIR
-3. Recomputes `air_sum` (must be `0`)
-4. Checks boundary amplitudes match the terminal row
-
-v2 verifies the Plonky3 proof, then any attached distribution / trajectory / compose paths.
-
-Legacy `_M31_QUANTUM_AIR_STARK_` proofs (no embedded trace) are **rejected**.
+All transcript details (field layout, verification steps, binding rules) are defined in the [STARK proof specification](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md).
 
 ## Build
 
@@ -83,9 +66,28 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
        /output/
 ```
 
-## Planned
+## In-circuit recursion (R3)
 
-- **In-circuit child STARK verification (true recursion):** currently child proofs are verified natively outside the circuit at compose time; the aggregation STARK attests digest binding only. Full in-circuit recursion over child STARKs is planned.
+**M3e landed** (`plonky3-stark` feature): leaf and agg PCS bundles through RecAgg V6 + compose; verify-time in-circuit OOD (agg + all leaf AIR kinds), FriFold, DeepRo, Val/Challenge Mmcs; Born trace width capped at W≤68 (K≤21). Protocol (soundness ladder, V6 side flags, residuals): [zk-STARK.md §8](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md).
+
+| Path under `wqc-stark-core/.../recursion/` | Role |
+|--------------------------------------------|------|
+| `ood_air.rs` | `OodCheckAir` STARK: ζ quotient + agg in-circuit fold |
+| `ood_native.rs` | Prove-time OOD witness extraction (FS replay) |
+| `ood_bind.rs` | Bind OOD step to child openings at verify |
+| `ood_leaf_fold.rs` | In-circuit leaf constraint fold (Unitary / Distribution / Shot) |
+| `ood_fold.rs` | Native fold for prove-time witness sanity checks |
+| `leaf_pcs_cert.rs` | Leaf cert prove/verify + born/traj bundle decode |
+| `transcript_v6.rs` | V6 encode / decode (agg cert OR leaf bundle) |
+| `prove.rs` | RecAgg matrix bind for leaf bundles |
+| `air.rs` | kind=leaf no longer zeroes PCS columns |
+| `../aggregation/mod.rs` | `pcs_for_child` → compose / verify context |
+
+## Roadmap
+
+- Prove-time witness oracles in-circuit (verify-time OOD is done; proving still extracts OOD / DeepRo / FriFold witnesses via native Plonky3)
+- Multi-chunk quotient leaf DeepRo STARKs (deferred today)
+- Orchestrator RecAgg V6 compose E2E on devnet
 
 ## Contributing
 
