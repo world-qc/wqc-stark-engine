@@ -1,8 +1,9 @@
-//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b2).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b3).
 //!
 //! Rebuild Circle PCS commitment, open an LDE row, host-check `Mmcs::verify_batch`,
-//! attach a [`KeccakMerklePathProof`], first-layer [`FriFoldStepProof`] `fold_y`s,
-//! and FS+RO-bound commit-phase `fold_x`s for FRI query 0.
+//! attach a [`KeccakMerklePathProof`], and FS+RO-bound [`FriFoldStepProof`] `fold_y` /
+//! `fold_x` chains for **all** devnet FRI queries. Certificate verify binds folds to
+//! the transcript without re-running AggregationAir Plonky3 FRI (build still verifies once).
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -22,7 +23,8 @@ use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 use super::agg_constraints::aggregation_air_constraints_hold;
 use super::fri_fold_air::{verify_fri_fold_proof, verify_fri_fold_y_proof, FriFoldStepProof};
 use super::fri_fold_bind::{
-    fri_fold_bundle_from_agg_proof, AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
+    bind_fri_fold_bundle_to_proof, covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof,
+    AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
 };
 use super::keccak_merkle_air::{
     generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
@@ -49,9 +51,9 @@ pub struct AggPcsCertificate {
     pub siblings: Vec<[u8; 32]>,
     /// R3-M2.5b: Merkle fold + in-circuit Keccak-256 leaf/compress sponges.
     pub merkle_fold: KeccakMerklePathProof,
-    /// R3-M3b2: first-layer Circle FRI `fold_y` steps (query 0).
+    /// R3-M3b3: first-layer Circle FRI `fold_y` steps (all proven queries).
     pub fri_fold_ys: Vec<FriFoldStepProof>,
-    /// R3-M3b2: commit-phase Circle FRI `fold_x` steps (query 0, all rounds) with FS β + RO.
+    /// R3-M3b3: commit-phase Circle FRI `fold_x` steps (all proven queries × rounds) with FS β + RO.
     pub fri_folds: Vec<FriFoldStepProof>,
 }
 
@@ -176,7 +178,7 @@ pub fn build_agg_pcs_certificate(
     }
 
     let fri_bundle = fri_fold_bundle_from_agg_proof(&proof)
-        .map_err(|e| format!("R3-M3b2 FRI fold prove failed: {e}"))?;
+        .map_err(|e| format!("R3-M3b3 FRI fold prove failed: {e}"))?;
     if fri_bundle.fold_ys.is_empty() || fri_bundle.fold_ys.len() > AGG_FRI_MAX_FOLD_YS {
         return Err(format!(
             "unexpected FRI fold_y count: {}",
@@ -193,12 +195,12 @@ pub fn build_agg_pcs_certificate(
     }
     for (i, fold) in fri_bundle.fold_ys.iter().enumerate() {
         if !verify_fri_fold_y_proof(fold) {
-            return Err(format!("R3-M3b2 FRI fold_y self-check failed at step {i}"));
+            return Err(format!("R3-M3b3 FRI fold_y self-check failed at step {i}"));
         }
     }
     for (i, fold) in fri_bundle.fold_xs.iter().enumerate() {
         if !verify_fri_fold_proof(fold) {
-            return Err(format!("R3-M3b2 FRI fold_x self-check failed at step {i}"));
+            return Err(format!("R3-M3b3 FRI fold_x self-check failed at step {i}"));
         }
     }
 
@@ -217,6 +219,10 @@ pub fn build_agg_pcs_certificate(
 }
 
 /// Host-verifies a certificate against an AggregationAir transcript + context.
+///
+/// M3b3: when the cert covers all FRI queries, verification binds fold publics to the
+/// transcript via FS+RO reconstruction and checks Merkle/FriFold STARKs **without**
+/// re-running full AggregationAir Plonky3 FRI (build still verifies FRI once).
 pub fn verify_agg_pcs_certificate(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -237,48 +243,128 @@ pub fn verify_agg_pcs_certificate(
         eprintln!("[AggPcsCertificate] Failed: AggregationAir constraints");
         return false;
     }
-    match build_agg_pcs_certificate(context, agg_transcript) {
-        Ok(rebuilt) => {
-            if rebuilt.trace_commitment != cert.trace_commitment
-                || rebuilt.lde_index != cert.lde_index
-                || rebuilt.lde_row != cert.lde_row
-                || rebuilt.siblings != cert.siblings
-                || rebuilt.merkle_fold != cert.merkle_fold
-                || rebuilt.fri_fold_ys != cert.fri_fold_ys
-                || rebuilt.fri_folds != cert.fri_folds
-            {
-                eprintln!("[AggPcsCertificate] Failed: rebuilt certificate mismatch");
-                return false;
-            }
-            if !verify_keccak_merkle_path_proof(
-                &cert.lde_row,
-                &cert.siblings,
-                cert.lde_index as usize,
-                &cert.trace_commitment,
-                &cert.merkle_fold,
-            ) {
-                eprintln!("[AggPcsCertificate] Failed: Merkle fold STARK");
-                return false;
-            }
-            for (i, fold) in cert.fri_fold_ys.iter().enumerate() {
-                if !verify_fri_fold_y_proof(fold) {
-                    eprintln!("[AggPcsCertificate] Failed: FRI fold_y STARK at {i}");
-                    return false;
-                }
-            }
-            for (i, fold) in cert.fri_folds.iter().enumerate() {
-                if !verify_fri_fold_proof(fold) {
-                    eprintln!("[AggPcsCertificate] Failed: FRI fold STARK at {i}");
-                    return false;
-                }
-            }
-            true
-        }
-        Err(e) => {
-            eprintln!("[AggPcsCertificate] Failed: {e}");
-            false
+    if !verify_keccak_merkle_path_proof(
+        &cert.lde_row,
+        &cert.siblings,
+        cert.lde_index as usize,
+        &cert.trace_commitment,
+        &cert.merkle_fold,
+    ) {
+        eprintln!("[AggPcsCertificate] Failed: Merkle fold STARK");
+        return false;
+    }
+    for (i, fold) in cert.fri_fold_ys.iter().enumerate() {
+        if !verify_fri_fold_y_proof(fold) {
+            eprintln!("[AggPcsCertificate] Failed: FRI fold_y STARK at {i}");
+            return false;
         }
     }
+    for (i, fold) in cert.fri_folds.iter().enumerate() {
+        if !verify_fri_fold_proof(fold) {
+            eprintln!("[AggPcsCertificate] Failed: FRI fold STARK at {i}");
+            return false;
+        }
+    }
+
+    if covers_all_devnet_fri_queries() {
+        verify_agg_pcs_certificate_fri_bound(context, agg_transcript, cert)
+    } else {
+        // Partial query coverage: fall back to full rebuild (includes AggregationAir FRI).
+        match build_agg_pcs_certificate(context, agg_transcript) {
+            Ok(rebuilt) => {
+                if rebuilt.trace_commitment != cert.trace_commitment
+                    || rebuilt.lde_index != cert.lde_index
+                    || rebuilt.lde_row != cert.lde_row
+                    || rebuilt.siblings != cert.siblings
+                    || rebuilt.merkle_fold != cert.merkle_fold
+                    || rebuilt.fri_fold_ys != cert.fri_fold_ys
+                    || rebuilt.fri_folds != cert.fri_folds
+                {
+                    eprintln!("[AggPcsCertificate] Failed: rebuilt certificate mismatch");
+                    return false;
+                }
+                true
+            }
+            Err(e) => {
+                eprintln!("[AggPcsCertificate] Failed: {e}");
+                false
+            }
+        }
+    }
+}
+
+/// Binds cert to AggregationAir proof via PCS rebuild + FS/RO fold publics (no Plonky3 FRI).
+fn verify_agg_pcs_certificate_fri_bound(
+    context: &AggregationContext<'_>,
+    agg_transcript: &[u8],
+    cert: &AggPcsCertificate,
+) -> bool {
+    let plonky3_bytes = match decode_agg_proof_owned(agg_transcript, context) {
+        Some(b) => b,
+        None => {
+            eprintln!("[AggPcsCertificate] Failed: malformed AggregationAir transcript");
+            return false;
+        }
+    };
+    let proof: Proof<WqcStarkConfig> = match postcard::from_bytes(&plonky3_bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[AggPcsCertificate] Failed: postcard decode: {e}");
+            return false;
+        }
+    };
+
+    let matrix = pad_air_matrix_for_uni_stark(build_agg_matrix(
+        context.left_child_hash,
+        context.right_child_hash,
+    ));
+    let config = devnet_circle_config();
+    let pcs = config.pcs();
+    let domain = <crate::plonky3_stark::config::Pcs as Pcs<
+        crate::plonky3_stark::config::Challenge,
+        crate::plonky3_stark::config::Challenger,
+    >>::natural_domain_for_degree(pcs, matrix.height());
+    let (comm, prover_data) = <crate::plonky3_stark::config::Pcs as Pcs<
+        crate::plonky3_stark::config::Challenge,
+        crate::plonky3_stark::config::Challenger,
+    >>::commit(pcs, vec![(domain, matrix)]);
+    if comm != proof.commitments.trace {
+        eprintln!("[AggPcsCertificate] Failed: rebuilt PCS commitment mismatch");
+        return false;
+    }
+    let trace_commitment = match commitment_root(&comm) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[AggPcsCertificate] Failed: {e}");
+            return false;
+        }
+    };
+    if trace_commitment != cert.trace_commitment {
+        eprintln!("[AggPcsCertificate] Failed: cert commitment mismatch");
+        return false;
+    }
+
+    let lde_index = cert.lde_index as usize;
+    let batch = pcs.mmcs.open_batch(lde_index, &prover_data);
+    if batch.opened_values.first() != Some(&cert.lde_row) || batch.opening_proof != cert.siblings {
+        eprintln!("[AggPcsCertificate] Failed: LDE opening mismatch");
+        return false;
+    }
+    if !verify_agg_merkle_path(
+        &cert.lde_row,
+        &cert.siblings,
+        lde_index,
+        &cert.trace_commitment,
+    ) {
+        eprintln!("[AggPcsCertificate] Failed: Merkle path");
+        return false;
+    }
+
+    if let Err(e) = bind_fri_fold_bundle_to_proof(&proof, &cert.fri_fold_ys, &cert.fri_folds) {
+        eprintln!("[AggPcsCertificate] Failed: FRI fold bind: {e}");
+        return false;
+    }
+    true
 }
 
 /// Tries to extract a V4 AggregationAir transcript from a child compose blob.

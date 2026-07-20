@@ -1,4 +1,4 @@
-//! R3 recursive aggregation (M1–M3b2).
+//! R3 recursive aggregation (M1–M3b3).
 //!
 //! See `doc/R3_RECURSION.md`.
 
@@ -35,8 +35,8 @@ pub use fri_fold_air::{
     verify_fri_fold_y_proof, FriFoldAir, FriFoldStepProof,
 };
 pub use fri_fold_bind::{
-    fri_fold_bundle_from_agg_proof, fri_fold_steps_from_agg_proof, AggFriFoldBundle,
-    AGG_FRI_PROVEN_QUERIES,
+    bind_fri_fold_bundle_to_proof, covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof,
+    fri_fold_steps_from_agg_proof, AggFriFoldBundle, AGG_FRI_PROVEN_QUERIES,
 };
 pub use fri_fs_replay::{replay_agg_fri_challenges, AggFriChallenges};
 pub use keccak256_air::{

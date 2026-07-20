@@ -24,6 +24,9 @@ pub type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 
 pub type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
 pub type WqcStarkConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
+/// Devnet FRI query count (must match `FriParameters::num_queries` in [`devnet_circle_config`]).
+pub const DEVNET_FRI_NUM_QUERIES: usize = 40;
+
 /// Devnet-oriented parameters: modest query count for fast verification.
 pub fn devnet_circle_config() -> WqcStarkConfig {
     circle_config_with_blowup(1)
@@ -46,7 +49,7 @@ fn circle_config_with_blowup(log_blowup: usize) -> WqcStarkConfig {
         log_blowup,
         log_final_poly_len: 0,
         max_log_arity: 1,
-        num_queries: 40,
+        num_queries: DEVNET_FRI_NUM_QUERIES,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
