@@ -1,9 +1,9 @@
-//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b3).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b4).
 //!
-//! Rebuild Circle PCS commitment, open an LDE row, host-check `Mmcs::verify_batch`,
+//! Rebuild Circle PCS commitment, open an LDE row, host-check LDE `Mmcs::verify_batch`,
 //! attach a [`KeccakMerklePathProof`], and FS+RO-bound [`FriFoldStepProof`] `fold_y` /
-//! `fold_x` chains for **all** devnet FRI queries. Certificate verify binds folds to
-//! the transcript without re-running AggregationAir Plonky3 FRI (build still verifies once).
+//! `fold_x` chains for **all** devnet FRI queries. Build/verify use host OOD + FRI Mmcs
+//! instead of Plonky3 `verify_aggregation_proof` / full FRI.
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -13,9 +13,7 @@ use p3_uni_stark::{Proof, StarkGenericConfig};
 
 use crate::aggregation::CHILD_HASH_LEN;
 use crate::air::pad_air_matrix_for_uni_stark;
-use crate::plonky3_stark::aggregation::{
-    build_agg_matrix, verify_aggregation_proof, AggregationContext,
-};
+use crate::plonky3_stark::aggregation::{build_agg_matrix, AggregationContext};
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use crate::plonky3_stark::config::{devnet_circle_config, ValMmcs, WqcStarkConfig};
 use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
@@ -26,6 +24,8 @@ use super::fri_fold_bind::{
     bind_fri_fold_bundle_to_proof, covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof,
     AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
 };
+use super::fri_mmcs::verify_agg_fri_openings;
+use super::fri_ood::verify_agg_ood;
 use super::keccak_merkle_air::{
     generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
 };
@@ -81,18 +81,20 @@ fn natural_row_from_hashes(
     row
 }
 
-/// Builds a PCS opening certificate for a verified AggregationAir transcript.
+/// Builds a PCS opening certificate for an AggregationAir transcript.
+///
+/// M3b4: uses host OOD + FRI Mmcs instead of Plonky3 `verify_aggregation_proof`.
 pub fn build_agg_pcs_certificate(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
 ) -> Result<AggPcsCertificate, String> {
-    if !verify_aggregation_proof(context, agg_transcript) {
-        return Err("AggregationAir verification failed before PCS certificate".to_string());
-    }
     let plonky3_bytes = decode_agg_proof_owned(agg_transcript, context)
         .ok_or_else(|| "malformed AggregationAir transcript".to_string())?;
     let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3_bytes)
         .map_err(|e| format!("postcard decode AggregationAir proof: {e}"))?;
+
+    verify_agg_ood(&proof).map_err(|e| format!("R3-M3b4 OOD failed: {e}"))?;
+    verify_agg_fri_openings(&proof).map_err(|e| format!("R3-M3b4 FRI Mmcs failed: {e}"))?;
 
     let matrix = pad_air_matrix_for_uni_stark(build_agg_matrix(
         context.left_child_hash,
@@ -178,7 +180,7 @@ pub fn build_agg_pcs_certificate(
     }
 
     let fri_bundle = fri_fold_bundle_from_agg_proof(&proof)
-        .map_err(|e| format!("R3-M3b3 FRI fold prove failed: {e}"))?;
+        .map_err(|e| format!("R3-M3b4 FRI fold prove failed: {e}"))?;
     if fri_bundle.fold_ys.is_empty() || fri_bundle.fold_ys.len() > AGG_FRI_MAX_FOLD_YS {
         return Err(format!(
             "unexpected FRI fold_y count: {}",
@@ -195,12 +197,12 @@ pub fn build_agg_pcs_certificate(
     }
     for (i, fold) in fri_bundle.fold_ys.iter().enumerate() {
         if !verify_fri_fold_y_proof(fold) {
-            return Err(format!("R3-M3b3 FRI fold_y self-check failed at step {i}"));
+            return Err(format!("R3-M3b4 FRI fold_y self-check failed at step {i}"));
         }
     }
     for (i, fold) in fri_bundle.fold_xs.iter().enumerate() {
         if !verify_fri_fold_proof(fold) {
-            return Err(format!("R3-M3b3 FRI fold_x self-check failed at step {i}"));
+            return Err(format!("R3-M3b4 FRI fold_x self-check failed at step {i}"));
         }
     }
 
@@ -220,9 +222,9 @@ pub fn build_agg_pcs_certificate(
 
 /// Host-verifies a certificate against an AggregationAir transcript + context.
 ///
-/// M3b3: when the cert covers all FRI queries, verification binds fold publics to the
-/// transcript via FS+RO reconstruction and checks Merkle/FriFold STARKs **without**
-/// re-running full AggregationAir Plonky3 FRI (build still verifies FRI once).
+/// M3b4: when the cert covers all FRI queries, verification binds fold publics to the
+/// transcript via FS+RO reconstruction, checks host OOD + FRI Mmcs, and verifies
+/// Merkle/FriFold STARKs **without** Plonky3 AggregationAir FRI.
 pub fn verify_agg_pcs_certificate(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -293,7 +295,7 @@ pub fn verify_agg_pcs_certificate(
     }
 }
 
-/// Binds cert to AggregationAir proof via PCS rebuild + FS/RO fold publics (no Plonky3 FRI).
+/// Binds cert to AggregationAir proof via PCS rebuild + OOD/Mmcs + FS/RO fold publics.
 fn verify_agg_pcs_certificate_fri_bound(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -313,6 +315,15 @@ fn verify_agg_pcs_certificate_fri_bound(
             return false;
         }
     };
+
+    if let Err(e) = verify_agg_ood(&proof) {
+        eprintln!("[AggPcsCertificate] Failed: OOD: {e}");
+        return false;
+    }
+    if let Err(e) = verify_agg_fri_openings(&proof) {
+        eprintln!("[AggPcsCertificate] Failed: FRI Mmcs: {e}");
+        return false;
+    }
 
     let matrix = pad_air_matrix_for_uni_stark(build_agg_matrix(
         context.left_child_hash,

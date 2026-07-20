@@ -33,14 +33,13 @@ pub struct FoldYWitness {
 
 #[derive(Deserialize)]
 #[serde(bound = "")]
-struct CircleInputProofView {
-    input_openings: Vec<BatchOpening<Val, ValMmcs>>,
-    first_layer_siblings: Vec<Challenge>,
-    #[allow(dead_code)]
-    first_layer_proof: <ChallengeMmcs as Mmcs<Challenge>>::Proof,
+pub(crate) struct CircleInputProofView {
+    pub(crate) input_openings: Vec<BatchOpening<Val, ValMmcs>>,
+    pub(crate) first_layer_siblings: Vec<Challenge>,
+    pub(crate) first_layer_proof: <ChallengeMmcs as Mmcs<Challenge>>::Proof,
 }
 
-fn decode_input_proof(
+pub(crate) fn decode_input_proof(
     fri_qp_input: &p3_circle::CircleInputProof<Val, Challenge, ValMmcs, ChallengeMmcs>,
 ) -> Result<CircleInputProofView, String> {
     let bytes = postcard::to_allocvec(fri_qp_input)

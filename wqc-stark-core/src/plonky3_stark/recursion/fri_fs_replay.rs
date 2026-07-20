@@ -33,6 +33,8 @@ pub(crate) struct CirclePcsProofView {
 /// Fiat-Shamir challenges recovered from an AggregationAir proof.
 #[derive(Debug, Clone)]
 pub struct AggFriChallenges {
+    /// Constraint-folding challenge (uni-STARK α before quotient commit observe).
+    pub constraint_alpha: Challenge,
     /// OOD evaluation point (projective-line coordinate).
     pub zeta: Challenge,
     /// PCS batch-combination challenge.
@@ -94,7 +96,7 @@ pub fn replay_agg_fri_challenges(
     challenger.observe(Val::from_usize(preprocessed_width));
     challenger.observe(proof.commitments.trace.clone());
     // public_values empty
-    let _constraint_alpha: Challenge = challenger.sample_algebra_element();
+    let constraint_alpha: Challenge = challenger.sample_algebra_element();
     challenger.observe(proof.commitments.quotient_chunks.clone());
     let zeta: Challenge = challenger.sample_algebra_element();
 
@@ -165,6 +167,7 @@ pub fn replay_agg_fri_challenges(
     }
 
     Ok(AggFriChallenges {
+        constraint_alpha,
         zeta,
         batch_alpha,
         bivariate_beta,
