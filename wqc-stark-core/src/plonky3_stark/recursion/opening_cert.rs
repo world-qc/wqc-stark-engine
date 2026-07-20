@@ -1,9 +1,9 @@
-//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b4 / M3c3).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b4 / M3c3 / M3d).
 //!
 //! Rebuild Circle PCS commitment, open an LDE row, host-check LDE `Mmcs::verify_batch`,
-//! attach Merkle/FriFold STARKs for all FRI queries, plus all-query quotient
-//! [`DeepRoStepProof`] and trace [`DeepRoTraceStepProof`] (DEEP+λ bound into FriFoldY).
-//! Build/verify use host OOD + FRI Mmcs (no Plonky3 FRI).
+//! attach Merkle/FriFold STARKs for all FRI queries, all-query DeepRo + DeepRoTrace,
+//! and in-circuit FRI ValMmcs + ChallengeMmcs paths (M3d). Build/verify use host OOD
+//! only (no host FRI Mmcs on the cert path).
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -30,7 +30,10 @@ use super::fri_fold_bind::{
     bind_fri_fold_bundle_to_proof, covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof,
     AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
 };
-use super::fri_mmcs::verify_agg_fri_openings;
+use super::fri_mmcs_bind::{
+    bind_fri_mmcs_bundle_to_proof, fri_mmcs_bundle_from_agg_proof, AggFriMmcsBundle,
+    FriChalMmcsQueryProof, FriValMmcsQueryProof,
+};
 use super::fri_ood::verify_agg_ood;
 use super::keccak_merkle_air::{
     generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
@@ -65,6 +68,10 @@ pub struct AggPcsCertificate {
     pub deep_ros: Vec<DeepRoStepProof>,
     /// R3-M3c3: DeepRoTrace (DEEP+λ) for all proven queries' trace batches; bound into FriFoldY.
     pub deep_ro_traces: Vec<DeepRoTraceStepProof>,
+    /// R3-M3d: ValMmcs (trace+quot) Merkle paths for all proven FRI queries.
+    pub fri_val_mmcs: Vec<FriValMmcsQueryProof>,
+    /// R3-M3d: ChallengeMmcs (first-layer + commit-phase) paths for all proven FRI queries.
+    pub fri_chal_mmcs: Vec<FriChalMmcsQueryProof>,
 }
 
 fn commitment_root(com: &<ValMmcs as Mmcs<Mersenne31>>::Commitment) -> Result<[u8; 32], String> {
@@ -93,7 +100,7 @@ fn natural_row_from_hashes(
 
 /// Builds a PCS opening certificate for an AggregationAir transcript.
 ///
-/// M3b4: uses host OOD + FRI Mmcs instead of Plonky3 `verify_aggregation_proof`.
+/// M3d: host OOD + in-circuit FRI Val/Challenge Mmcs (no host `verify_agg_fri_openings`).
 pub fn build_agg_pcs_certificate(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -104,7 +111,6 @@ pub fn build_agg_pcs_certificate(
         .map_err(|e| format!("postcard decode AggregationAir proof: {e}"))?;
 
     verify_agg_ood(&proof).map_err(|e| format!("R3-M3b4 OOD failed: {e}"))?;
-    verify_agg_fri_openings(&proof).map_err(|e| format!("R3-M3b4 FRI Mmcs failed: {e}"))?;
 
     let matrix = pad_air_matrix_for_uni_stark(build_agg_matrix(
         context.left_child_hash,
@@ -236,6 +242,32 @@ pub fn build_agg_pcs_certificate(
     )
     .map_err(|e| format!("R3-M3c3 DeepRo bundle bind failed: {e}"))?;
 
+    let mmcs_bundle = fri_mmcs_bundle_from_agg_proof(&proof)
+        .map_err(|e| format!("R3-M3d FRI Mmcs prove failed: {e}"))?;
+    if mmcs_bundle.val.len() != AGG_FRI_PROVEN_QUERIES
+        || mmcs_bundle.chal.len() != AGG_FRI_PROVEN_QUERIES
+    {
+        return Err(format!(
+            "unexpected FRI Mmcs counts: val={}, chal={}",
+            mmcs_bundle.val.len(),
+            mmcs_bundle.chal.len()
+        ));
+    }
+    for (i, qp) in mmcs_bundle.val.iter().enumerate() {
+        if !path_self_check_val(qp) {
+            return Err(format!("R3-M3d ValMmcs self-check failed at query {i}"));
+        }
+    }
+    for (i, qp) in mmcs_bundle.chal.iter().enumerate() {
+        if !path_self_check_chal(qp) {
+            return Err(format!(
+                "R3-M3d ChallengeMmcs self-check failed at query {i}"
+            ));
+        }
+    }
+    bind_fri_mmcs_bundle_to_proof(&proof, &mmcs_bundle)
+        .map_err(|e| format!("R3-M3d FRI Mmcs bind failed: {e}"))?;
+
     Ok(AggPcsCertificate {
         stmt_left_hash: context.left_child_hash,
         stmt_right_hash: context.right_child_hash,
@@ -249,14 +281,34 @@ pub fn build_agg_pcs_certificate(
         fri_folds: fri_bundle.fold_xs,
         deep_ros: deep_bundle.deep_ros,
         deep_ro_traces: deep_bundle.deep_ro_traces,
+        fri_val_mmcs: mmcs_bundle.val,
+        fri_chal_mmcs: mmcs_bundle.chal,
     })
+}
+
+fn path_self_check_val(qp: &FriValMmcsQueryProof) -> bool {
+    qp.trace_path.depth as usize == qp.trace_siblings.len()
+        && qp.quot_path.depth as usize == qp.quot_siblings.len()
+        && !qp.trace_siblings.is_empty()
+        && !qp.quot_siblings.is_empty()
+}
+
+fn path_self_check_chal(qp: &FriChalMmcsQueryProof) -> bool {
+    !qp.first_layer.siblings.is_empty()
+        && qp.commit_paths.len() == qp.commit_siblings.len()
+        && qp.commit_paths.len() == qp.commit_indices.len()
+        && qp
+            .commit_paths
+            .iter()
+            .zip(qp.commit_siblings.iter())
+            .all(|(p, s)| p.depth as usize == s.len() && !s.is_empty())
 }
 
 /// Host-verifies a certificate against an AggregationAir transcript + context.
 ///
-/// M3b4: when the cert covers all FRI queries, verification binds fold publics to the
-/// transcript via FS+RO reconstruction, checks host OOD + FRI Mmcs, and verifies
-/// Merkle/FriFold STARKs **without** Plonky3 AggregationAir FRI.
+/// M3d: when the cert covers all FRI queries, verification binds fold/Mmcs publics to the
+/// transcript via FS+RO, checks host OOD, and verifies Merkle/FriFold/DeepRo/FRI Mmcs
+/// STARKs **without** Plonky3 AggregationAir FRI or host `verify_agg_fri_openings`.
 pub fn verify_agg_pcs_certificate(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -325,6 +377,32 @@ pub fn verify_agg_pcs_certificate(
             return false;
         }
     }
+    if cert.fri_val_mmcs.len() != AGG_FRI_PROVEN_QUERIES {
+        eprintln!(
+            "[AggPcsCertificate] Failed: fri_val_mmcs len {}, want {AGG_FRI_PROVEN_QUERIES}",
+            cert.fri_val_mmcs.len()
+        );
+        return false;
+    }
+    if cert.fri_chal_mmcs.len() != AGG_FRI_PROVEN_QUERIES {
+        eprintln!(
+            "[AggPcsCertificate] Failed: fri_chal_mmcs len {}, want {AGG_FRI_PROVEN_QUERIES}",
+            cert.fri_chal_mmcs.len()
+        );
+        return false;
+    }
+    for (i, qp) in cert.fri_val_mmcs.iter().enumerate() {
+        if !path_self_check_val(qp) {
+            eprintln!("[AggPcsCertificate] Failed: ValMmcs shape at {i}");
+            return false;
+        }
+    }
+    for (i, qp) in cert.fri_chal_mmcs.iter().enumerate() {
+        if !path_self_check_chal(qp) {
+            eprintln!("[AggPcsCertificate] Failed: ChallengeMmcs shape at {i}");
+            return false;
+        }
+    }
 
     if covers_all_devnet_fri_queries() {
         verify_agg_pcs_certificate_fri_bound(context, agg_transcript, cert)
@@ -341,6 +419,8 @@ pub fn verify_agg_pcs_certificate(
                     || rebuilt.fri_folds != cert.fri_folds
                     || rebuilt.deep_ros != cert.deep_ros
                     || rebuilt.deep_ro_traces != cert.deep_ro_traces
+                    || rebuilt.fri_val_mmcs != cert.fri_val_mmcs
+                    || rebuilt.fri_chal_mmcs != cert.fri_chal_mmcs
                 {
                     eprintln!("[AggPcsCertificate] Failed: rebuilt certificate mismatch");
                     return false;
@@ -355,7 +435,7 @@ pub fn verify_agg_pcs_certificate(
     }
 }
 
-/// Binds cert to AggregationAir proof via PCS rebuild + OOD/Mmcs + FS/RO fold publics.
+/// Binds cert to AggregationAir proof via PCS rebuild + OOD + FS/RO fold/Mmcs publics.
 fn verify_agg_pcs_certificate_fri_bound(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -378,10 +458,6 @@ fn verify_agg_pcs_certificate_fri_bound(
 
     if let Err(e) = verify_agg_ood(&proof) {
         eprintln!("[AggPcsCertificate] Failed: OOD: {e}");
-        return false;
-    }
-    if let Err(e) = verify_agg_fri_openings(&proof) {
-        eprintln!("[AggPcsCertificate] Failed: FRI Mmcs: {e}");
         return false;
     }
 
@@ -442,6 +518,14 @@ fn verify_agg_pcs_certificate_fri_bound(
         &cert.fri_fold_ys,
     ) {
         eprintln!("[AggPcsCertificate] Failed: DeepRo bundle bind: {e}");
+        return false;
+    }
+    let mmcs_bundle = AggFriMmcsBundle {
+        val: cert.fri_val_mmcs.clone(),
+        chal: cert.fri_chal_mmcs.clone(),
+    };
+    if let Err(e) = bind_fri_mmcs_bundle_to_proof(&proof, &mmcs_bundle) {
+        eprintln!("[AggPcsCertificate] Failed: FRI Mmcs bind: {e}");
         return false;
     }
     true

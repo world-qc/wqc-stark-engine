@@ -181,16 +181,25 @@ pub fn keccak256(msg: &[u8]) -> [u8; KECCAK256_OUT] {
     out
 }
 
-/// LE serialization of an AggregationAir LDE row (ValMmcs leaf input).
-pub fn lde_row_to_bytes(row: &[Mersenne31]) -> Vec<u8> {
-    debug_assert_eq!(row.len(), AGG_WIDTH);
+/// LE serialization of an M31 row (ValMmcs leaf input).
+pub fn val_row_to_bytes(row: &[Mersenne31]) -> Vec<u8> {
     row.iter()
         .flat_map(|x| x.as_canonical_u32().to_le_bytes())
         .collect()
 }
 
+/// LE serialization of an AggregationAir LDE row (ValMmcs leaf input).
+pub fn lde_row_to_bytes(row: &[Mersenne31]) -> Vec<u8> {
+    debug_assert_eq!(row.len(), AGG_WIDTH);
+    val_row_to_bytes(row)
+}
+
 pub fn keccak256_lde_leaf(row: &[Mersenne31]) -> [u8; KECCAK256_OUT] {
     keccak256(&lde_row_to_bytes(row))
+}
+
+pub fn keccak256_val_leaf(row: &[Mersenne31]) -> [u8; KECCAK256_OUT] {
+    keccak256(&val_row_to_bytes(row))
 }
 
 pub fn keccak256_compress(left: [u8; 32], right: [u8; 32]) -> [u8; KECCAK256_OUT] {

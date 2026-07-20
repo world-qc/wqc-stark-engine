@@ -1,5 +1,5 @@
-//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2 / M3c3): M1 fields + AggregationAir
-//! PCS certs (Merkle fold + Keccak sponges + FRI fold_y + fold_x + DeepRo + DeepRoTrace).
+//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2 / M3c3 / M3d): M1 fields +
+//! AggregationAir PCS certs (Merkle fold + Keccak + FriFold + DeepRo + FRI Val/Challenge Mmcs).
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mersenne_31::Mersenne31;
@@ -14,6 +14,8 @@ use super::deep_ro_bind::{AGG_DEEP_RO_MAX, AGG_DEEP_RO_TRACE_MAX};
 use super::deep_ro_trace_air::DeepRoTraceStepProof;
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES};
+use super::fri_mmcs_bind::{FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof};
+use super::fri_mmcs_path::{FriMmcsPathProof, FRI_MMCS_MAX_DEPTH};
 use super::keccak256_air::Keccak256StarkProof;
 use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS};
@@ -409,6 +411,380 @@ fn decode_deep_ro_traces(
     Some((deeps, cursor))
 }
 
+fn encode_fri_mmcs_path(out: &mut Vec<u8>, path: &FriMmcsPathProof) {
+    out.extend_from_slice(&path.depth.to_le_bytes());
+    out.extend_from_slice(&path.leaf_width.to_le_bytes());
+    out.extend_from_slice(&path.leaf_digest);
+    out.extend_from_slice(&(path.layer_digests.len() as u32).to_le_bytes());
+    for d in &path.layer_digests {
+        out.extend_from_slice(d);
+    }
+    out.extend_from_slice(&(path.fold_stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&path.fold_stark);
+    encode_keccak256_stark(out, &path.leaf_keccak);
+    out.extend_from_slice(&(path.compress_starks.len() as u32).to_le_bytes());
+    for c in &path.compress_starks {
+        encode_keccak256_stark(out, c);
+    }
+}
+
+fn decode_fri_mmcs_path(proof: &[u8], offset: usize) -> Option<(FriMmcsPathProof, usize)> {
+    let (depth, cursor) = read_u32_le(proof, offset)?;
+    let (leaf_width, cursor) = read_u32_le(proof, cursor)?;
+    let (leaf_digest, cursor) = read_fixed::<32>(proof, cursor)?;
+    let (layer_len, cursor) = read_u32_le(proof, cursor)?;
+    if layer_len as usize != depth as usize || depth == 0 || depth as usize > FRI_MMCS_MAX_DEPTH {
+        return None;
+    }
+    let mut layer_digests = Vec::with_capacity(layer_len as usize);
+    let mut cursor = cursor;
+    for _ in 0..layer_len {
+        let (d, next) = read_fixed::<32>(proof, cursor)?;
+        layer_digests.push(d);
+        cursor = next;
+    }
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let fold_stark = proof.get(cursor..end)?.to_vec();
+    let (leaf_keccak, cursor) = decode_keccak256_stark(proof, end)?;
+    let (comp_len, cursor) = read_u32_le(proof, cursor)?;
+    if comp_len != layer_len {
+        return None;
+    }
+    let mut compress_starks = Vec::with_capacity(comp_len as usize);
+    let mut cursor = cursor;
+    for _ in 0..comp_len {
+        let (c, next) = decode_keccak256_stark(proof, cursor)?;
+        compress_starks.push(c);
+        cursor = next;
+    }
+    Some((
+        FriMmcsPathProof {
+            depth,
+            leaf_width,
+            leaf_digest,
+            layer_digests,
+            fold_stark,
+            leaf_keccak,
+            compress_starks,
+        },
+        cursor,
+    ))
+}
+
+fn encode_siblings(out: &mut Vec<u8>, siblings: &[[u8; 32]]) {
+    out.extend_from_slice(&(siblings.len() as u32).to_le_bytes());
+    for s in siblings {
+        out.extend_from_slice(s);
+    }
+}
+
+fn decode_siblings(proof: &[u8], offset: usize, max: usize) -> Option<(Vec<[u8; 32]>, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    if len as usize == 0 || len as usize > max {
+        return None;
+    }
+    let mut siblings = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (s, next) = read_fixed::<32>(proof, cursor)?;
+        siblings.push(s);
+        cursor = next;
+    }
+    Some((siblings, cursor))
+}
+
+fn encode_fri_val_mmcs_query(out: &mut Vec<u8>, q: &FriValMmcsQueryProof) {
+    out.extend_from_slice(&q.trace_index.to_le_bytes());
+    out.extend_from_slice(&q.quot_index.to_le_bytes());
+    encode_siblings(out, &q.trace_siblings);
+    encode_siblings(out, &q.quot_siblings);
+    encode_fri_mmcs_path(out, &q.trace_path);
+    encode_fri_mmcs_path(out, &q.quot_path);
+}
+
+fn decode_fri_val_mmcs_query(proof: &[u8], offset: usize) -> Option<(FriValMmcsQueryProof, usize)> {
+    let (trace_index, cursor) = read_u32_le(proof, offset)?;
+    let (quot_index, cursor) = read_u32_le(proof, cursor)?;
+    let (trace_siblings, cursor) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)?;
+    let (quot_siblings, cursor) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)?;
+    let (trace_path, cursor) = decode_fri_mmcs_path(proof, cursor)?;
+    let (quot_path, cursor) = decode_fri_mmcs_path(proof, cursor)?;
+    Some((
+        FriValMmcsQueryProof {
+            trace_index,
+            quot_index,
+            trace_siblings,
+            quot_siblings,
+            trace_path,
+            quot_path,
+        },
+        cursor,
+    ))
+}
+
+fn encode_fri_val_mmcs(out: &mut Vec<u8>, qs: &[FriValMmcsQueryProof]) {
+    out.extend_from_slice(&(qs.len() as u32).to_le_bytes());
+    for q in qs {
+        encode_fri_val_mmcs_query(out, q);
+    }
+}
+
+fn decode_fri_val_mmcs(proof: &[u8], offset: usize) -> Option<(Vec<FriValMmcsQueryProof>, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    if len as usize != AGG_FRI_PROVEN_QUERIES {
+        return None;
+    }
+    let mut qs = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (q, next) = decode_fri_val_mmcs_query(proof, cursor)?;
+        qs.push(q);
+        cursor = next;
+    }
+    Some((qs, cursor))
+}
+
+fn encode_chal_batch(out: &mut Vec<u8>, b: &FriChalBatchPathProof) {
+    out.extend_from_slice(&b.index.to_le_bytes());
+    encode_siblings(out, &b.siblings);
+    out.extend_from_slice(&(b.leaf_rows.len() as u32).to_le_bytes());
+    for row in &b.leaf_rows {
+        out.extend_from_slice(&(row.len() as u32).to_le_bytes());
+        write_m31_row(out, row);
+    }
+    out.extend_from_slice(&(b.leaf_keccs.len() as u32).to_le_bytes());
+    for k in &b.leaf_keccs {
+        encode_keccak256_stark(out, k);
+    }
+    out.extend_from_slice(&(b.leaf_digests.len() as u32).to_le_bytes());
+    for d in &b.leaf_digests {
+        out.extend_from_slice(d);
+    }
+    out.extend_from_slice(&(b.sib_compresses.len() as u32).to_le_bytes());
+    for c in &b.sib_compresses {
+        encode_keccak256_stark(out, c);
+    }
+    out.extend_from_slice(&(b.sib_layer_digests.len() as u32).to_le_bytes());
+    for d in &b.sib_layer_digests {
+        out.extend_from_slice(d);
+    }
+    out.extend_from_slice(&(b.inject_compresses.len() as u32).to_le_bytes());
+    for c in &b.inject_compresses {
+        encode_keccak256_stark(out, c);
+    }
+    out.extend_from_slice(&(b.inject_digests.len() as u32).to_le_bytes());
+    for d in &b.inject_digests {
+        out.extend_from_slice(d);
+    }
+    out.extend_from_slice(&(b.inject_leaf_indices.len() as u32).to_le_bytes());
+    for i in &b.inject_leaf_indices {
+        out.extend_from_slice(&i.to_le_bytes());
+    }
+}
+
+fn decode_chal_batch(proof: &[u8], offset: usize) -> Option<(FriChalBatchPathProof, usize)> {
+    let (index, cursor) = read_u32_le(proof, offset)?;
+    let (siblings, cursor) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)?;
+    let (n_rows, cursor) = read_u32_le(proof, cursor)?;
+    if n_rows == 0 || n_rows as usize > 8 {
+        return None;
+    }
+    let mut leaf_rows = Vec::with_capacity(n_rows as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_rows {
+        let (w, next) = read_u32_le(proof, cursor)?;
+        if w == 0 || w as usize > AGG_WIDTH * 2 {
+            return None;
+        }
+        let (row, next) = read_m31_row(proof, next, w as usize)?;
+        leaf_rows.push(row);
+        cursor = next;
+    }
+    let (n_keccs, cursor) = read_u32_le(proof, cursor)?;
+    if n_keccs as usize != leaf_rows.len() {
+        return None;
+    }
+    let mut leaf_keccs = Vec::with_capacity(n_keccs as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_keccs {
+        let (k, next) = decode_keccak256_stark(proof, cursor)?;
+        leaf_keccs.push(k);
+        cursor = next;
+    }
+    let (n_dig, cursor) = read_u32_le(proof, cursor)?;
+    if n_dig as usize != leaf_rows.len() {
+        return None;
+    }
+    let mut leaf_digests = Vec::with_capacity(n_dig as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_dig {
+        let (d, next) = read_fixed::<32>(proof, cursor)?;
+        leaf_digests.push(d);
+        cursor = next;
+    }
+    let (n_sib_c, cursor) = read_u32_le(proof, cursor)?;
+    if n_sib_c as usize != siblings.len() || n_sib_c as usize > FRI_MMCS_MAX_DEPTH {
+        return None;
+    }
+    let mut sib_compresses = Vec::with_capacity(n_sib_c as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_sib_c {
+        let (c, next) = decode_keccak256_stark(proof, cursor)?;
+        sib_compresses.push(c);
+        cursor = next;
+    }
+    let (n_sib_d, cursor) = read_u32_le(proof, cursor)?;
+    if n_sib_d != n_sib_c {
+        return None;
+    }
+    let mut sib_layer_digests = Vec::with_capacity(n_sib_d as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_sib_d {
+        let (d, next) = read_fixed::<32>(proof, cursor)?;
+        sib_layer_digests.push(d);
+        cursor = next;
+    }
+    let (n_inj_c, cursor) = read_u32_le(proof, cursor)?;
+    if n_inj_c as usize > FRI_MMCS_MAX_DEPTH {
+        return None;
+    }
+    let mut inject_compresses = Vec::with_capacity(n_inj_c as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_inj_c {
+        let (c, next) = decode_keccak256_stark(proof, cursor)?;
+        inject_compresses.push(c);
+        cursor = next;
+    }
+    let (n_inj_d, cursor) = read_u32_le(proof, cursor)?;
+    if n_inj_d != n_inj_c {
+        return None;
+    }
+    let mut inject_digests = Vec::with_capacity(n_inj_d as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_inj_d {
+        let (d, next) = read_fixed::<32>(proof, cursor)?;
+        inject_digests.push(d);
+        cursor = next;
+    }
+    let (n_inj_i, cursor) = read_u32_le(proof, cursor)?;
+    if n_inj_i != n_inj_c {
+        return None;
+    }
+    let mut inject_leaf_indices = Vec::with_capacity(n_inj_i as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_inj_i {
+        let (i, next) = read_u32_le(proof, cursor)?;
+        inject_leaf_indices.push(i);
+        cursor = next;
+    }
+    Some((
+        FriChalBatchPathProof {
+            index,
+            siblings,
+            leaf_rows,
+            leaf_keccs,
+            leaf_digests,
+            sib_compresses,
+            sib_layer_digests,
+            inject_compresses,
+            inject_digests,
+            inject_leaf_indices,
+        },
+        cursor,
+    ))
+}
+
+fn encode_fri_chal_mmcs_query(out: &mut Vec<u8>, q: &FriChalMmcsQueryProof) {
+    encode_chal_batch(out, &q.first_layer);
+    out.extend_from_slice(&(q.commit_indices.len() as u32).to_le_bytes());
+    for i in &q.commit_indices {
+        out.extend_from_slice(&i.to_le_bytes());
+    }
+    out.extend_from_slice(&(q.commit_siblings.len() as u32).to_le_bytes());
+    for sibs in &q.commit_siblings {
+        encode_siblings(out, sibs);
+    }
+    out.extend_from_slice(&(q.commit_paths.len() as u32).to_le_bytes());
+    for p in &q.commit_paths {
+        encode_fri_mmcs_path(out, p);
+    }
+}
+
+fn decode_fri_chal_mmcs_query(
+    proof: &[u8],
+    offset: usize,
+) -> Option<(FriChalMmcsQueryProof, usize)> {
+    let (first_layer, cursor) = decode_chal_batch(proof, offset)?;
+    let (n_idx, cursor) = read_u32_le(proof, cursor)?;
+    if n_idx as usize > AGG_FRI_MAX_ROUNDS {
+        return None;
+    }
+    let mut commit_indices = Vec::with_capacity(n_idx as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_idx {
+        let (i, next) = read_u32_le(proof, cursor)?;
+        commit_indices.push(i);
+        cursor = next;
+    }
+    let (n_sib, cursor) = read_u32_le(proof, cursor)?;
+    if n_sib != n_idx {
+        return None;
+    }
+    let mut commit_siblings = Vec::with_capacity(n_sib as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_sib {
+        let (s, next) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)?;
+        commit_siblings.push(s);
+        cursor = next;
+    }
+    let (n_paths, cursor) = read_u32_le(proof, cursor)?;
+    if n_paths != n_idx {
+        return None;
+    }
+    let mut commit_paths = Vec::with_capacity(n_paths as usize);
+    let mut cursor = cursor;
+    for _ in 0..n_paths {
+        let (p, next) = decode_fri_mmcs_path(proof, cursor)?;
+        commit_paths.push(p);
+        cursor = next;
+    }
+    Some((
+        FriChalMmcsQueryProof {
+            first_layer,
+            commit_indices,
+            commit_siblings,
+            commit_paths,
+        },
+        cursor,
+    ))
+}
+
+fn encode_fri_chal_mmcs(out: &mut Vec<u8>, qs: &[FriChalMmcsQueryProof]) {
+    out.extend_from_slice(&(qs.len() as u32).to_le_bytes());
+    for q in qs {
+        encode_fri_chal_mmcs_query(out, q);
+    }
+}
+
+fn decode_fri_chal_mmcs(
+    proof: &[u8],
+    offset: usize,
+) -> Option<(Vec<FriChalMmcsQueryProof>, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    if len as usize != AGG_FRI_PROVEN_QUERIES {
+        return None;
+    }
+    let mut qs = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (q, next) = decode_fri_chal_mmcs_query(proof, cursor)?;
+        qs.push(q);
+        cursor = next;
+    }
+    Some((qs, cursor))
+}
+
 fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
     match cert {
         None => out.push(0),
@@ -430,6 +806,8 @@ fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
             encode_fri_folds(out, &c.fri_folds);
             encode_deep_ros(out, &c.deep_ros);
             encode_deep_ro_traces(out, &c.deep_ro_traces);
+            encode_fri_val_mmcs(out, &c.fri_val_mmcs);
+            encode_fri_chal_mmcs(out, &c.fri_chal_mmcs);
         }
     }
 }
@@ -472,6 +850,8 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
         decode_fri_folds(proof, cursor, AGG_FRI_MAX_ROUNDS * AGG_FRI_PROVEN_QUERIES)?;
     let (deep_ros, cursor) = decode_deep_ros(proof, cursor, AGG_DEEP_RO_MAX)?;
     let (deep_ro_traces, cursor) = decode_deep_ro_traces(proof, cursor, AGG_DEEP_RO_TRACE_MAX)?;
+    let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor)?;
+    let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor)?;
     Some((
         Some(AggPcsCertificate {
             stmt_left_hash,
@@ -486,6 +866,8 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
             fri_folds,
             deep_ros,
             deep_ro_traces,
+            fri_val_mmcs,
+            fri_chal_mmcs,
         }),
         cursor,
     ))

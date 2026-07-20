@@ -17,6 +17,8 @@ mod fri_fold_bind;
 mod fri_fold_native;
 mod fri_fs_replay;
 mod fri_mmcs;
+mod fri_mmcs_bind;
+mod fri_mmcs_path;
 mod fri_ood;
 mod fri_ro;
 mod keccak256_air;
@@ -57,6 +59,16 @@ pub use fri_fold_bind::{
 };
 pub use fri_fs_replay::{replay_agg_fri_challenges, AggFriChallenges};
 pub use fri_mmcs::verify_agg_fri_openings;
+pub use fri_mmcs_bind::{
+    bind_fri_chal_mmcs_bundle, bind_fri_mmcs_bundle_to_proof, bind_fri_val_mmcs_bundle,
+    fri_chal_mmcs_bundle_from_agg_proof, fri_mmcs_bundle_from_agg_proof,
+    fri_val_mmcs_bundle_from_agg_proof, AggFriMmcsBundle, FriChalBatchPathProof,
+    FriChalMmcsQueryProof, FriValMmcsQueryProof,
+};
+pub use fri_mmcs_path::{
+    generate_fri_mmcs_path_proof, verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof,
+    FRI_MMCS_MAX_DEPTH,
+};
 pub use fri_ood::verify_agg_ood;
 pub use keccak256_air::{
     prove_compress, prove_keccak256, prove_lde_leaf, verify_compress_digest, verify_keccak256,

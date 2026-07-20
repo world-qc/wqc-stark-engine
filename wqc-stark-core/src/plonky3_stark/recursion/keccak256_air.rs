@@ -1,6 +1,7 @@
 //! R3-M2.5b: fixed-length Keccak-256 sponge STARK (tiny_keccak v256 / ValMmcs).
 //!
-//! Message lengths: **64** (compress) and **264** (AggregationAir LDE leaf).
+//! Message lengths: **12** (quot W=3), **24** (Challenge width-2 flattened),
+//! **64** (compress), **264** (AggregationAir LDE / trace W=66).
 //!
 //! Trace columns: 1600 state bits + `live` + 5 round bits (0..23).
 //! Publics: `msg_len` byte values + 32 digest bytes. Absorb/pad bind via bit packing.
@@ -18,8 +19,8 @@ use crate::plonky3_stark::config::{keccak_circle_config, WqcStarkConfig};
 
 use super::keccak_f_air::{constrain_keccak_round_with_rc, LIVE_COL};
 use super::keccak_f_native::{
-    keccak256, lde_row_to_bytes, num_permutations, sponge_witness, state_to_bits, KECCAK256_OUT,
-    KECCAK_DELIM, KECCAK_RATE, KECCAK_ROUNDS, KECCAK_STATE_BITS, RC,
+    keccak256, lde_row_to_bytes, num_permutations, sponge_witness, state_to_bits, val_row_to_bytes,
+    KECCAK256_OUT, KECCAK_DELIM, KECCAK_RATE, KECCAK_ROUNDS, KECCAK_STATE_BITS, RC,
 };
 
 pub const ROUND_BITS: usize = 5;
@@ -28,6 +29,17 @@ pub const SPONGE_WIDTH: usize = KECCAK_STATE_BITS + 1 + ROUND_BITS;
 
 pub const COMPRESS_MSG_LEN: usize = 64;
 pub const LEAF_MSG_LEN: usize = AGG_WIDTH * 4; // 264
+/// Quotient ValMmcs leaf (width 3 × 4 bytes).
+pub const QUOT_LEAF_MSG_LEN: usize = 3 * 4; // 12
+/// ChallengeMmcs leaf for EF width-2 flattened to 6 M31 (× 4 bytes).
+pub const CHAL_LEAF_MSG_LEN: usize = 6 * 4; // 24
+
+const fn supported_msg_len(len: usize) -> bool {
+    len == QUOT_LEAF_MSG_LEN
+        || len == CHAL_LEAF_MSG_LEN
+        || len == COMPRESS_MSG_LEN
+        || len == LEAF_MSG_LEN
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Keccak256SpongeAir {
@@ -149,7 +161,7 @@ where
             // Message byte XOR 0x80 (only if msg_len == rate).
             let d: AB::Expr = AB::F::from_u32(0x80).into();
             // Bitwise XOR on u8 values is not field mul; our fixed lengths avoid this case.
-            // msg_len ∈ {64,264}; single-block only 64, so is_msg && is_end is false.
+            // Supported single-block lengths are < rate, so is_msg && is_end is false.
             let _ = d;
             pv[byte_i].clone()
         } else if is_delim && is_end {
@@ -387,9 +399,9 @@ pub struct Keccak256StarkProof {
 }
 
 pub fn prove_keccak256(msg: &[u8]) -> Result<Keccak256StarkProof, String> {
-    if msg.len() != COMPRESS_MSG_LEN && msg.len() != LEAF_MSG_LEN {
+    if !supported_msg_len(msg.len()) {
         return Err(format!(
-            "unsupported keccak256 msg len {} (want {COMPRESS_MSG_LEN} or {LEAF_MSG_LEN})",
+            "unsupported keccak256 msg len {} (want {QUOT_LEAF_MSG_LEN}/{CHAL_LEAF_MSG_LEN}/{COMPRESS_MSG_LEN}/{LEAF_MSG_LEN})",
             msg.len()
         ));
     }
@@ -414,7 +426,7 @@ pub fn verify_keccak256(msg: &[u8], proof: &Keccak256StarkProof) -> bool {
         eprintln!("[Keccak256] msg_len mismatch");
         return false;
     }
-    if msg.len() != COMPRESS_MSG_LEN && msg.len() != LEAF_MSG_LEN {
+    if !supported_msg_len(msg.len()) {
         return false;
     }
     let air = Keccak256SpongeAir { msg_len: msg.len() };
@@ -461,11 +473,28 @@ pub fn prove_lde_leaf(row: &[Mersenne31]) -> Result<Keccak256StarkProof, String>
     prove_keccak256(&lde_row_to_bytes(row))
 }
 
+/// Prove ValMmcs leaf hash for an arbitrary-width M31 row (must be a supported byte length).
+pub fn prove_val_leaf(row: &[Mersenne31]) -> Result<Keccak256StarkProof, String> {
+    let bytes = val_row_to_bytes(row);
+    if !supported_msg_len(bytes.len()) {
+        return Err(format!(
+            "unsupported val leaf width {} (bytes {})",
+            row.len(),
+            bytes.len()
+        ));
+    }
+    prove_keccak256(&bytes)
+}
+
 pub fn verify_lde_leaf(row: &[Mersenne31], proof: &Keccak256StarkProof) -> bool {
     if row.len() != AGG_WIDTH {
         return false;
     }
     verify_keccak256(&lde_row_to_bytes(row), proof)
+}
+
+pub fn verify_val_leaf(row: &[Mersenne31], proof: &Keccak256StarkProof) -> bool {
+    verify_keccak256(&val_row_to_bytes(row), proof)
 }
 
 /// Compress verify that also checks the claimed digest equals `expected`.
@@ -492,6 +521,18 @@ pub fn verify_lde_leaf_digest(
         return false;
     }
     verify_lde_leaf(row, proof)
+}
+
+pub fn verify_val_leaf_digest(
+    row: &[Mersenne31],
+    expected: &[u8; 32],
+    proof: &Keccak256StarkProof,
+) -> bool {
+    if &proof.digest != expected {
+        eprintln!("[Keccak256] val leaf digest mismatch");
+        return false;
+    }
+    verify_val_leaf(row, proof)
 }
 
 #[cfg(test)]

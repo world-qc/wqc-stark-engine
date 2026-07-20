@@ -27,6 +27,11 @@ fn compress_fn() -> Compress {
 /// Leaf digest of a single AggregationAir-width LDE row (ValMmcs leaf hash).
 pub fn hash_lde_leaf(row: &[Mersenne31]) -> [u8; 32] {
     debug_assert_eq!(row.len(), AGG_WIDTH);
+    hash_val_leaf(row)
+}
+
+/// Leaf digest of an arbitrary-width M31 row (ValMmcs / flattened ChallengeMmcs).
+pub fn hash_val_leaf(row: &[Mersenne31]) -> [u8; 32] {
     field_hash().hash_iter(row.iter().copied())
 }
 
