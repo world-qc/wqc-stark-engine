@@ -1,4 +1,4 @@
-//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2 / M3c2): M1 fields + AggregationAir
+//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2 / M3c3): M1 fields + AggregationAir
 //! PCS certs (Merkle fold + Keccak sponges + FRI fold_y + fold_x + DeepRo + DeepRoTrace).
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
