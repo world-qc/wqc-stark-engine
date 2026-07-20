@@ -9,7 +9,8 @@ use crate::trace_spec::AIR_WIDTH;
 
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
 
-/// Max trace width for leaf DeepRoTrace / ValMmcs leaves.
+/// Max rows in a multi-chunk quotient [`FriChalBatchPathProof`] (chunks + optional concat).
+pub const MAX_QUOT_BATCH_LEAF_ROWS: usize = 64;
 /// Limited by 2-block Keccak sponge (`≤ 2·136` bytes ⇒ 68 M31). Born K≤21.
 pub const LEAF_DEEP_RO_MAX_WIDTH: usize = 68;
 

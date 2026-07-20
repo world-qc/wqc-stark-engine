@@ -111,4 +111,6 @@ pub use prove::{
     verify_recursive_aggregation_proof,
 };
 pub use transcript_v5::{V5_REC_AGG_INNER_MARKER, V5_REC_TAIL_MARKER};
+#[cfg(test)]
+pub use transcript_v6::{decode_rec_agg_proof_owned_v6, diagnose_decode_rec_agg_v6};
 pub use transcript_v6::{V6_REC_AGG_INNER_MARKER, V6_REC_TAIL_MARKER};

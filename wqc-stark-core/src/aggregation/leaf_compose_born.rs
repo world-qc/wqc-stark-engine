@@ -443,6 +443,34 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
+    fn unitary_born_v6_rec_tail_decodes() {
+        use crate::plonky3_stark::recursion::{
+            decode_rec_agg_proof_owned_v6, diagnose_decode_rec_agg_v6,
+        };
+
+        let (ctx, composed) = born_compose_fixture();
+        let (_, rec_bytes) = split_rec_tail(&composed).expect("rec tail");
+        let v3 = compose_v3_body(&composed);
+        let (header, left_child, right_child) = decode_compose_v3_slices(v3).expect("v3 slices");
+        let rec_ctx = recursive_context_for_children(
+            ctx.sub_task_id,
+            UNITARY_BORN_COMPOSE_LABEL,
+            "",
+            header.left_child_hash,
+            header.right_child_hash,
+            left_child,
+            right_child,
+        )
+        .expect("rec ctx");
+        if decode_rec_agg_proof_owned_v6(rec_bytes, &rec_ctx).is_none() {
+            let err = diagnose_decode_rec_agg_v6(rec_bytes, &rec_ctx)
+                .expect_err("expected decode failure reason");
+            panic!("v6 decode failed: {err}");
+        }
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
     fn unitary_born_compose_roundtrip() {
         let (ctx, composed) = born_compose_fixture();
         assert!(is_unitary_born_leaf_compose(&composed));

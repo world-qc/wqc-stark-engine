@@ -289,4 +289,78 @@ mod tests {
         assert_eq!(ros[0].0, 3);
         assert_eq!(ros[1].0, 2);
     }
+
+    #[test]
+    fn born_same_height_ro_matches_expected_fold_input() {
+        use crate::distribution::DistributionSegment;
+        use crate::plonky3_stark::generate_born_stark_proof;
+        use crate::plonky3_stark::recursion::fri_fold_native::{
+            solve_v0_for_fold, solve_v1_for_fold,
+        };
+        use crate::plonky3_stark::transcript_born::decode_born_stark_owned;
+        use crate::plonky3_stark::BornStarkContext;
+
+        let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
+        let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
+        let probs = vec![("00".into(), 0.5), ("11".into(), 0.5)];
+        let binding = crate::distribution::BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv)
+            .expect("bind");
+        let segment = DistributionSegment {
+            sample_seed: 42,
+            shots: 128,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: crate::distribution::calculate_probability_digest(&probs),
+            probabilities: probs,
+            born_binding: Some(binding),
+        };
+        let link = segment
+            .born_binding
+            .as_ref()
+            .unwrap()
+            .terminal_statevector_digest
+            .clone();
+        let born_ctx = BornStarkContext {
+            sub_task_id: "sub-born-ro",
+            probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: &link,
+        };
+        let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
+        let plonky3 = decode_born_stark_owned(&born_inner, &born_ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let trace_width = proof.opened_values.trace_local.len();
+        let chal =
+            super::super::fri_fs_replay::replay_fri_challenges(&proof, trace_width).expect("fs");
+        let view = decode_pcs_view(&proof).expect("pcs");
+
+        let mut mismatches = 0usize;
+        for q in 0..chal.query_indices.len() {
+            let query_index = chal.query_indices[q];
+            let (ros, _) = reconstruct_query_ro(&proof, &chal, &view, q, trace_width).expect("ro");
+            let qp = &view.fri_proof.query_proofs[q];
+            let fold_x_sibling = qp.commit_phase_openings[0].sibling_values[0];
+            let domain_index = query_index >> chal.extra_query_index_bits;
+            let fold_x_out = if domain_index.is_multiple_of(2) {
+                solve_v0_for_fold(
+                    domain_index >> 1,
+                    1,
+                    chal.betas[0],
+                    fold_x_sibling,
+                    view.fri_proof.final_poly,
+                )
+            } else {
+                solve_v1_for_fold(
+                    domain_index >> 1,
+                    1,
+                    chal.betas[0],
+                    fold_x_sibling,
+                    view.fri_proof.final_poly,
+                )
+            };
+
+            if ros[0].1 != fold_x_out {
+                mismatches += 1;
+            }
+        }
+        assert_eq!(mismatches, 0, "same-height RO mismatch count");
+    }
 }

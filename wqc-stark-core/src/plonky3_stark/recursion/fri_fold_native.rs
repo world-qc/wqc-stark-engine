@@ -102,6 +102,40 @@ pub fn fold_y_row(
     (sum + beta * diff).halve()
 }
 
+/// Solve for `v0` such that `fold_y_row(index, log_h, beta, v0, v1) == out`.
+#[allow(dead_code)]
+pub fn solve_v0_for_fold_y(
+    index: usize,
+    log_folded_height: usize,
+    beta: Challenge,
+    v1: Challenge,
+    out: Challenge,
+) -> Challenge {
+    let t = Challenge::from(fold_y_twiddle_inv(index, log_folded_height));
+    let one = Challenge::ONE;
+    let coeff_v0 = one + beta * t;
+    let coeff_v1 = one - beta * t;
+    let numer = out.double() - v1 * coeff_v1;
+    numer * coeff_v0.inverse()
+}
+
+/// Solve for `v1` such that `fold_y_row(index, log_h, beta, v0, v1) == out`.
+#[allow(dead_code)]
+pub fn solve_v1_for_fold_y(
+    index: usize,
+    log_folded_height: usize,
+    beta: Challenge,
+    v0: Challenge,
+    out: Challenge,
+) -> Challenge {
+    let t = Challenge::from(fold_y_twiddle_inv(index, log_folded_height));
+    let one = Challenge::ONE;
+    let coeff_v0 = one + beta * t;
+    let coeff_v1 = one - beta * t;
+    let numer = out.double() - v0 * coeff_v0;
+    numer * coeff_v1.inverse()
+}
+
 /// CFFT index permutation (mirrors `p3_circle::ordering::cfft_permute_index`).
 pub fn cfft_permute_index(index: usize, log_n: usize) -> usize {
     let (index, lsb) = (index >> 1, index & 1);
@@ -124,7 +158,7 @@ pub(crate) fn standard_nth_point(log_n: usize, idx: usize) -> CircPoint {
         shift.add(gen.mul_usize(half))
     } else {
         CircPoint {
-            x: -shift.x,
+            x: shift.x,
             y: -shift.y,
         }
         .add(gen.mul_usize(half + 1))

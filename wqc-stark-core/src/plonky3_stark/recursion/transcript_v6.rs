@@ -24,7 +24,7 @@ use super::keccak256_air::Keccak256StarkProof;
 use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
 use super::leaf_pcs_cert::{LeafPcsBundle, LeafPcsCertificate};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS, LEAF_PCS_MAX_SIBLINGS};
-use super::pcs_geom::{LeafKind, LEAF_DEEP_RO_MAX_WIDTH};
+use super::pcs_geom::{LeafKind, LEAF_DEEP_RO_MAX_WIDTH, MAX_QUOT_BATCH_LEAF_ROWS};
 use super::STARK_DIGEST_LEN;
 
 pub const V6_REC_AGG_INNER_MARKER: &[u8] = b"_WQC_REC_AGG_V6_";
@@ -487,7 +487,7 @@ fn encode_siblings(out: &mut Vec<u8>, siblings: &[[u8; 32]]) {
 
 fn decode_siblings(proof: &[u8], offset: usize, max: usize) -> Option<(Vec<[u8; 32]>, usize)> {
     let (len, cursor) = read_u32_le(proof, offset)?;
-    if len as usize == 0 || len as usize > max {
+    if len as usize > max {
         return None;
     }
     let mut siblings = Vec::with_capacity(len as usize);
@@ -507,6 +507,13 @@ fn encode_fri_val_mmcs_query(out: &mut Vec<u8>, q: &FriValMmcsQueryProof) {
     encode_siblings(out, &q.quot_siblings);
     encode_fri_mmcs_path(out, &q.trace_path);
     encode_fri_mmcs_path(out, &q.quot_path);
+    match &q.quot_batch {
+        Some(batch) => {
+            out.push(1);
+            encode_chal_batch(out, batch);
+        }
+        None => out.push(0),
+    }
 }
 
 fn decode_fri_val_mmcs_query(proof: &[u8], offset: usize) -> Option<(FriValMmcsQueryProof, usize)> {
@@ -516,6 +523,16 @@ fn decode_fri_val_mmcs_query(proof: &[u8], offset: usize) -> Option<(FriValMmcsQ
     let (quot_siblings, cursor) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)?;
     let (trace_path, cursor) = decode_fri_mmcs_path(proof, cursor)?;
     let (quot_path, cursor) = decode_fri_mmcs_path(proof, cursor)?;
+    let has_quot_batch = *proof.get(cursor)?;
+    let cursor = cursor + 1;
+    let (quot_batch, cursor) = match has_quot_batch {
+        0 => (None, cursor),
+        1 => {
+            let (batch, cursor) = decode_chal_batch(proof, cursor)?;
+            (Some(batch), cursor)
+        }
+        _ => return None,
+    };
     Some((
         FriValMmcsQueryProof {
             trace_index,
@@ -524,7 +541,7 @@ fn decode_fri_val_mmcs_query(proof: &[u8], offset: usize) -> Option<(FriValMmcsQ
             quot_siblings,
             trace_path,
             quot_path,
-            quot_batch: None,
+            quot_batch,
         },
         cursor,
     ))
@@ -594,7 +611,7 @@ fn decode_chal_batch(proof: &[u8], offset: usize) -> Option<(FriChalBatchPathPro
     let (index, cursor) = read_u32_le(proof, offset)?;
     let (siblings, cursor) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)?;
     let (n_rows, cursor) = read_u32_le(proof, cursor)?;
-    if n_rows == 0 || n_rows as usize > 8 {
+    if n_rows == 0 || n_rows as usize > MAX_QUOT_BATCH_LEAF_ROWS {
         return None;
     }
     let mut leaf_rows = Vec::with_capacity(n_rows as usize);
@@ -1064,6 +1081,99 @@ fn decode_side(
     }
 }
 
+#[cfg(test)]
+fn diagnose_decode_leaf_cert(
+    proof: &[u8],
+    offset: usize,
+) -> Result<(LeafPcsCertificate, usize), String> {
+    let kind = LeafKind::from_u8(*proof.get(offset).ok_or("kind byte")?).ok_or("invalid kind")?;
+    let cursor = offset + 1;
+    let (trace_width, cursor) = read_u32_le(proof, cursor).ok_or("trace_width")?;
+    let (degree_bits, cursor) = read_u32_le(proof, cursor).ok_or("degree_bits")?;
+    let (stmt_digest, cursor) = read_fixed::<32>(proof, cursor).ok_or("stmt_digest")?;
+    let (trace_commitment, cursor) = read_fixed::<32>(proof, cursor).ok_or("trace_commitment")?;
+    let (lde_index, cursor) = read_u32_le(proof, cursor).ok_or("lde_index")?;
+    let (lde_len, cursor) = read_u32_le(proof, cursor).ok_or("lde_len")?;
+    let (lde_row, cursor) = read_m31_row(proof, cursor, lde_len as usize).ok_or("lde_row")?;
+    let (sib_len, cursor) = read_u32_le(proof, cursor).ok_or("sib_len")?;
+    if sib_len as usize > LEAF_PCS_MAX_SIBLINGS {
+        return Err(format!("sib_len {sib_len} > max"));
+    }
+    let mut siblings = Vec::with_capacity(sib_len as usize);
+    let mut cursor = cursor;
+    for i in 0..sib_len {
+        let (sib, next) = read_fixed::<32>(proof, cursor).ok_or(format!("sibling {i}"))?;
+        siblings.push(sib);
+        cursor = next;
+    }
+    let (merkle_fold, cursor) = decode_fri_mmcs_path(proof, cursor).ok_or("merkle_fold")?;
+    let (fri_fold_ys, cursor) =
+        decode_fri_folds(proof, cursor, AGG_FRI_MAX_FOLD_YS).ok_or("fri_fold_ys")?;
+    let (fri_folds, cursor) =
+        decode_fri_folds(proof, cursor, LEAF_FRI_MAX_ROUNDS * LEAF_FRI_PROVEN_QUERIES)
+            .ok_or("fri_folds")?;
+    let (deep_ros, cursor) = decode_leaf_deep_ros(proof, cursor).ok_or("deep_ros")?;
+    let (deep_ro_traces, cursor) =
+        decode_deep_ro_leaf_traces(proof, cursor, LEAF_FRI_PROVEN_QUERIES)
+            .ok_or("deep_ro_traces")?;
+    let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor).ok_or("fri_val_mmcs")?;
+    let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor).ok_or("fri_chal_mmcs")?;
+    Ok((
+        LeafPcsCertificate {
+            kind,
+            trace_width,
+            degree_bits,
+            stmt_digest,
+            trace_commitment,
+            lde_index,
+            lde_row,
+            siblings,
+            merkle_fold,
+            fri_fold_ys,
+            fri_folds,
+            deep_ros,
+            deep_ro_traces,
+            fri_val_mmcs,
+            fri_chal_mmcs,
+        },
+        cursor,
+    ))
+}
+
+#[cfg(test)]
+fn diagnose_decode_side(
+    proof: &[u8],
+    offset: usize,
+    side: &str,
+) -> Result<(Option<AggPcsCertificate>, Option<LeafPcsBundle>, usize), String> {
+    let flag = *proof.get(offset).ok_or(format!("{side} flag"))?;
+    let cursor = offset + 1;
+    match flag {
+        SIDE_NONE => Ok((None, None, cursor)),
+        SIDE_AGG => {
+            let (cert, cursor) =
+                decode_agg_cert(proof, cursor).ok_or(format!("{side} agg cert"))?;
+            Ok((Some(cert), None, cursor))
+        }
+        SIDE_LEAF => {
+            let (len, cursor) = read_u32_le(proof, cursor).ok_or(format!("{side} bundle len"))?;
+            if len == 0 || len as usize > 64 {
+                return Err(format!("{side} bundle len {len}"));
+            }
+            let mut certs = Vec::with_capacity(len as usize);
+            let mut cursor = cursor;
+            for i in 0..len {
+                let (cert, next) = diagnose_decode_leaf_cert(proof, cursor)
+                    .map_err(|e| format!("{side} cert {i}: {e}"))?;
+                certs.push(cert);
+                cursor = next;
+            }
+            Ok((None, Some(LeafPcsBundle { certs }), cursor))
+        }
+        other => Err(format!("{side} unknown flag {other}")),
+    }
+}
+
 fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
     out.extend_from_slice(&c.stmt_left_hash);
     out.extend_from_slice(&c.stmt_right_hash);
@@ -1263,6 +1373,110 @@ pub fn decode_rec_agg_proof_owned_v6(
     Some(payload)
 }
 
+/// Test-only: pinpoints why [`decode_rec_agg_proof_owned_v6`] would return `None`.
+#[cfg(test)]
+pub fn diagnose_decode_rec_agg_v6(
+    proof: &[u8],
+    expected: &RecursiveAggregationContext<'_>,
+) -> Result<Vec<u8>, String> {
+    if !proof.starts_with(expected.parent_task_id.as_bytes()) {
+        return Err("parent_task_id prefix mismatch".into());
+    }
+    let marker_pos = locate_inner_marker(proof).ok_or("inner marker not found")?;
+    let parent_end = marker_pos.saturating_sub(1);
+    let parent_task_id =
+        std::str::from_utf8(&proof[..parent_end]).map_err(|_| "parent_task_id utf8")?;
+    if parent_task_id != expected.parent_task_id {
+        return Err(format!(
+            "parent_task_id mismatch: {parent_task_id} != {}",
+            expected.parent_task_id
+        ));
+    }
+
+    let cursor = marker_pos + V6_REC_AGG_INNER_MARKER.len();
+    let (compose_label, cursor) = read_cstr(proof, cursor).ok_or("compose_label cstr")?;
+    let (manifest_root_hash, cursor) = read_cstr(proof, cursor).ok_or("manifest_root_hash cstr")?;
+    let (left_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor).ok_or("left_hash")?;
+    let (right_hash, cursor) =
+        read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor).ok_or("right_hash")?;
+    let (left_stark, cursor) =
+        read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor).ok_or("left_stark")?;
+    let (right_stark, cursor) =
+        read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor).ok_or("right_stark")?;
+    let left_kind = *proof.get(cursor).ok_or("left_kind")?;
+    let right_kind = *proof.get(cursor + 1).ok_or("right_kind")?;
+    let cursor = cursor + 2;
+    let (left_cert, left_leaf, cursor) =
+        diagnose_decode_side(proof, cursor, "left")?;
+    let (right_cert, right_leaf, cursor) =
+        diagnose_decode_side(proof, cursor, "right")?;
+
+    if compose_label != expected.compose_label {
+        return Err(format!(
+            "compose_label: {compose_label} != {}",
+            expected.compose_label
+        ));
+    }
+    if manifest_root_hash != expected.manifest_root_hash {
+        return Err(format!(
+            "manifest_root_hash: {manifest_root_hash} != {}",
+            expected.manifest_root_hash
+        ));
+    }
+    if left_hash != expected.left_child_hash {
+        return Err("left_child_hash mismatch".into());
+    }
+    if right_hash != expected.right_child_hash {
+        return Err("right_child_hash mismatch".into());
+    }
+    if left_stark != expected.left_stark_digest {
+        return Err("left_stark_digest mismatch".into());
+    }
+    if right_stark != expected.right_stark_digest {
+        return Err("right_stark_digest mismatch".into());
+    }
+    if left_kind != expected.left_kind {
+        return Err(format!("left_kind: {left_kind} != {}", expected.left_kind));
+    }
+    if right_kind != expected.right_kind {
+        return Err(format!(
+            "right_kind: {right_kind} != {}",
+            expected.right_kind
+        ));
+    }
+    if left_cert != expected.left_agg_cert {
+        return Err("left_agg_cert mismatch".into());
+    }
+    if right_cert != expected.right_agg_cert {
+        return Err("right_agg_cert mismatch".into());
+    }
+    if left_leaf != expected.left_leaf_bundle {
+        return Err(format!(
+            "left_leaf_bundle mismatch (expected_some={}, decoded_some={})",
+            expected.left_leaf_bundle.is_some(),
+            left_leaf.is_some()
+        ));
+    }
+    if right_leaf != expected.right_leaf_bundle {
+        return Err(format!(
+            "right_leaf_bundle mismatch (expected_some={}, decoded_some={})",
+            expected.right_leaf_bundle.is_some(),
+            right_leaf.is_some()
+        ));
+    }
+
+    let (len, cursor) = read_u32_le(proof, cursor).ok_or("plonky3 len")?;
+    let end = cursor + len as usize;
+    let payload = proof
+        .get(cursor..end)
+        .ok_or("plonky3 payload bounds")?
+        .to_vec();
+    if end != proof.len() {
+        return Err(format!("trailing bytes: end={end} len={}", proof.len()));
+    }
+    Ok(payload)
+}
+
 pub fn append_rec_tail_v6(mut body: Vec<u8>, rec_proof: &[u8]) -> Vec<u8> {
     body.extend_from_slice(V6_REC_TAIL_MARKER);
     body.extend_from_slice(&(rec_proof.len() as u32).to_le_bytes());
@@ -1288,6 +1502,10 @@ pub fn split_rec_tail_v6(proof: &[u8]) -> Option<(&[u8], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generate_plonky3_stark_proof;
+    use crate::plonky3_stark::recursion::build_leaf_pcs_bundle_from_child;
+    use crate::trace_spec::idle_qubit0_trace;
+    use crate::transcript::StarkContext;
 
     #[test]
     fn rec_tail_v6_roundtrip() {
@@ -1297,5 +1515,26 @@ mod tests {
         let (left, right) = split_rec_tail_v6(&combined).expect("split");
         assert_eq!(left, body);
         assert_eq!(right, rec);
+    }
+
+    #[test]
+    fn unitary_leaf_bundle_v6_codec_roundtrip() {
+        let ctx = StarkContext {
+            circuit_id: "c-codec",
+            sub_task_id: "sub-codec",
+            node_id: "n1",
+            slice_id: "0",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+        };
+        let trace = idle_qubit0_trace();
+        let transcript = generate_plonky3_stark_proof(&ctx, &trace).expect("prove");
+        let bundle = build_leaf_pcs_bundle_from_child(&transcript).expect("bundle");
+        let mut out = Vec::new();
+        encode_leaf_bundle(&mut out, &bundle);
+        let (decoded, end) = decode_leaf_bundle(&out, 0).expect("decode leaf bundle");
+        assert_eq!(end, out.len());
+        assert_eq!(decoded, bundle);
     }
 }

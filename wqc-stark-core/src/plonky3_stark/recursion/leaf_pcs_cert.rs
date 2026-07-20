@@ -682,7 +682,8 @@ mod tests {
         let proof = proof_from_plonky3(&plonky3).expect("proof");
         let air = air_for_kind(LeafKind::Born, &proof).expect("air");
         air.verify(&proof).expect("born OOD");
-        // Full Born LeafPcsCertificate blocked on DistributionAir same-height multi-chunk RO
-        // replay (~19/40 FRI queries); compose falls back to legacy verify until fixed.
+        let stmt = leaf_stmt_digest(LeafKind::Born, &proof).expect("stmt");
+        let cert = build_leaf_pcs_certificate(&proof, LeafKind::Born, stmt).expect("cert");
+        assert!(verify_leaf_pcs_certificate(&proof, &cert));
     }
 }

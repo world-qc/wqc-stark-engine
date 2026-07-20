@@ -13,6 +13,7 @@ use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use crate::plonky3_stark::config::{
     devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
 };
+use crate::plonky3_stark::recursion::merkle_keccak::{hash_val_leaf, merkle_root_from_path};
 
 use p3_circle::{CircleFriProof, CircleInputProof};
 
@@ -51,6 +52,25 @@ pub(crate) fn decode_pcs_view(proof: &Proof<WqcStarkConfig>) -> Result<CirclePcs
     let bytes = postcard::to_allocvec(&proof.opening_proof)
         .map_err(|e| format!("postcard encode opening_proof: {e}"))?;
     postcard::from_bytes(&bytes).map_err(|e| format!("postcard decode CirclePcsProof: {e}"))
+}
+
+fn recover_same_height_query_index(
+    trace_row: &[Val],
+    siblings: &[[u8; 32]],
+    expected_root: &[u8; 32],
+) -> Result<usize, String> {
+    let leaf = hash_val_leaf(trace_row);
+    let candidate_count = 1usize
+        .checked_shl(siblings.len() as u32)
+        .ok_or_else(|| format!("trace Merkle depth too large: {}", siblings.len()))?;
+    let mut match_index = None;
+    for index in 0..candidate_count {
+        let root = merkle_root_from_path(leaf, siblings, index);
+        if &root == expected_root && match_index.replace(index).is_some() {
+            return Err("multiple trace indices match same-height Merkle path".into());
+        }
+    }
+    match_index.ok_or_else(|| "no trace index matches same-height Merkle path".into())
 }
 
 /// Replay FS for any non-ZK Circle proof with the given main-trace width (0 public values).
@@ -161,6 +181,51 @@ pub fn replay_fri_challenges(
     let mut query_indices = Vec::with_capacity(fri_params.num_queries);
     for _ in 0..fri_params.num_queries {
         query_indices.push(challenger.sample_bits(num_index_bits));
+    }
+
+    let trace_root = proof
+        .commitments
+        .trace
+        .roots()
+        .first()
+        .copied()
+        .ok_or_else(|| "empty trace commitment roots".to_string())?;
+    let trace_log_height = proof.degree_bits + log_blowup;
+    let same_height_trace_queries = trace_log_height == num_index_bits;
+    if same_height_trace_queries {
+        for (q, query_index) in query_indices.iter_mut().enumerate() {
+            let qp = fri
+                .query_proofs
+                .get(q)
+                .ok_or_else(|| format!("missing FRI query proof {q}"))?;
+            let input: super::fri_ro::CircleInputProofView =
+                super::fri_ro::decode_input_proof(&qp.input_proof)?;
+            let trace_row = input
+                .input_openings
+                .first()
+                .and_then(|opening| opening.opened_values.first())
+                .ok_or_else(|| format!("q{q}: missing trace opening row"))?;
+            if trace_row.len() != expected_width {
+                return Err(format!(
+                    "q{q}: trace opening width {}, want {expected_width}",
+                    trace_row.len()
+                ));
+            }
+            let siblings = &input
+                .input_openings
+                .first()
+                .ok_or_else(|| format!("q{q}: missing trace opening proof"))?
+                .opening_proof;
+            let replay_root =
+                merkle_root_from_path(hash_val_leaf(trace_row), siblings, *query_index);
+            if replay_root != trace_root {
+                let recovered = recover_same_height_query_index(trace_row, siblings, &trace_root)
+                    .map_err(|e| {
+                    format!("q{q}: same-height trace index recovery failed: {e}")
+                })?;
+                *query_index = recovered;
+            }
+        }
     }
 
     Ok(AggFriChallenges {
