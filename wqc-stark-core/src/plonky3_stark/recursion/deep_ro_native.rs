@@ -177,6 +177,70 @@ pub struct DeepRoTraceWitness {
     pub out: Challenge,
 }
 
+/// Variable-width leaf DeepRo + λ witness (pad-ready; uses actual `px.len()`).
+#[derive(Debug, Clone)]
+pub struct DeepRoLeafTraceWitness {
+    pub at_x: Challenge,
+    pub at_y: Challenge,
+    pub atn_x: Challenge,
+    pub atn_y: Challenge,
+    pub alpha_w: Challenge,
+    pub alpha_w2: Challenge,
+    pub deep0: DeepPartialWitness,
+    pub deep1: DeepPartialWitness,
+    pub combined: Challenge,
+    pub v_n: Val,
+    pub out: Challenge,
+}
+
+/// Builds intermediates for leaf DeepRoTrace (any width in `1..=LEAF_DEEP_RO_MAX_WIDTH`).
+#[allow(clippy::too_many_arguments)]
+pub fn deep_ro_leaf_trace_witness(
+    alpha: Challenge,
+    sx: Val,
+    sy: Val,
+    zeta: Challenge,
+    zeta_next: Challenge,
+    px: &[Val],
+    pz_local: &[Challenge],
+    pz_next: &[Challenge],
+    lambda: Challenge,
+    log_n: usize,
+) -> Result<DeepRoLeafTraceWitness, String> {
+    let w = px.len();
+    if w == 0 || w > super::pcs_geom::LEAF_DEEP_RO_MAX_WIDTH {
+        return Err(format!(
+            "leaf deep_ro width {w} out of 1..={}",
+            super::pcs_geom::LEAF_DEEP_RO_MAX_WIDTH
+        ));
+    }
+    if pz_local.len() != w || pz_next.len() != w {
+        return Err("leaf deep_ro pz width mismatch".into());
+    }
+    let (at_x, at_y) = ef_from_projective_line(zeta);
+    let (atn_x, atn_y) = ef_from_projective_line(zeta_next);
+    let alpha_w = alpha.exp_u64(w as u64);
+    let alpha_w2 = alpha_w.square();
+    let deep0 = deep_partial(alpha, sx, sy, at_x, at_y, alpha_w, px, pz_local);
+    let deep1 = deep_partial(alpha, sx, sy, atn_x, atn_y, alpha_w, px, pz_next);
+    let combined = deep0.out_pre + alpha_w2 * deep1.out_pre;
+    let v_n = point_v_n(sx, log_n);
+    let out = combined - lambda * Challenge::from(v_n);
+    Ok(DeepRoLeafTraceWitness {
+        at_x,
+        at_y,
+        atn_x,
+        atn_y,
+        alpha_w,
+        alpha_w2,
+        deep0,
+        deep1,
+        combined,
+        v_n,
+        out,
+    })
+}
+
 /// Builds intermediates for DeepRoTraceAir (AggregationAir width 66).
 #[allow(clippy::too_many_arguments)]
 pub fn deep_ro_trace_witness(
@@ -191,39 +255,43 @@ pub fn deep_ro_trace_witness(
     lambda: Challenge,
     log_n: usize,
 ) -> DeepRoTraceWitness {
-    let (at_x, at_y) = ef_from_projective_line(zeta);
-    let (atn_x, atn_y) = ef_from_projective_line(zeta_next);
+    let leaf = deep_ro_leaf_trace_witness(
+        alpha,
+        sx,
+        sy,
+        zeta,
+        zeta_next,
+        px.as_slice(),
+        pz_local.as_slice(),
+        pz_next.as_slice(),
+        lambda,
+        log_n,
+    )
+    .expect("W=66 is in range");
     let alpha2 = alpha.square();
     let alpha4 = alpha2.square();
     let alpha8 = alpha4.square();
     let alpha16 = alpha8.square();
     let alpha32 = alpha16.square();
     let alpha64 = alpha32.square();
-    let alpha66 = alpha64 * alpha2;
-    let alpha132 = alpha66.square();
-    let deep0 = deep_partial(alpha, sx, sy, at_x, at_y, alpha66, px, pz_local);
-    let deep1 = deep_partial(alpha, sx, sy, atn_x, atn_y, alpha66, px, pz_next);
-    let combined = deep0.out_pre + alpha132 * deep1.out_pre;
-    let v_n = point_v_n(sx, log_n);
-    let out = combined - lambda * Challenge::from(v_n);
     DeepRoTraceWitness {
-        at_x,
-        at_y,
-        atn_x,
-        atn_y,
+        at_x: leaf.at_x,
+        at_y: leaf.at_y,
+        atn_x: leaf.atn_x,
+        atn_y: leaf.atn_y,
         alpha2,
         alpha4,
         alpha8,
         alpha16,
         alpha32,
         alpha64,
-        alpha66,
-        alpha132,
-        deep0,
-        deep1,
-        combined,
-        v_n,
-        out,
+        alpha66: leaf.alpha_w,
+        alpha132: leaf.alpha_w2,
+        deep0: leaf.deep0,
+        deep1: leaf.deep1,
+        combined: leaf.combined,
+        v_n: leaf.v_n,
+        out: leaf.out,
     }
 }
 

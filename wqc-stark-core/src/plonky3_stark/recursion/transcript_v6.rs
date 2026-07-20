@@ -1,5 +1,5 @@
-//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2 / M3c3 / M3d): M1 fields +
-//! AggregationAir PCS certs (Merkle fold + Keccak + FriFold + DeepRo + FRI Val/Challenge Mmcs).
+//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2 / M3c3 / M3d / M3e): M1 fields +
+//! AggregationAir PCS certs or leaf PCS bundles (Merkle fold + Keccak + FriFold + DeepRo + FRI Val/Challenge Mmcs).
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mersenne_31::Mersenne31;
@@ -11,14 +11,20 @@ use super::air::{REC_KIND_AGG, REC_KIND_LEAF};
 use super::context::RecursiveAggregationContext;
 use super::deep_ro_air::DeepRoStepProof;
 use super::deep_ro_bind::{AGG_DEEP_RO_MAX, AGG_DEEP_RO_TRACE_MAX};
+use super::deep_ro_leaf_trace_air::DeepRoLeafTraceStepProof;
 use super::deep_ro_trace_air::DeepRoTraceStepProof;
 use super::fri_fold_air::FriFoldStepProof;
-use super::fri_fold_bind::{AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES};
+use super::fri_fold_bind::{
+    AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES, LEAF_FRI_MAX_ROUNDS,
+    LEAF_FRI_PROVEN_QUERIES,
+};
 use super::fri_mmcs_bind::{FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof};
 use super::fri_mmcs_path::{FriMmcsPathProof, FRI_MMCS_MAX_DEPTH};
 use super::keccak256_air::Keccak256StarkProof;
 use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
-use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS};
+use super::leaf_pcs_cert::{LeafPcsBundle, LeafPcsCertificate};
+use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS, LEAF_PCS_MAX_SIBLINGS};
+use super::pcs_geom::{LeafKind, LEAF_DEEP_RO_MAX_WIDTH};
 use super::STARK_DIGEST_LEN;
 
 pub const V6_REC_AGG_INNER_MARKER: &[u8] = b"_WQC_REC_AGG_V6_";
@@ -518,6 +524,7 @@ fn decode_fri_val_mmcs_query(proof: &[u8], offset: usize) -> Option<(FriValMmcsQ
             quot_siblings,
             trace_path,
             quot_path,
+            quot_batch: None,
         },
         cursor,
     ))
@@ -785,43 +792,301 @@ fn decode_fri_chal_mmcs(
     Some((qs, cursor))
 }
 
-fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
-    match cert {
-        None => out.push(0),
-        Some(c) => {
-            out.push(1);
-            out.extend_from_slice(&c.stmt_left_hash);
-            out.extend_from_slice(&c.stmt_right_hash);
-            out.extend_from_slice(&c.trace_commitment);
-            write_m31_row(out, &c.natural_row);
-            out.extend_from_slice(&c.lde_index.to_le_bytes());
-            out.extend_from_slice(&(c.lde_row.len() as u32).to_le_bytes());
-            write_m31_row(out, &c.lde_row);
-            out.extend_from_slice(&(c.siblings.len() as u32).to_le_bytes());
-            for sib in &c.siblings {
-                out.extend_from_slice(sib);
-            }
-            encode_merkle_fold(out, &c.merkle_fold);
-            encode_fri_folds(out, &c.fri_fold_ys);
-            encode_fri_folds(out, &c.fri_folds);
-            encode_deep_ros(out, &c.deep_ros);
-            encode_deep_ro_traces(out, &c.deep_ro_traces);
-            encode_fri_val_mmcs(out, &c.fri_val_mmcs);
-            encode_fri_chal_mmcs(out, &c.fri_chal_mmcs);
-        }
+fn encode_deep_ro_leaf_trace(out: &mut Vec<u8>, deep: &DeepRoLeafTraceStepProof) {
+    out.extend_from_slice(&deep.sx.as_canonical_u32().to_le_bytes());
+    out.extend_from_slice(&deep.sy.as_canonical_u32().to_le_bytes());
+    write_m31_row(out, &deep.alpha_limbs);
+    out.extend_from_slice(&deep.width.to_le_bytes());
+    write_m31_row(out, &deep.px);
+    for pz in &deep.pz_local_limbs {
+        write_m31_row(out, pz);
+    }
+    for pz in &deep.pz_next_limbs {
+        write_m31_row(out, pz);
+    }
+    write_m31_row(out, &deep.lambda_limbs);
+    out.extend_from_slice(&deep.v_n.as_canonical_u32().to_le_bytes());
+    write_m31_row(out, &deep.out_limbs);
+    out.extend_from_slice(&deep.log_n.to_le_bytes());
+    write_m31_row(out, &deep.zeta_limbs);
+    write_m31_row(out, &deep.zeta_next_limbs);
+    out.extend_from_slice(&(deep.deep_stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&deep.deep_stark);
+}
+
+fn decode_deep_ro_leaf_trace(
+    proof: &[u8],
+    offset: usize,
+) -> Option<(DeepRoLeafTraceStepProof, usize)> {
+    let (sx_v, cursor) = read_m31_row(proof, offset, 1)?;
+    let (sy_v, cursor) = read_m31_row(proof, cursor, 1)?;
+    let (alpha_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (width, cursor) = read_u32_le(proof, cursor)?;
+    if width == 0 || width as usize > LEAF_DEEP_RO_MAX_WIDTH {
+        return None;
+    }
+    let w = width as usize;
+    let (px_vec, cursor) = read_m31_row(proof, cursor, w)?;
+    let mut pz_local_limbs = Vec::with_capacity(w);
+    let mut cursor = cursor;
+    for _ in 0..w {
+        let (pz_vec, next) = read_m31_row(proof, cursor, 3)?;
+        let mut pz = [Mersenne31::ZERO; 3];
+        pz.copy_from_slice(&pz_vec);
+        pz_local_limbs.push(pz);
+        cursor = next;
+    }
+    let mut pz_next_limbs = Vec::with_capacity(w);
+    for _ in 0..w {
+        let (pz_vec, next) = read_m31_row(proof, cursor, 3)?;
+        let mut pz = [Mersenne31::ZERO; 3];
+        pz.copy_from_slice(&pz_vec);
+        pz_next_limbs.push(pz);
+        cursor = next;
+    }
+    let (lambda_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (v_n_v, cursor) = read_m31_row(proof, cursor, 1)?;
+    let (out_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (log_n, cursor) = read_u32_le(proof, cursor)?;
+    let (zeta_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (zeta_next_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let deep_stark = proof.get(cursor..end)?.to_vec();
+    let mut alpha_limbs = [Mersenne31::ZERO; 3];
+    let mut lambda_limbs = [Mersenne31::ZERO; 3];
+    let mut out_limbs = [Mersenne31::ZERO; 3];
+    let mut zeta_limbs = [Mersenne31::ZERO; 3];
+    let mut zeta_next_limbs = [Mersenne31::ZERO; 3];
+    alpha_limbs.copy_from_slice(&alpha_vec);
+    lambda_limbs.copy_from_slice(&lambda_vec);
+    out_limbs.copy_from_slice(&out_vec);
+    zeta_limbs.copy_from_slice(&zeta_vec);
+    zeta_next_limbs.copy_from_slice(&zeta_next_vec);
+    Some((
+        DeepRoLeafTraceStepProof {
+            sx: sx_v[0],
+            sy: sy_v[0],
+            alpha_limbs,
+            width,
+            px: px_vec,
+            pz_local_limbs,
+            pz_next_limbs,
+            lambda_limbs,
+            v_n: v_n_v[0],
+            out_limbs,
+            log_n,
+            zeta_limbs,
+            zeta_next_limbs,
+            deep_stark,
+        },
+        end,
+    ))
+}
+
+fn encode_deep_ro_leaf_traces(out: &mut Vec<u8>, deeps: &[DeepRoLeafTraceStepProof]) {
+    out.extend_from_slice(&(deeps.len() as u32).to_le_bytes());
+    for d in deeps {
+        encode_deep_ro_leaf_trace(out, d);
     }
 }
 
-fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>, usize)> {
-    let flag = *proof.get(offset)?;
-    let cursor = offset + 1;
-    if flag == 0 {
-        return Some((None, cursor));
-    }
-    if flag != 1 {
+fn decode_deep_ro_leaf_traces(
+    proof: &[u8],
+    offset: usize,
+    max: usize,
+) -> Option<(Vec<DeepRoLeafTraceStepProof>, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    if len as usize > max {
         return None;
     }
-    let (stmt_left_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor)?;
+    let mut deeps = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (d, next) = decode_deep_ro_leaf_trace(proof, cursor)?;
+        deeps.push(d);
+        cursor = next;
+    }
+    Some((deeps, cursor))
+}
+
+fn decode_leaf_deep_ros(proof: &[u8], offset: usize) -> Option<(Vec<DeepRoStepProof>, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    if len as usize > LEAF_FRI_PROVEN_QUERIES {
+        return None;
+    }
+    let mut deeps = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (d, next) = decode_deep_ro(proof, cursor)?;
+        deeps.push(d);
+        cursor = next;
+    }
+    Some((deeps, cursor))
+}
+
+fn encode_leaf_cert(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
+    out.push(c.kind as u8);
+    out.extend_from_slice(&c.trace_width.to_le_bytes());
+    out.extend_from_slice(&c.degree_bits.to_le_bytes());
+    out.extend_from_slice(&c.stmt_digest);
+    out.extend_from_slice(&c.trace_commitment);
+    out.extend_from_slice(&c.lde_index.to_le_bytes());
+    out.extend_from_slice(&(c.lde_row.len() as u32).to_le_bytes());
+    write_m31_row(out, &c.lde_row);
+    out.extend_from_slice(&(c.siblings.len() as u32).to_le_bytes());
+    for sib in &c.siblings {
+        out.extend_from_slice(sib);
+    }
+    encode_fri_mmcs_path(out, &c.merkle_fold);
+    encode_fri_folds(out, &c.fri_fold_ys);
+    encode_fri_folds(out, &c.fri_folds);
+    encode_deep_ros(out, &c.deep_ros);
+    encode_deep_ro_leaf_traces(out, &c.deep_ro_traces);
+    encode_fri_val_mmcs(out, &c.fri_val_mmcs);
+    encode_fri_chal_mmcs(out, &c.fri_chal_mmcs);
+}
+
+fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, usize)> {
+    let kind = LeafKind::from_u8(*proof.get(offset)?)?;
+    let cursor = offset + 1;
+    let (trace_width, cursor) = read_u32_le(proof, cursor)?;
+    let (degree_bits, cursor) = read_u32_le(proof, cursor)?;
+    let (stmt_digest, cursor) = read_fixed::<32>(proof, cursor)?;
+    let (trace_commitment, cursor) = read_fixed::<32>(proof, cursor)?;
+    let (lde_index, cursor) = read_u32_le(proof, cursor)?;
+    let (lde_len, cursor) = read_u32_le(proof, cursor)?;
+    let (lde_row, cursor) = read_m31_row(proof, cursor, lde_len as usize)?;
+    let (sib_len, cursor) = read_u32_le(proof, cursor)?;
+    if sib_len as usize > LEAF_PCS_MAX_SIBLINGS {
+        return None;
+    }
+    let mut siblings = Vec::with_capacity(sib_len as usize);
+    let mut cursor = cursor;
+    for _ in 0..sib_len {
+        let (sib, next) = read_fixed::<32>(proof, cursor)?;
+        siblings.push(sib);
+        cursor = next;
+    }
+    let (merkle_fold, cursor) = decode_fri_mmcs_path(proof, cursor)?;
+    let (fri_fold_ys, cursor) = decode_fri_folds(proof, cursor, AGG_FRI_MAX_FOLD_YS)?;
+    let (fri_folds, cursor) =
+        decode_fri_folds(proof, cursor, LEAF_FRI_MAX_ROUNDS * LEAF_FRI_PROVEN_QUERIES)?;
+    let (deep_ros, cursor) = decode_leaf_deep_ros(proof, cursor)?;
+    let (deep_ro_traces, cursor) =
+        decode_deep_ro_leaf_traces(proof, cursor, LEAF_FRI_PROVEN_QUERIES)?;
+    let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor)?;
+    let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor)?;
+    Some((
+        LeafPcsCertificate {
+            kind,
+            trace_width,
+            degree_bits,
+            stmt_digest,
+            trace_commitment,
+            lde_index,
+            lde_row,
+            siblings,
+            merkle_fold,
+            fri_fold_ys,
+            fri_folds,
+            deep_ros,
+            deep_ro_traces,
+            fri_val_mmcs,
+            fri_chal_mmcs,
+        },
+        cursor,
+    ))
+}
+
+fn encode_leaf_bundle(out: &mut Vec<u8>, bundle: &LeafPcsBundle) {
+    out.extend_from_slice(&(bundle.certs.len() as u32).to_le_bytes());
+    for cert in &bundle.certs {
+        encode_leaf_cert(out, cert);
+    }
+}
+
+fn decode_leaf_bundle(proof: &[u8], offset: usize) -> Option<(LeafPcsBundle, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    if len == 0 || len as usize > 64 {
+        return None;
+    }
+    let mut certs = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (cert, next) = decode_leaf_cert(proof, cursor)?;
+        certs.push(cert);
+        cursor = next;
+    }
+    Some((LeafPcsBundle { certs }, cursor))
+}
+
+const SIDE_NONE: u8 = 0;
+const SIDE_AGG: u8 = 1;
+const SIDE_LEAF: u8 = 2;
+
+fn encode_side(
+    out: &mut Vec<u8>,
+    agg_cert: &Option<AggPcsCertificate>,
+    leaf_bundle: &Option<LeafPcsBundle>,
+) {
+    match (agg_cert, leaf_bundle) {
+        (None, None) => out.push(SIDE_NONE),
+        (Some(c), None) => {
+            out.push(SIDE_AGG);
+            encode_agg_cert(out, c);
+        }
+        (None, Some(b)) => {
+            out.push(SIDE_LEAF);
+            encode_leaf_bundle(out, b);
+        }
+        (Some(_), Some(_)) => unreachable!("agg cert and leaf bundle are mutually exclusive"),
+    }
+}
+
+fn decode_side(
+    proof: &[u8],
+    offset: usize,
+) -> Option<(Option<AggPcsCertificate>, Option<LeafPcsBundle>, usize)> {
+    let flag = *proof.get(offset)?;
+    let cursor = offset + 1;
+    match flag {
+        SIDE_NONE => Some((None, None, cursor)),
+        SIDE_AGG => {
+            let (cert, cursor) = decode_agg_cert(proof, cursor)?;
+            Some((Some(cert), None, cursor))
+        }
+        SIDE_LEAF => {
+            let (bundle, cursor) = decode_leaf_bundle(proof, cursor)?;
+            Some((None, Some(bundle), cursor))
+        }
+        _ => None,
+    }
+}
+
+fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
+    out.extend_from_slice(&c.stmt_left_hash);
+    out.extend_from_slice(&c.stmt_right_hash);
+    out.extend_from_slice(&c.trace_commitment);
+    write_m31_row(out, &c.natural_row);
+    out.extend_from_slice(&c.lde_index.to_le_bytes());
+    out.extend_from_slice(&(c.lde_row.len() as u32).to_le_bytes());
+    write_m31_row(out, &c.lde_row);
+    out.extend_from_slice(&(c.siblings.len() as u32).to_le_bytes());
+    for sib in &c.siblings {
+        out.extend_from_slice(sib);
+    }
+    encode_merkle_fold(out, &c.merkle_fold);
+    encode_fri_folds(out, &c.fri_fold_ys);
+    encode_fri_folds(out, &c.fri_folds);
+    encode_deep_ros(out, &c.deep_ros);
+    encode_deep_ro_traces(out, &c.deep_ro_traces);
+    encode_fri_val_mmcs(out, &c.fri_val_mmcs);
+    encode_fri_chal_mmcs(out, &c.fri_chal_mmcs);
+}
+
+fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, usize)> {
+    let (stmt_left_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, offset)?;
     let (stmt_right_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor)?;
     let (trace_commitment, cursor) = read_fixed::<32>(proof, cursor)?;
     let (natural_vec, cursor) = read_m31_row(proof, cursor, AGG_WIDTH)?;
@@ -853,7 +1118,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
     let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor)?;
     let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor)?;
     Some((
-        Some(AggPcsCertificate {
+        AggPcsCertificate {
             stmt_left_hash,
             stmt_right_hash,
             trace_commitment,
@@ -868,7 +1133,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
             deep_ro_traces,
             fri_val_mmcs,
             fri_chal_mmcs,
-        }),
+        },
         cursor,
     ))
 }
@@ -902,8 +1167,12 @@ pub fn encode_rec_agg_proof_v6(
     out.extend_from_slice(&context.right_stark_digest);
     out.push(context.left_kind);
     out.push(context.right_kind);
-    encode_cert(&mut out, &context.left_agg_cert);
-    encode_cert(&mut out, &context.right_agg_cert);
+    encode_side(&mut out, &context.left_agg_cert, &context.left_leaf_bundle);
+    encode_side(
+        &mut out,
+        &context.right_agg_cert,
+        &context.right_leaf_bundle,
+    );
     out.extend_from_slice(&(plonky3_bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(plonky3_bytes);
     out
@@ -933,8 +1202,8 @@ pub fn decode_rec_agg_proof_owned_v6(
     let left_kind = *proof.get(cursor)?;
     let right_kind = *proof.get(cursor + 1)?;
     let cursor = cursor + 2;
-    let (left_cert, cursor) = decode_cert(proof, cursor)?;
-    let (right_cert, cursor) = decode_cert(proof, cursor)?;
+    let (left_cert, left_leaf, cursor) = decode_side(proof, cursor)?;
+    let (right_cert, right_leaf, cursor) = decode_side(proof, cursor)?;
 
     if compose_label != expected.compose_label
         || manifest_root_hash != expected.manifest_root_hash
@@ -946,6 +1215,8 @@ pub fn decode_rec_agg_proof_owned_v6(
         || right_kind != expected.right_kind
         || left_cert != expected.left_agg_cert
         || right_cert != expected.right_agg_cert
+        || left_leaf != expected.left_leaf_bundle
+        || right_leaf != expected.right_leaf_bundle
     {
         return None;
     }
@@ -958,10 +1229,28 @@ pub fn decode_rec_agg_proof_owned_v6(
     if right_kind == REC_KIND_LEAF && right_cert.is_some() {
         return None;
     }
-    if left_kind == REC_KIND_AGG && left_cert.is_none() {
+    if left_kind == REC_KIND_AGG && (left_cert.is_none() || left_leaf.is_some()) {
         return None;
     }
-    if right_kind == REC_KIND_AGG && right_cert.is_none() {
+    if right_kind == REC_KIND_AGG && (right_cert.is_none() || right_leaf.is_some()) {
+        return None;
+    }
+    if left_kind == REC_KIND_LEAF
+        && expected.left_leaf_bundle.is_some()
+        && left_leaf.as_ref() != expected.left_leaf_bundle.as_ref()
+    {
+        return None;
+    }
+    if right_kind == REC_KIND_LEAF
+        && expected.right_leaf_bundle.is_some()
+        && right_leaf.as_ref() != expected.right_leaf_bundle.as_ref()
+    {
+        return None;
+    }
+    if left_kind == REC_KIND_LEAF && expected.left_leaf_bundle.is_none() && left_leaf.is_some() {
+        return None;
+    }
+    if right_kind == REC_KIND_LEAF && expected.right_leaf_bundle.is_none() && right_leaf.is_some() {
         return None;
     }
 

@@ -51,13 +51,17 @@ pub(crate) fn decode_input_proof(
 /// FRI reduced openings after first-layer fold_y: `(log_height, value)`.
 pub type ReducedOpenings = Vec<(usize, Challenge)>;
 
-/// Reconstruct FRI reduced openings + first-layer fold_y witnesses for one query.
-pub fn reconstruct_agg_query_ro(
+/// Reconstruct FRI reduced openings + first-layer fold_y for one query (any trace width).
+pub fn reconstruct_query_ro(
     proof: &Proof<WqcStarkConfig>,
     chal: &AggFriChallenges,
     pcs_view: &CirclePcsProofView,
     query: usize,
+    trace_width: usize,
 ) -> Result<(ReducedOpenings, Vec<FoldYWitness>), String> {
+    if trace_width == 0 {
+        return Err("trace_width must be > 0".into());
+    }
     let query_index = *chal
         .query_indices
         .get(query)
@@ -78,10 +82,14 @@ pub fn reconstruct_agg_query_ro(
     if input.first_layer_siblings.len() != pcs_view.lambdas.len() {
         return Err("first_layer_siblings / lambdas length mismatch".into());
     }
-    if proof.opened_values.quotient_chunks.len() != 1 {
+    let num_quot_chunks = proof.opened_values.quotient_chunks.len();
+    if num_quot_chunks == 0 || !num_quot_chunks.is_power_of_two() {
+        return Err(format!("invalid quotient chunk count {num_quot_chunks}"));
+    }
+    if input.input_openings[1].opened_values.len() != num_quot_chunks {
         return Err(format!(
-            "unexpected quotient chunk count {}",
-            proof.opened_values.quotient_chunks.len()
+            "quot opening matrices {} != chunks {num_quot_chunks}",
+            input.input_openings[1].opened_values.len()
         ));
     }
 
@@ -110,11 +118,23 @@ pub fn reconstruct_agg_query_ro(
         }
         log
     };
+    let log_num_quot_chunks = log2(num_quot_chunks);
     let trace_log_height = log2(init_trace_domain.size()) + log_blowup;
-    let quotient_domain = init_trace_domain.create_disjoint_domain(degree);
-    let quot_log_height = log2(quotient_domain.size()) + log_blowup;
+    // Matches uni-stark: disjoint domain of size 2^(degree_bits + log_chunks), then split.
+    let quotient_parent = init_trace_domain
+        .create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot_chunks));
+    let quot_chunk_domains = quotient_parent.split_domains(num_quot_chunks);
 
-    let mut reduced_openings: BTreeMap<usize, Challenge> = BTreeMap::new();
+    // log_height -> (alpha_offset, ro) — mirrors CirclePcs::verify open_input.
+    let mut reduced_openings: BTreeMap<usize, (Challenge, Challenge)> = BTreeMap::new();
+
+    let mut accumulate = |log_height: usize, width: usize, deep: Challenge| {
+        let e = reduced_openings
+            .entry(log_height)
+            .or_insert((Challenge::ONE, Challenge::ZERO));
+        e.1 += e.0 * deep;
+        e.0 *= alpha.exp_u64(width as u64).square();
+    };
 
     // Batch 0: trace openings at zeta and zeta_next.
     {
@@ -122,52 +142,65 @@ pub fn reconstruct_agg_query_ro(
             .opened_values
             .first()
             .ok_or_else(|| "empty trace input opening".to_string())?;
-        if opened.len() != AGG_WIDTH {
-            return Err(format!("trace opening width {}", opened.len()));
+        if opened.len() != trace_width {
+            return Err(format!(
+                "trace opening width {}, want {trace_width}",
+                opened.len()
+            ));
         }
         let trace_next = proof
             .opened_values
             .trace_next
             .as_ref()
             .ok_or_else(|| "missing trace_next".to_string())?;
+        if proof.opened_values.trace_local.len() != trace_width || trace_next.len() != trace_width {
+            return Err(format!(
+                "trace OOD width mismatch: local={}, next={}, want {trace_width}",
+                proof.opened_values.trace_local.len(),
+                trace_next.len()
+            ));
+        }
         let log_height = trace_log_height;
         let bits_reduced = log_global_max_height - log_height;
         let orig_idx = cfft_permute_index(query_index >> bits_reduced, log_height);
         let p = standard_nth_point(log_height, orig_idx);
-        let alpha_pow_width_2 = alpha.exp_u64(opened.len() as u64).square();
-        let mut alpha_offset = Challenge::ONE;
-        let mut ro = Challenge::ZERO;
-        ro += alpha_offset
-            * deep_quotient_reduce_row(
+        accumulate(
+            log_height,
+            opened.len(),
+            deep_quotient_reduce_row(
                 alpha,
                 p.x,
                 p.y,
                 zeta,
                 opened,
                 &proof.opened_values.trace_local,
-            );
-        alpha_offset *= alpha_pow_width_2;
-        ro +=
-            alpha_offset * deep_quotient_reduce_row(alpha, p.x, p.y, zeta_next, opened, trace_next);
-        reduced_openings.insert(log_height, ro);
+            ),
+        );
+        accumulate(
+            log_height,
+            opened.len(),
+            deep_quotient_reduce_row(alpha, p.x, p.y, zeta_next, opened, trace_next),
+        );
     }
 
-    // Batch 1: quotient chunk at zeta.
+    // Batch 1: quotient chunks at zeta (possibly many matrices / heights).
     {
-        let opened = input.input_openings[1]
-            .opened_values
-            .first()
-            .ok_or_else(|| "empty quotient input opening".to_string())?;
-        let ps_at_zeta = &proof.opened_values.quotient_chunks[0];
-        if opened.len() != ps_at_zeta.len() {
-            return Err("quotient opening / OOD width mismatch".into());
+        let openings = &input.input_openings[1].opened_values;
+        for (i, opened) in openings.iter().enumerate() {
+            let ps_at_zeta = &proof.opened_values.quotient_chunks[i];
+            if opened.len() != ps_at_zeta.len() {
+                return Err(format!("quot chunk {i}: opening / OOD width mismatch"));
+            }
+            let log_height = log2(quot_chunk_domains[i].size()) + log_blowup;
+            let bits_reduced = log_global_max_height - log_height;
+            let orig_idx = cfft_permute_index(query_index >> bits_reduced, log_height);
+            let p = standard_nth_point(log_height, orig_idx);
+            accumulate(
+                log_height,
+                opened.len(),
+                deep_quotient_reduce_row(alpha, p.x, p.y, zeta, opened, ps_at_zeta),
+            );
         }
-        let log_height = quot_log_height;
-        let bits_reduced = log_global_max_height - log_height;
-        let orig_idx = cfft_permute_index(query_index >> bits_reduced, log_height);
-        let p = standard_nth_point(log_height, orig_idx);
-        let ro = deep_quotient_reduce_row(alpha, p.x, p.y, zeta, opened, ps_at_zeta);
-        reduced_openings.insert(log_height, ro);
     }
 
     if reduced_openings.len() != pcs_view.lambdas.len() {
@@ -180,7 +213,7 @@ pub fn reconstruct_agg_query_ro(
 
     let mut fri_input = Vec::new();
     let mut fold_ys = Vec::new();
-    for (((log_height, ro), &fl_sib), &lambda) in reduced_openings
+    for (((log_height, (_alpha_off, ro)), &fl_sib), &lambda) in reduced_openings
         .into_iter()
         .zip(input.first_layer_siblings.iter())
         .zip(pcs_view.lambdas.iter())
@@ -214,19 +247,30 @@ pub fn reconstruct_agg_query_ro(
     Ok((fri_input, fold_ys))
 }
 
+/// Reconstruct FRI reduced openings for AggregationAir (width [`AGG_WIDTH`]).
+pub fn reconstruct_agg_query_ro(
+    proof: &Proof<WqcStarkConfig>,
+    chal: &AggFriChallenges,
+    pcs_view: &CirclePcsProofView,
+    query: usize,
+) -> Result<(ReducedOpenings, Vec<FoldYWitness>), String> {
+    reconstruct_query_ro(proof, chal, pcs_view, query, AGG_WIDTH)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregation::CHILD_HASH_LEN;
-    use crate::plonky3_stark::aggregation::AggregationContext;
-    use crate::plonky3_stark::generate_aggregation_proof;
     use crate::plonky3_stark::recursion::fri_fs_replay::{
         decode_pcs_view, replay_agg_fri_challenges,
     };
-    use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
     #[test]
     fn reconstruct_ro_query0_reaches_final_poly() {
+        use crate::aggregation::CHILD_HASH_LEN;
+        use crate::plonky3_stark::aggregation::AggregationContext;
+        use crate::plonky3_stark::generate_aggregation_proof;
+        use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
+
         let ctx = AggregationContext {
             parent_task_id: "parent",
             compose_label: "L1:0",

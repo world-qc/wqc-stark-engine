@@ -1,4 +1,4 @@
-//! Fiat-Shamir replay for AggregationAir Circle FRI (R3-M3b1).
+//! Fiat-Shamir replay for Circle FRI (R3-M3b1 / M3e).
 //!
 //! Mirrors `p3-uni-stark::verify` → `CirclePcs::verify` → `p3_circle::verifier::verify`
 //! far enough to recover folding betas and query indices. Does not verify openings.
@@ -9,13 +9,11 @@ use p3_field::PrimeCharacteristicRing;
 use p3_uni_stark::{Proof, StarkGenericConfig};
 use serde::Deserialize;
 
-use crate::plonky3_stark::aggregation_air::AggregationAir;
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use crate::plonky3_stark::config::{
     devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
 };
 
-use p3_air::BaseAir;
 use p3_circle::{CircleFriProof, CircleInputProof};
 
 type AggInputProof = CircleInputProof<Val, Challenge, ValMmcs, ChallengeMmcs>;
@@ -30,7 +28,7 @@ pub(crate) struct CirclePcsProofView {
     pub(crate) fri_proof: AggFriProof,
 }
 
-/// Fiat-Shamir challenges recovered from an AggregationAir proof.
+/// Fiat-Shamir challenges recovered from a non-ZK Circle uni-STARK proof.
 #[derive(Debug, Clone)]
 pub struct AggFriChallenges {
     /// Constraint-folding challenge (uni-STARK α before quotient commit observe).
@@ -55,38 +53,39 @@ pub(crate) fn decode_pcs_view(proof: &Proof<WqcStarkConfig>) -> Result<CirclePcs
     postcard::from_bytes(&bytes).map_err(|e| format!("postcard decode CirclePcsProof: {e}"))
 }
 
-/// Replay the AggregationAir FS transcript through FRI query sampling.
-pub fn replay_agg_fri_challenges(
+/// Replay FS for any non-ZK Circle proof with the given main-trace width (0 public values).
+pub fn replay_fri_challenges(
     proof: &Proof<WqcStarkConfig>,
+    expected_width: usize,
 ) -> Result<AggFriChallenges, String> {
-    let air = AggregationAir;
-    if <AggregationAir as BaseAir<Val>>::width(&air) != AGG_WIDTH {
-        return Err("unexpected AggregationAir width".into());
-    }
-    if <AggregationAir as BaseAir<Val>>::num_public_values(&air) != 0 {
-        return Err("AggregationAir must have zero public values".into());
+    if expected_width == 0 {
+        return Err("expected_width must be > 0".into());
     }
     if proof.commitments.random.is_some() || proof.opened_values.random.is_some() {
-        return Err("unexpected ZK randomization on AggregationAir proof".into());
+        return Err("unexpected ZK randomization on proof".into());
     }
     if proof.opened_values.preprocessed_local.is_some()
         || proof.opened_values.preprocessed_next.is_some()
     {
-        return Err("unexpected preprocessed openings on AggregationAir proof".into());
+        return Err("unexpected preprocessed openings on proof".into());
     }
     let trace_next = proof
         .opened_values
         .trace_next
         .as_ref()
-        .ok_or_else(|| "AggregationAir proof missing trace_next openings".to_string())?;
-    if proof.opened_values.trace_local.len() != AGG_WIDTH || trace_next.len() != AGG_WIDTH {
-        return Err("AggregationAir opened trace width mismatch".into());
+        .ok_or_else(|| "proof missing trace_next openings".to_string())?;
+    if proof.opened_values.trace_local.len() != expected_width || trace_next.len() != expected_width
+    {
+        return Err(format!(
+            "opened trace width mismatch: local={}, next={}, want {expected_width}",
+            proof.opened_values.trace_local.len(),
+            trace_next.len()
+        ));
     }
 
     let config = devnet_circle_config();
     let log_blowup = config.pcs().fri_params.log_blowup;
     let degree_bits = proof.degree_bits;
-    // Circle PCS is non-ZK → base_degree_bits == degree_bits.
     let base_degree_bits = degree_bits;
     let preprocessed_width = 0usize;
 
@@ -95,12 +94,10 @@ pub fn replay_agg_fri_challenges(
     challenger.observe(Val::from_usize(base_degree_bits));
     challenger.observe(Val::from_usize(preprocessed_width));
     challenger.observe(proof.commitments.trace.clone());
-    // public_values empty
     let constraint_alpha: Challenge = challenger.sample_algebra_element();
     challenger.observe(proof.commitments.quotient_chunks.clone());
     let zeta: Challenge = challenger.sample_algebra_element();
 
-    // PCS observes opened values in `coms_to_verify` order: trace then quotient.
     challenger.observe_algebra_slice(&proof.opened_values.trace_local);
     challenger.observe_algebra_slice(trace_next);
     for chunk in &proof.opened_values.quotient_chunks {
@@ -151,7 +148,7 @@ pub fn replay_agg_fri_challenges(
         return Err("invalid FRI log_arity schedule".into());
     }
     let fri_log_max_height: usize = log_arities.iter().sum::<usize>() + log_blowup;
-    let extra_query_index_bits = 1usize; // CircleFriFolding
+    let extra_query_index_bits = 1usize;
     let num_index_bits = fri_log_max_height + extra_query_index_bits;
 
     if fri.query_proofs.len() != fri_params.num_queries {
@@ -177,6 +174,13 @@ pub fn replay_agg_fri_challenges(
         log_blowup,
         extra_query_index_bits,
     })
+}
+
+/// Replay the AggregationAir FS transcript through FRI query sampling.
+pub fn replay_agg_fri_challenges(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<AggFriChallenges, String> {
+    replay_fri_challenges(proof, AGG_WIDTH)
 }
 
 #[cfg(test)]

@@ -19,11 +19,11 @@ use crate::distribution::{
 use crate::transcript::StarkContext;
 
 #[cfg(feature = "plonky3-stark")]
+use crate::aggregation::recursive_context_for_children;
 use crate::plonky3_stark::{
-    append_born_stark_tail, child_stark_binding, has_born_stark_tail, segment_supports_born_zk,
-    split_agg_tail, split_born_stark_tail, split_rec_tail, verify_aggregation_proof,
-    verify_born_stark_proof, verify_plonky3_proof, verify_recursive_aggregation_proof,
-    AggregationContext, BornStarkContext, RecursiveAggregationContext,
+    append_born_stark_tail, has_born_stark_tail, segment_supports_born_zk, split_agg_tail,
+    split_born_stark_tail, split_rec_tail, verify_aggregation_proof, verify_born_stark_proof,
+    verify_plonky3_proof, verify_recursive_aggregation_proof, AggregationContext, BornStarkContext,
 };
 
 use super::leaf_compose::compose_v3_body;
@@ -82,7 +82,7 @@ pub fn encode_born_leaf(
     out
 }
 
-fn parse_born_leaf_prefix(proof: &[u8]) -> Option<(&str, &[u8])> {
+pub(crate) fn parse_born_leaf_prefix(proof: &[u8]) -> Option<(&str, &[u8])> {
     let marker_pos = proof
         .windows(BORN_LEAF_MARKER.len())
         .position(|w| w == BORN_LEAF_MARKER)?;
@@ -334,20 +334,20 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
     #[cfg(feature = "plonky3-stark")]
     {
         if let Some((_, rec_bytes)) = split_rec_tail(proof) {
-            let left_bind = child_stark_binding(left_child);
-            let right_bind = child_stark_binding(right_child);
-            let rec_ctx = RecursiveAggregationContext {
-                parent_task_id: context.sub_task_id,
-                compose_label: UNITARY_BORN_COMPOSE_LABEL,
-                manifest_root_hash: "",
-                left_child_hash: header.left_child_hash,
-                right_child_hash: header.right_child_hash,
-                left_stark_digest: left_bind.stark_digest,
-                right_stark_digest: right_bind.stark_digest,
-                left_kind: crate::plonky3_stark::REC_KIND_LEAF,
-                right_kind: crate::plonky3_stark::REC_KIND_LEAF,
-                left_agg_cert: None,
-                right_agg_cert: None,
+            let rec_ctx = match recursive_context_for_children(
+                context.sub_task_id,
+                UNITARY_BORN_COMPOSE_LABEL,
+                "",
+                header.left_child_hash,
+                header.right_child_hash,
+                left_child,
+                right_child,
+            ) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    eprintln!("[LeafCompose] Failed: rec context: {e}");
+                    return false;
+                }
             };
             if !verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
                 eprintln!(

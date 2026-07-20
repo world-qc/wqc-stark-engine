@@ -19,11 +19,12 @@ use crate::trajectory::{
 use crate::transcript::StarkContext;
 
 #[cfg(feature = "plonky3-stark")]
+use crate::aggregation::recursive_context_for_children;
 use crate::plonky3_stark::{
-    append_trajectory_stark_tail, child_stark_binding, has_trajectory_stark_tail,
-    segment_supports_trajectory_zk, split_agg_tail, split_rec_tail, split_trajectory_stark_tail,
-    verify_aggregation_proof, verify_plonky3_proof, verify_recursive_aggregation_proof,
-    verify_trajectory_stark_bundle, AggregationContext, RecursiveAggregationContext,
+    append_trajectory_stark_tail, has_trajectory_stark_tail, segment_supports_trajectory_zk,
+    split_agg_tail, split_rec_tail, split_trajectory_stark_tail, verify_aggregation_proof,
+    verify_plonky3_proof, verify_recursive_aggregation_proof, verify_trajectory_stark_bundle,
+    AggregationContext,
 };
 
 /// v3 compose label for a mid-circuit unitary + trajectory leaf pair.
@@ -95,7 +96,7 @@ pub fn encode_trajectory_leaf(
     out
 }
 
-fn parse_trajectory_leaf_prefix(proof: &[u8]) -> Option<(&str, &[u8])> {
+pub(crate) fn parse_trajectory_leaf_prefix(proof: &[u8]) -> Option<(&str, &[u8])> {
     let marker_pos = proof
         .windows(TRAJ_LEAF_MARKER.len())
         .position(|w| w == TRAJ_LEAF_MARKER)?;
@@ -328,21 +329,20 @@ pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof:
     #[cfg(feature = "plonky3-stark")]
     {
         if let Some((_, rec_bytes)) = split_rec_tail(proof) {
-            let left_bind = child_stark_binding(left_child);
-            let right_bind = child_stark_binding(right_child);
-            let rec_ctx = RecursiveAggregationContext {
-                parent_task_id: context.sub_task_id,
-                compose_label: UNITARY_TRAJ_COMPOSE_LABEL,
-                manifest_root_hash: "",
-                left_child_hash: header.left_child_hash,
-                right_child_hash: header.right_child_hash,
-                left_stark_digest: left_bind.stark_digest,
-                right_stark_digest: right_bind.stark_digest,
-                // Unitary + trajectory children have no AggregationAir tails.
-                left_kind: crate::plonky3_stark::REC_KIND_LEAF,
-                right_kind: crate::plonky3_stark::REC_KIND_LEAF,
-                left_agg_cert: None,
-                right_agg_cert: None,
+            let rec_ctx = match recursive_context_for_children(
+                context.sub_task_id,
+                UNITARY_TRAJ_COMPOSE_LABEL,
+                "",
+                header.left_child_hash,
+                header.right_child_hash,
+                left_child,
+                right_child,
+            ) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    eprintln!("[LeafCompose] Failed: rec context: {e}");
+                    return false;
+                }
             };
             if !verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
                 eprintln!(

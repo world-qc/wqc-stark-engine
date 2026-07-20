@@ -1,24 +1,30 @@
-//! Host OOD constraint check for AggregationAir (R3-M3b4).
+//! Host OOD constraint check for AggregationAir / leaf AIRs (R3-M3b4 / M3e).
 //!
 //! Mirrors the uni-STARK verifier's `recompose_quotient_from_chunks` +
 //! `verify_constraints` without invoking Circle PCS / FRI.
 
+use p3_air::{Air, BaseAir};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field};
 use p3_uni_stark::{
     get_log_num_quotient_chunks, recompose_quotient_from_chunks, verify_constraints, AirLayout,
-    Proof, StarkGenericConfig,
+    Proof, StarkGenericConfig, SymbolicAirBuilder, VerifierConstraintFolder,
 };
 
 use crate::plonky3_stark::aggregation_air::AggregationAir;
 use crate::plonky3_stark::config::{devnet_circle_config, Challenge, Val, WqcStarkConfig};
 
-use super::fri_fs_replay::replay_agg_fri_challenges;
+use super::fri_fs_replay::replay_fri_challenges;
 
-/// Verifies AggregationAir constraints at ζ against the claimed quotient opening.
-pub fn verify_agg_ood(proof: &Proof<WqcStarkConfig>) -> Result<(), String> {
-    let chal = replay_agg_fri_challenges(proof)?;
-    let air = AggregationAir;
+/// Verifies AIR constraints at ζ against the claimed quotient opening for any uni-STARK.
+pub fn verify_ood_for_air<A>(proof: &Proof<WqcStarkConfig>, air: &A) -> Result<(), String>
+where
+    A: BaseAir<Val>
+        + Air<SymbolicAirBuilder<Val>>
+        + for<'a> Air<VerifierConstraintFolder<'a, WqcStarkConfig>>,
+{
+    let width = <A as BaseAir<Val>>::width(air);
+    let chal = replay_fri_challenges(proof, width)?;
     let config = devnet_circle_config();
     let pcs = config.pcs();
 
@@ -37,13 +43,12 @@ pub fn verify_agg_ood(proof: &Proof<WqcStarkConfig>) -> Result<(), String> {
 
     let layout = AirLayout {
         preprocessed_width: 0,
-        main_width: <AggregationAir as p3_air::BaseAir<Val>>::width(&air),
-        num_public_values: 0,
+        main_width: width,
+        num_public_values: air.num_public_values(),
         num_periodic_columns: 0,
         ..Default::default()
     };
-    let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val, AggregationAir>(&air, layout, 0);
+    let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val, A>(air, layout, 0);
     let num_quotient_chunks = 1usize << log_num_quotient_chunks;
     if proof.opened_values.quotient_chunks.len() != num_quotient_chunks {
         return Err(format!(
@@ -77,8 +82,8 @@ pub fn verify_agg_ood(proof: &Proof<WqcStarkConfig>) -> Result<(), String> {
         .as_ref()
         .ok_or_else(|| "missing trace_next openings".to_string())?;
 
-    verify_constraints::<WqcStarkConfig, AggregationAir, ()>(
-        &air,
+    verify_constraints::<WqcStarkConfig, A, ()>(
+        air,
         &proof.opened_values.trace_local,
         trace_next,
         None,
@@ -90,7 +95,28 @@ pub fn verify_agg_ood(proof: &Proof<WqcStarkConfig>) -> Result<(), String> {
         chal.constraint_alpha,
         quotient,
     )
-    .map_err(|e| format!("AggregationAir OOD mismatch: {e:?}"))
+    .map_err(|e| format!("AIR OOD mismatch: {e:?}"))
+}
+
+/// Verifies AggregationAir constraints at ζ against the claimed quotient opening.
+pub fn verify_agg_ood(proof: &Proof<WqcStarkConfig>) -> Result<(), String> {
+    verify_ood_for_air(proof, &AggregationAir).map_err(|e| {
+        if e.starts_with("AIR OOD") {
+            e.replacen("AIR OOD", "AggregationAir OOD", 1)
+        } else {
+            e
+        }
+    })
+}
+
+/// Leaf OOD helper: same as [`verify_ood_for_air`].
+pub fn verify_leaf_ood<A>(proof: &Proof<WqcStarkConfig>, air: &A) -> Result<(), String>
+where
+    A: BaseAir<Val>
+        + Air<SymbolicAirBuilder<Val>>
+        + for<'a> Air<VerifierConstraintFolder<'a, WqcStarkConfig>>,
+{
+    verify_ood_for_air(proof, air)
 }
 
 #[cfg(test)]
@@ -99,7 +125,10 @@ mod tests {
     use crate::aggregation::CHILD_HASH_LEN;
     use crate::plonky3_stark::aggregation::AggregationContext;
     use crate::plonky3_stark::generate_aggregation_proof;
+    use crate::plonky3_stark::quantum_air::QuantumExecutionAir;
     use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
+    use crate::plonky3_stark::{decode_proof_v2_plonky3_bytes, generate_plonky3_proof};
+    use crate::transcript::StarkContext;
 
     #[test]
     fn honest_aggregation_ood_passes() {
@@ -114,5 +143,23 @@ mod tests {
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         verify_agg_ood(&proof).expect("ood");
+    }
+
+    #[test]
+    fn honest_unitary_leaf_ood_passes() {
+        let ctx = StarkContext {
+            circuit_id: "c",
+            sub_task_id: "sub-ood",
+            node_id: "n1",
+            slice_id: "0",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+        };
+        let trace = crate::trace_spec::idle_qubit0_trace();
+        let transcript = generate_plonky3_proof(&ctx, &trace).expect("prove");
+        let plonky3 = decode_proof_v2_plonky3_bytes(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        verify_leaf_ood(&proof, &QuantumExecutionAir).expect("leaf ood");
     }
 }

@@ -41,7 +41,10 @@ use super::keccak_merkle_air::{
 use super::merkle_keccak::verify_agg_merkle_path;
 
 /// Max Merkle siblings for AggregationAir LDE (height 8 with log_blowup=1).
+/// Leaf STARKs may use deeper paths up to [`super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH`].
 pub const AGG_PCS_MAX_SIBLINGS: usize = 8;
+/// Max siblings for leaf PCS LDE / FRI Mmcs paths.
+pub const LEAF_PCS_MAX_SIBLINGS: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AggPcsCertificate {

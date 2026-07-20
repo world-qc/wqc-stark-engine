@@ -3,6 +3,7 @@
 use crate::aggregation::CHILD_HASH_LEN;
 
 use super::child_binding::STARK_DIGEST_LEN;
+use super::leaf_pcs_cert::LeafPcsBundle;
 use super::opening_cert::AggPcsCertificate;
 
 /// Public binding for an R3 recursive aggregation STARK.
@@ -20,4 +21,7 @@ pub struct RecursiveAggregationContext<'a> {
     /// R3-M2: AggregationAir PCS certificates when `*_kind == AGG`.
     pub left_agg_cert: Option<AggPcsCertificate>,
     pub right_agg_cert: Option<AggPcsCertificate>,
+    /// R3-M3e: leaf uni-STARK PCS bundles when `*_kind == LEAF` (mutually exclusive with agg cert).
+    pub left_leaf_bundle: Option<LeafPcsBundle>,
+    pub right_leaf_bundle: Option<LeafPcsBundle>,
 }

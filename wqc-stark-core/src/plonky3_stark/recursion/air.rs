@@ -3,7 +3,7 @@
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
 
-use crate::plonky3_stark::aggregation_air::{AGG_LEFT_OK_COL, AGG_RIGHT_OK_COL, AGG_WIDTH};
+use crate::plonky3_stark::aggregation_air::{AGG_LEFT_OK_COL, AGG_RIGHT_OK_COL};
 
 /// M1 columns (0..132) + M2 AggregationAir natural rows / PCS commitments / pcs_ok.
 pub const REC_AGG_WIDTH: usize = 330;
@@ -74,26 +74,6 @@ where
         builder
             .when_transition()
             .assert_zero(rk.clone() * (rk.clone() - one.clone()));
-
-        // kind=leaf ⇒ AggregationAir natural row + commitment are zero.
-        let left_leaf = one.clone() - lk.clone();
-        let right_leaf = one.clone() - rk.clone();
-        for i in 0..32 {
-            builder
-                .when_transition()
-                .assert_zero(left_leaf.clone() * curr[REC_LEFT_TRACE_COM_COL + i].into());
-            builder
-                .when_transition()
-                .assert_zero(right_leaf.clone() * curr[REC_RIGHT_TRACE_COM_COL + i].into());
-        }
-        for i in 0..AGG_WIDTH {
-            builder
-                .when_transition()
-                .assert_zero(left_leaf.clone() * curr[REC_LEFT_AGG_ROW_COL + i].into());
-            builder
-                .when_transition()
-                .assert_zero(right_leaf.clone() * curr[REC_RIGHT_AGG_ROW_COL + i].into());
-        }
 
         // kind=agg ⇒ AggregationAir OK flags on the natural row are 1.
         builder.when_transition().assert_zero(

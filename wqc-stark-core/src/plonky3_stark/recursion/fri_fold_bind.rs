@@ -10,14 +10,20 @@ use crate::plonky3_stark::config::{Challenge, WqcStarkConfig, DEVNET_FRI_NUM_QUE
 
 use super::fri_fold_air::{generate_fri_fold_proof, generate_fri_fold_y_proof, FriFoldStepProof};
 use super::fri_fold_native::{challenge_to_limbs, fold_x_row, fold_y_row};
-use super::fri_fs_replay::{decode_pcs_view, replay_agg_fri_challenges};
-use super::fri_ro::reconstruct_agg_query_ro;
+use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
+use super::fri_ro::reconstruct_query_ro;
 
 /// Number of FRI queries whose fold chains are STARK-proven in the cert (M3b3: all).
 pub const AGG_FRI_PROVEN_QUERIES: usize = DEVNET_FRI_NUM_QUERIES;
 
+/// Leaf certs use the same FRI query count as AggregationAir (devnet config).
+pub const LEAF_FRI_PROVEN_QUERIES: usize = DEVNET_FRI_NUM_QUERIES;
+
 /// Max commit-phase rounds for AggregationAir-sized FRI.
 pub const AGG_FRI_MAX_ROUNDS: usize = 4;
+
+/// Max commit-phase rounds for leaf FRI (generous).
+pub const LEAF_FRI_MAX_ROUNDS: usize = 20;
 
 /// Max first-layer fold_y steps per query (one per LDE height; Agg has 2).
 pub const AGG_FRI_MAX_FOLD_YS_PER_QUERY: usize = 4;
@@ -26,7 +32,7 @@ pub const AGG_FRI_MAX_FOLD_YS_PER_QUERY: usize = 4;
 pub const AGG_FRI_MAX_FOLD_YS: usize = AGG_FRI_MAX_FOLD_YS_PER_QUERY * AGG_FRI_PROVEN_QUERIES;
 
 #[derive(Debug, Clone)]
-struct FoldWitness {
+pub(crate) struct FoldWitness {
     index: usize,
     log_folded_height: usize,
     beta: Challenge,
@@ -46,33 +52,39 @@ pub const fn covers_all_devnet_fri_queries() -> bool {
     AGG_FRI_PROVEN_QUERIES >= DEVNET_FRI_NUM_QUERIES
 }
 
-/// Builds in-circuit fold proofs for AggregationAir FRI (all proven queries).
-pub fn fri_fold_bundle_from_agg_proof(
+/// Builds in-circuit fold proofs for a uni-STARK FRI (all proven queries).
+pub fn fri_fold_bundle_from_proof(
     proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
 ) -> Result<AggFriFoldBundle, String> {
-    let chal = replay_agg_fri_challenges(proof)?;
+    let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let fri = &view.fri_proof;
     if chal.betas.len() != fri.commit_phase_commits.len() {
         return Err("beta count != commit-phase rounds".into());
     }
-    if chal.query_indices.len() < AGG_FRI_PROVEN_QUERIES {
+    if chal.query_indices.len() < LEAF_FRI_PROVEN_QUERIES {
         return Err(format!(
             "FS query count {} < proven {}",
             chal.query_indices.len(),
-            AGG_FRI_PROVEN_QUERIES
+            LEAF_FRI_PROVEN_QUERIES
         ));
     }
+    let max_rounds = if trace_width == crate::plonky3_stark::aggregation_air::AGG_WIDTH {
+        AGG_FRI_MAX_ROUNDS
+    } else {
+        LEAF_FRI_MAX_ROUNDS
+    };
 
     let mut fold_ys = Vec::new();
     let mut fold_xs = Vec::new();
-    for q in 0..AGG_FRI_PROVEN_QUERIES {
+    for q in 0..LEAF_FRI_PROVEN_QUERIES {
         let qp = fri
             .query_proofs
             .get(q)
             .ok_or_else(|| format!("missing FRI query {q}"))?;
         let query_index = chal.query_indices[q];
-        let (reduced, y_wits) = reconstruct_agg_query_ro(proof, &chal, &view, q)?;
+        let (reduced, y_wits) = reconstruct_query_ro(proof, &chal, &view, q, trace_width)?;
         if y_wits.len() > AGG_FRI_MAX_FOLD_YS_PER_QUERY {
             return Err(format!(
                 "too many fold_y steps on query {q}: {}",
@@ -96,6 +108,7 @@ pub fn fri_fold_bundle_from_agg_proof(
             chal.log_blowup,
             fri.final_poly,
             &reduced,
+            max_rounds,
         )?;
         for w in x_wits {
             fold_xs.push(generate_fri_fold_proof(
@@ -110,6 +123,13 @@ pub fn fri_fold_bundle_from_agg_proof(
     Ok(AggFriFoldBundle { fold_ys, fold_xs })
 }
 
+/// Builds in-circuit fold proofs for AggregationAir FRI (all proven queries).
+pub fn fri_fold_bundle_from_agg_proof(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<AggFriFoldBundle, String> {
+    fri_fold_bundle_from_proof(proof, crate::plonky3_stark::aggregation_air::AGG_WIDTH)
+}
+
 /// Legacy helper: commit-phase fold_x steps only.
 pub fn fri_fold_steps_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
@@ -117,23 +137,29 @@ pub fn fri_fold_steps_from_agg_proof(
     Ok(fri_fold_bundle_from_agg_proof(proof)?.fold_xs)
 }
 
-/// Host-checks that cert fold publics match RO-forward witnesses from `proof` (no STARK prove).
-pub fn bind_fri_fold_bundle_to_proof(
+/// Host-checks that cert fold publics match RO-forward witnesses (any trace width).
+pub fn bind_fri_fold_bundle_to_proof_width(
     proof: &Proof<WqcStarkConfig>,
     fold_ys: &[FriFoldStepProof],
     fold_xs: &[FriFoldStepProof],
+    trace_width: usize,
 ) -> Result<(), String> {
-    let chal = replay_agg_fri_challenges(proof)?;
+    let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let fri = &view.fri_proof;
+    let max_rounds = if trace_width == crate::plonky3_stark::aggregation_air::AGG_WIDTH {
+        AGG_FRI_MAX_ROUNDS
+    } else {
+        LEAF_FRI_MAX_ROUNDS
+    };
     let mut y_off = 0usize;
     let mut x_off = 0usize;
-    for q in 0..AGG_FRI_PROVEN_QUERIES {
+    for q in 0..LEAF_FRI_PROVEN_QUERIES {
         let qp = fri
             .query_proofs
             .get(q)
             .ok_or_else(|| format!("missing FRI query {q}"))?;
-        let (reduced, y_wits) = reconstruct_agg_query_ro(proof, &chal, &view, q)?;
+        let (reduced, y_wits) = reconstruct_query_ro(proof, &chal, &view, q, trace_width)?;
         for w in &y_wits {
             let step = fold_ys
                 .get(y_off)
@@ -151,6 +177,7 @@ pub fn bind_fri_fold_bundle_to_proof(
             chal.log_blowup,
             fri.final_poly,
             &reduced,
+            max_rounds,
         )?;
         for w in &x_wits {
             let step = fold_xs
@@ -175,6 +202,20 @@ pub fn bind_fri_fold_bundle_to_proof(
         ));
     }
     Ok(())
+}
+
+/// Host-checks that cert fold publics match RO-forward witnesses from `proof` (no STARK prove).
+pub fn bind_fri_fold_bundle_to_proof(
+    proof: &Proof<WqcStarkConfig>,
+    fold_ys: &[FriFoldStepProof],
+    fold_xs: &[FriFoldStepProof],
+) -> Result<(), String> {
+    bind_fri_fold_bundle_to_proof_width(
+        proof,
+        fold_ys,
+        fold_xs,
+        crate::plonky3_stark::aggregation_air::AGG_WIDTH,
+    )
 }
 
 fn fold_step_matches_x(
@@ -211,7 +252,8 @@ fn fold_step_matches_y(
         && step.out_limbs == challenge_to_limbs(out)
 }
 
-fn extract_query_fold_chain_forward(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn extract_query_fold_chain_forward(
     qp: &p3_circle::CircleQueryProof<
         Challenge,
         crate::plonky3_stark::config::ChallengeMmcs,
@@ -228,14 +270,15 @@ fn extract_query_fold_chain_forward(
     log_blowup: usize,
     final_poly: Challenge,
     reduced: &[(usize, Challenge)],
+    max_rounds: usize,
 ) -> Result<Vec<FoldWitness>, String> {
     let openings = &qp.commit_phase_openings;
     if openings.len() != betas.len() {
         return Err("commit-phase openings vs betas length mismatch".into());
     }
-    if openings.len() > AGG_FRI_MAX_ROUNDS {
+    if openings.len() > max_rounds {
         return Err(format!(
-            "too many FRI rounds: {} > {AGG_FRI_MAX_ROUNDS}",
+            "too many FRI rounds: {} > {max_rounds}",
             openings.len()
         ));
     }
@@ -306,6 +349,7 @@ mod tests {
         verify_fri_fold_proof, verify_fri_fold_y_proof,
     };
     use crate::plonky3_stark::recursion::fri_fold_native::limbs_to_challenge;
+    use crate::plonky3_stark::recursion::fri_fs_replay::replay_agg_fri_challenges;
     use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
     #[test]

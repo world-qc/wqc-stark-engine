@@ -22,8 +22,8 @@ use super::keccak256_air::{
 use super::keccak_f_native::{keccak256_compress, keccak256_val_leaf};
 use super::merkle_keccak::hash_val_leaf;
 
-/// Max Merkle depth for FRI Mmcs paths (matches [`super::opening_cert::AGG_PCS_MAX_SIBLINGS`]).
-pub const FRI_MMCS_MAX_DEPTH: usize = 8;
+/// Max Merkle depth for FRI Mmcs paths (Born n≤16 LDE needs ≤17; cap at 20).
+pub const FRI_MMCS_MAX_DEPTH: usize = 20;
 
 /// Public: leaf[32] | root[32] | index | depth | layer[MAX*32] | siblings[MAX*32]
 pub const FRI_MMCS_FOLD_NUM_PUBLIC: usize = 32 + 32 + 1 + 1 + FRI_MMCS_MAX_DEPTH * 32 * 2;

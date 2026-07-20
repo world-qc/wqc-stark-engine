@@ -1,10 +1,8 @@
-//! R3-M2.5b: fixed-length Keccak-256 sponge STARK (tiny_keccak v256 / ValMmcs).
+//! R3-M2.5b / M3e: fixed-length Keccak-256 sponge STARK (tiny_keccak v256 / ValMmcs).
 //!
-//! Message lengths: **12** (quot W=3), **24** (Challenge width-2 flattened),
-//! **64** (compress), **264** (AggregationAir LDE / trace W=66).
-//!
-//! Trace columns: 1600 state bits + `live` + 5 round bits (0..23).
-//! Publics: `msg_len` byte values + 32 digest bytes. Absorb/pad bind via bit packing.
+//! Message lengths: multiples of 4 in
+//! `[QUOT_LEAF_MSG_LEN, LEAF_MAX_MSG_LEN]` plus compress **64**.
+//! Includes quot W=3 (12), chal flat W=6 (24), unitary 84, traj 36/104, agg 264, Born ≤780.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -22,6 +20,7 @@ use super::keccak_f_native::{
     keccak256, lde_row_to_bytes, num_permutations, sponge_witness, state_to_bits, val_row_to_bytes,
     KECCAK256_OUT, KECCAK_DELIM, KECCAK_RATE, KECCAK_ROUNDS, KECCAK_STATE_BITS, RC,
 };
+use super::pcs_geom::LEAF_DEEP_RO_MAX_WIDTH;
 
 pub const ROUND_BITS: usize = 5;
 pub const ROUND_BIT_COL: usize = LIVE_COL + 1;
@@ -32,13 +31,17 @@ pub const LEAF_MSG_LEN: usize = AGG_WIDTH * 4; // 264
 /// Quotient ValMmcs leaf (width 3 × 4 bytes).
 pub const QUOT_LEAF_MSG_LEN: usize = 3 * 4; // 12
 /// ChallengeMmcs leaf for EF width-2 flattened to 6 M31 (× 4 bytes).
+#[allow(dead_code)] // documented width; ValMmcs prove_val_leaf accepts any supported len
 pub const CHAL_LEAF_MSG_LEN: usize = 6 * 4; // 24
+/// Max ValMmcs leaf bytes (Born max width).
+pub const LEAF_MAX_MSG_LEN: usize = LEAF_DEEP_RO_MAX_WIDTH * 4; // 780
 
 const fn supported_msg_len(len: usize) -> bool {
-    len == QUOT_LEAF_MSG_LEN
-        || len == CHAL_LEAF_MSG_LEN
-        || len == COMPRESS_MSG_LEN
-        || len == LEAF_MSG_LEN
+    if len == COMPRESS_MSG_LEN {
+        return true;
+    }
+    // FieldHash Val leaves: 4 bytes per M31, up to Born max width.
+    len >= QUOT_LEAF_MSG_LEN && len <= LEAF_MAX_MSG_LEN && len.is_multiple_of(4)
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -401,7 +404,7 @@ pub struct Keccak256StarkProof {
 pub fn prove_keccak256(msg: &[u8]) -> Result<Keccak256StarkProof, String> {
     if !supported_msg_len(msg.len()) {
         return Err(format!(
-            "unsupported keccak256 msg len {} (want {QUOT_LEAF_MSG_LEN}/{CHAL_LEAF_MSG_LEN}/{COMPRESS_MSG_LEN}/{LEAF_MSG_LEN})",
+            "unsupported keccak256 msg len {} (compress={COMPRESS_MSG_LEN} or 4..={LEAF_MAX_MSG_LEN} multiple of 4)",
             msg.len()
         ));
     }

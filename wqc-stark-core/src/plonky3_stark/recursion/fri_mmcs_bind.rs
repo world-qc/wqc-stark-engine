@@ -11,13 +11,13 @@ use crate::plonky3_stark::config::{
     devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
 };
 
-use super::fri_fold_bind::AGG_FRI_PROVEN_QUERIES;
+use super::fri_fold_bind::LEAF_FRI_PROVEN_QUERIES;
 use super::fri_fold_native::{challenge_to_limbs, fold_x_row};
-use super::fri_fs_replay::{decode_pcs_view, replay_agg_fri_challenges};
+use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
 use super::fri_mmcs_path::{
     generate_fri_mmcs_path_proof, verify_fri_mmcs_path_proof, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
 };
-use super::fri_ro::{decode_input_proof, reconstruct_agg_query_ro};
+use super::fri_ro::{decode_input_proof, reconstruct_query_ro};
 use super::keccak256_air::{
     prove_compress, prove_val_leaf, verify_compress_digest, verify_val_leaf_digest,
     Keccak256StarkProof,
@@ -68,6 +68,8 @@ pub struct FriValMmcsQueryProof {
     pub quot_siblings: Vec<[u8; 32]>,
     pub trace_path: FriMmcsPathProof,
     pub quot_path: FriMmcsPathProof,
+    /// Multi-matrix quotient batch (leaf STARKs with >1 quotient chunk). `None` for Agg.
+    pub quot_batch: Option<FriChalBatchPathProof>,
 }
 
 /// First-layer ChallengeMmcs multi-matrix path (binary, cap_height=0).
@@ -419,11 +421,12 @@ fn verify_chal_batch_path_replay(
     true
 }
 
-/// Prove ValMmcs openings for all FRI queries.
-pub fn fri_val_mmcs_bundle_from_agg_proof(
+/// Prove ValMmcs openings for all FRI queries (any trace width).
+pub fn fri_val_mmcs_bundle_from_proof(
     proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
 ) -> Result<Vec<FriValMmcsQueryProof>, String> {
-    let chal = replay_agg_fri_challenges(proof)?;
+    let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let config = devnet_circle_config();
     let pcs = config.pcs();
@@ -432,18 +435,23 @@ pub fn fri_val_mmcs_bundle_from_agg_proof(
         Challenge,
         crate::plonky3_stark::config::Challenger,
     >>::natural_domain_for_degree(pcs, degree);
-    let quotient_domain = init_trace_domain.create_disjoint_domain(degree);
     let log_blowup = chal.log_blowup;
     let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
     let trace_height = init_trace_domain.size() << log_blowup;
-    let quot_height = quotient_domain.size() << log_blowup;
     let trace_log_height = log2_strict(trace_height)?;
-    let quot_log_height = log2_strict(quot_height)?;
     let trace_root = commitment_root_val(&proof.commitments.trace)?;
     let quot_root = commitment_root_val(&proof.commitments.quotient_chunks)?;
+    let num_quot = proof.opened_values.quotient_chunks.len();
+    if num_quot == 0 || !num_quot.is_power_of_two() {
+        return Err(format!("invalid quot chunk count {num_quot}"));
+    }
+    let log_num_quot = num_quot.trailing_zeros() as usize;
+    let quot_parent =
+        init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
+    let quot_chunk_domains = quot_parent.split_domains(num_quot);
 
-    let mut out = Vec::with_capacity(AGG_FRI_PROVEN_QUERIES);
-    for q in 0..AGG_FRI_PROVEN_QUERIES {
+    let mut out = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
+    for q in 0..LEAF_FRI_PROVEN_QUERIES {
         let query_index = chal.query_indices[q];
         let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
         let trace_open = &input.input_openings[0];
@@ -452,47 +460,96 @@ pub fn fri_val_mmcs_bundle_from_agg_proof(
             .opened_values
             .first()
             .ok_or_else(|| format!("q{q}: empty trace"))?;
-        let quot_row = quot_open
-            .opened_values
-            .first()
-            .ok_or_else(|| format!("q{q}: empty quot"))?;
-        if trace_row.len() != AGG_WIDTH {
-            return Err(format!("q{q}: trace width"));
+        if trace_row.len() != trace_width {
+            return Err(format!(
+                "q{q}: trace width {}, want {trace_width}",
+                trace_row.len()
+            ));
         }
-        if quot_row.len() != EF_DIM {
-            return Err(format!("q{q}: quot width"));
+        if quot_open.opened_values.len() != num_quot {
+            return Err(format!("q{q}: quot matrix count"));
         }
         let t_idx = query_index >> (log_global_max_height - trace_log_height);
-        let q_idx = query_index >> (log_global_max_height - quot_log_height);
         let trace_path =
             generate_fri_mmcs_path_proof(trace_row, &trace_open.opening_proof, t_idx, &trace_root)
                 .map_err(|e| format!("q{q} trace path: {e}"))?;
-        let quot_path =
-            generate_fri_mmcs_path_proof(quot_row, &quot_open.opening_proof, q_idx, &quot_root)
-                .map_err(|e| format!("q{q} quot path: {e}"))?;
+
+        let (quot_index, quot_path, quot_batch) = if num_quot == 1 {
+            let quot_h = quot_chunk_domains[0].size() << log_blowup;
+            let quot_log_height = log2_strict(quot_h)?;
+            let quot_row = &quot_open.opened_values[0];
+            if quot_row.len() != EF_DIM {
+                return Err(format!("q{q}: quot width"));
+            }
+            let q_idx = query_index >> (log_global_max_height - quot_log_height);
+            let path =
+                generate_fri_mmcs_path_proof(quot_row, &quot_open.opening_proof, q_idx, &quot_root)
+                    .map_err(|e| format!("q{q} quot path: {e}"))?;
+            (q_idx as u32, path, None)
+        } else {
+            let mut max_log = 0usize;
+            let fl_dims: Vec<Dimensions> = quot_chunk_domains
+                .iter()
+                .map(|d| {
+                    let h = d.size() << log_blowup;
+                    max_log = max_log.max(log2_strict(h).unwrap_or(0));
+                    Dimensions {
+                        width: EF_DIM,
+                        height: h,
+                    }
+                })
+                .collect();
+            let q_idx = query_index >> (log_global_max_height - max_log);
+            let batch = generate_chal_batch_path(
+                &quot_open.opened_values,
+                &fl_dims,
+                q_idx,
+                &quot_open.opening_proof,
+                &quot_root,
+            )
+            .map_err(|e| format!("q{q} quot batch: {e}"))?;
+            // Synthetic single-matrix path (bind uses quot_batch when present).
+            let row0 = &quot_open.opened_values[0];
+            let leaf = hash_val_leaf(row0);
+            let sib = [0u8; 32];
+            let synth_root = keccak256_compress(leaf, sib);
+            let path = generate_fri_mmcs_path_proof(row0, &[sib], 0, &synth_root)
+                .map_err(|e| format!("q{q} quot stub path: {e}"))?;
+            (q_idx as u32, path, Some(batch))
+        };
+
         out.push(FriValMmcsQueryProof {
             trace_index: t_idx as u32,
-            quot_index: q_idx as u32,
+            quot_index,
             trace_siblings: trace_open.opening_proof.clone(),
             quot_siblings: quot_open.opening_proof.clone(),
             trace_path,
             quot_path,
+            quot_batch,
         });
     }
     Ok(out)
 }
 
-pub fn bind_fri_val_mmcs_bundle(
+/// Prove ValMmcs openings for all FRI queries.
+pub fn fri_val_mmcs_bundle_from_agg_proof(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<Vec<FriValMmcsQueryProof>, String> {
+    fri_val_mmcs_bundle_from_proof(proof, AGG_WIDTH)
+}
+
+pub fn bind_fri_val_mmcs_bundle_width(
     proof: &Proof<WqcStarkConfig>,
     bundle: &[FriValMmcsQueryProof],
+    trace_width: usize,
 ) -> Result<(), String> {
-    if bundle.len() != AGG_FRI_PROVEN_QUERIES {
+    if bundle.len() != LEAF_FRI_PROVEN_QUERIES {
         return Err(format!(
-            "val mmcs len {}, want {AGG_FRI_PROVEN_QUERIES}",
+            "val mmcs len {}, want {LEAF_FRI_PROVEN_QUERIES}",
             bundle.len()
         ));
     }
-    let chal = replay_agg_fri_challenges(proof)?;
+    let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let config = devnet_circle_config();
     let pcs = config.pcs();
@@ -501,25 +558,28 @@ pub fn bind_fri_val_mmcs_bundle(
         Challenge,
         crate::plonky3_stark::config::Challenger,
     >>::natural_domain_for_degree(pcs, degree);
-    let quotient_domain = init_trace_domain.create_disjoint_domain(degree);
     let log_blowup = chal.log_blowup;
     let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
     let trace_height = init_trace_domain.size() << log_blowup;
-    let quot_height = quotient_domain.size() << log_blowup;
     let trace_log_height = log2_strict(trace_height)?;
-    let quot_log_height = log2_strict(quot_height)?;
     let trace_root = commitment_root_val(&proof.commitments.trace)?;
     let quot_root = commitment_root_val(&proof.commitments.quotient_chunks)?;
+    let num_quot = proof.opened_values.quotient_chunks.len();
+    let log_num_quot = num_quot.trailing_zeros() as usize;
+    let quot_parent =
+        init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
+    let quot_chunk_domains = quot_parent.split_domains(num_quot);
 
     for (q, qp) in bundle.iter().enumerate() {
         let query_index = chal.query_indices[q];
         let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
         let trace_row = &input.input_openings[0].opened_values[0];
-        let quot_row = &input.input_openings[1].opened_values[0];
+        if trace_row.len() != trace_width {
+            return Err(format!("q{q}: opened trace width"));
+        }
         let t_idx = query_index >> (log_global_max_height - trace_log_height);
-        let q_idx = query_index >> (log_global_max_height - quot_log_height);
-        if qp.trace_index as usize != t_idx || qp.quot_index as usize != q_idx {
-            return Err(format!("q{q}: index mismatch"));
+        if qp.trace_index as usize != t_idx {
+            return Err(format!("q{q}: trace index mismatch"));
         }
         if qp.trace_siblings != input.input_openings[0].opening_proof
             || qp.quot_siblings != input.input_openings[1].opening_proof
@@ -535,49 +595,84 @@ pub fn bind_fri_val_mmcs_bundle(
         ) {
             return Err(format!("q{q}: trace path verify failed"));
         }
-        if !verify_fri_mmcs_path_proof(
-            quot_row,
-            &qp.quot_siblings,
-            q_idx,
-            &quot_root,
-            &qp.quot_path,
-        ) {
-            return Err(format!("q{q}: quot path verify failed"));
+
+        if let Some(ref batch) = qp.quot_batch {
+            let mut max_log = 0usize;
+            let fl_dims: Vec<Dimensions> = quot_chunk_domains
+                .iter()
+                .map(|d| {
+                    let h = d.size() << log_blowup;
+                    max_log = max_log.max(log2_strict(h).unwrap_or(0));
+                    Dimensions {
+                        width: EF_DIM,
+                        height: h,
+                    }
+                })
+                .collect();
+            let q_idx = query_index >> (log_global_max_height - max_log);
+            if qp.quot_index as usize != q_idx {
+                return Err(format!("q{q}: quot batch index mismatch"));
+            }
+            if !verify_chal_batch_path_replay(
+                &input.input_openings[1].opened_values,
+                &fl_dims,
+                q_idx,
+                &quot_root,
+                batch,
+            ) {
+                return Err(format!("q{q}: quot batch verify failed"));
+            }
+        } else {
+            let quot_h = quot_chunk_domains[0].size() << log_blowup;
+            let quot_log_height = log2_strict(quot_h)?;
+            let quot_row = &input.input_openings[1].opened_values[0];
+            let q_idx = query_index >> (log_global_max_height - quot_log_height);
+            if qp.quot_index as usize != q_idx {
+                return Err(format!("q{q}: quot index mismatch"));
+            }
+            if !verify_fri_mmcs_path_proof(
+                quot_row,
+                &qp.quot_siblings,
+                q_idx,
+                &quot_root,
+                &qp.quot_path,
+            ) {
+                return Err(format!("q{q}: quot path verify failed"));
+            }
         }
     }
     Ok(())
 }
 
-/// Prove ChallengeMmcs openings for all FRI queries.
-pub fn fri_chal_mmcs_bundle_from_agg_proof(
+pub fn bind_fri_val_mmcs_bundle(
     proof: &Proof<WqcStarkConfig>,
+    bundle: &[FriValMmcsQueryProof],
+) -> Result<(), String> {
+    bind_fri_val_mmcs_bundle_width(proof, bundle, AGG_WIDTH)
+}
+
+/// Prove ChallengeMmcs openings for all FRI queries (any trace width).
+pub fn fri_chal_mmcs_bundle_from_proof(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
 ) -> Result<Vec<FriChalMmcsQueryProof>, String> {
-    let chal = replay_agg_fri_challenges(proof)?;
+    let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let config = devnet_circle_config();
     let pcs = config.pcs();
     let fri_mmcs = &pcs.fri_params.mmcs;
     let fl_root = commitment_root_chal(&view.first_layer_commitment)?;
 
-    let mut out = Vec::with_capacity(AGG_FRI_PROVEN_QUERIES);
-    for q in 0..AGG_FRI_PROVEN_QUERIES {
+    let mut out = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
+    for q in 0..LEAF_FRI_PROVEN_QUERIES {
         let query_index = chal.query_indices[q];
         let qp = &view.fri_proof.query_proofs[q];
         let input = decode_input_proof(&qp.input_proof)?;
-        let (_reduced, fold_ys) = reconstruct_agg_query_ro(proof, &chal, &view, q)?;
+        let (_reduced, fold_ys) = reconstruct_query_ro(proof, &chal, &view, q, trace_width)?;
         if fold_ys.len() != input.first_layer_siblings.len() {
             return Err(format!("q{q}: first-layer sibling count"));
         }
 
-        let fl_dims: Vec<Dimensions> = fold_ys
-            .iter()
-            .map(|w| Dimensions {
-                width: CHAL_LEAF_WIDTH,
-                height: 1 << w.log_folded_height,
-            })
-            .collect();
-        // ExtensionMmcs flattens EF width 2 → Val width 6; Dimensions for ValMmcs use flat width.
-        // But generate_chal_batch_path uses Val rows directly — pass flat dims matching opened vals.
         let fl_opened: Vec<Vec<Mersenne31>> = fold_ys
             .iter()
             .map(|w| flatten_challenge_row(&[w.v0, w.v1]))
@@ -589,7 +684,6 @@ pub fn fri_chal_mmcs_bundle_from_agg_proof(
                 height: 1 << w.log_folded_height,
             })
             .collect();
-        let _ = fl_dims;
         let first_layer = generate_chal_batch_path(
             &fl_opened,
             &fl_dims_flat,
@@ -599,7 +693,6 @@ pub fn fri_chal_mmcs_bundle_from_agg_proof(
         )
         .map_err(|e| format!("q{q} first-layer: {e}"))?;
 
-        // Commit-phase single-matrix paths.
         let mut commit_indices = Vec::new();
         let mut commit_siblings = Vec::new();
         let mut commit_paths = Vec::new();
@@ -609,7 +702,7 @@ pub fn fri_chal_mmcs_bundle_from_agg_proof(
         let mut index = query_index >> chal.extra_query_index_bits;
         let mut log_current = openings.len() + chal.log_blowup;
         let mut folded_eval = Challenge::ZERO;
-        let (reduced, _) = reconstruct_agg_query_ro(proof, &chal, &view, q)?;
+        let (reduced, _) = reconstruct_query_ro(proof, &chal, &view, q, trace_width)?;
         let mut ro_iter = reduced.iter().peekable();
 
         for (round, opening) in openings.iter().enumerate() {
@@ -649,17 +742,25 @@ pub fn fri_chal_mmcs_bundle_from_agg_proof(
     Ok(out)
 }
 
-pub fn bind_fri_chal_mmcs_bundle(
+/// Prove ChallengeMmcs openings for all FRI queries.
+pub fn fri_chal_mmcs_bundle_from_agg_proof(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<Vec<FriChalMmcsQueryProof>, String> {
+    fri_chal_mmcs_bundle_from_proof(proof, AGG_WIDTH)
+}
+
+pub fn bind_fri_chal_mmcs_bundle_width(
     proof: &Proof<WqcStarkConfig>,
     bundle: &[FriChalMmcsQueryProof],
+    trace_width: usize,
 ) -> Result<(), String> {
-    if bundle.len() != AGG_FRI_PROVEN_QUERIES {
+    if bundle.len() != LEAF_FRI_PROVEN_QUERIES {
         return Err(format!(
-            "chal mmcs len {}, want {AGG_FRI_PROVEN_QUERIES}",
+            "chal mmcs len {}, want {LEAF_FRI_PROVEN_QUERIES}",
             bundle.len()
         ));
     }
-    let chal = replay_agg_fri_challenges(proof)?;
+    let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let fl_root = commitment_root_chal(&view.first_layer_commitment)?;
 
@@ -667,7 +768,7 @@ pub fn bind_fri_chal_mmcs_bundle(
         let query_index = chal.query_indices[q];
         let qp = &view.fri_proof.query_proofs[q];
         let input = decode_input_proof(&qp.input_proof)?;
-        let (reduced, fold_ys) = reconstruct_agg_query_ro(proof, &chal, &view, q)?;
+        let (reduced, fold_ys) = reconstruct_query_ro(proof, &chal, &view, q, trace_width)?;
         let fl_opened: Vec<Vec<Mersenne31>> = fold_ys
             .iter()
             .map(|w| flatten_challenge_row(&[w.v0, w.v1]))
@@ -739,22 +840,44 @@ pub fn bind_fri_chal_mmcs_bundle(
     Ok(())
 }
 
+pub fn bind_fri_chal_mmcs_bundle(
+    proof: &Proof<WqcStarkConfig>,
+    bundle: &[FriChalMmcsQueryProof],
+) -> Result<(), String> {
+    bind_fri_chal_mmcs_bundle_width(proof, bundle, AGG_WIDTH)
+}
+
+pub fn fri_mmcs_bundle_from_proof(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+) -> Result<AggFriMmcsBundle, String> {
+    Ok(AggFriMmcsBundle {
+        val: fri_val_mmcs_bundle_from_proof(proof, trace_width)?,
+        chal: fri_chal_mmcs_bundle_from_proof(proof, trace_width)?,
+    })
+}
+
 pub fn fri_mmcs_bundle_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
 ) -> Result<AggFriMmcsBundle, String> {
-    Ok(AggFriMmcsBundle {
-        val: fri_val_mmcs_bundle_from_agg_proof(proof)?,
-        chal: fri_chal_mmcs_bundle_from_agg_proof(proof)?,
-    })
+    fri_mmcs_bundle_from_proof(proof, AGG_WIDTH)
+}
+
+pub fn bind_fri_mmcs_bundle_to_proof_width(
+    proof: &Proof<WqcStarkConfig>,
+    bundle: &AggFriMmcsBundle,
+    trace_width: usize,
+) -> Result<(), String> {
+    bind_fri_val_mmcs_bundle_width(proof, &bundle.val, trace_width)?;
+    bind_fri_chal_mmcs_bundle_width(proof, &bundle.chal, trace_width)?;
+    Ok(())
 }
 
 pub fn bind_fri_mmcs_bundle_to_proof(
     proof: &Proof<WqcStarkConfig>,
     bundle: &AggFriMmcsBundle,
 ) -> Result<(), String> {
-    bind_fri_val_mmcs_bundle(proof, &bundle.val)?;
-    bind_fri_chal_mmcs_bundle(proof, &bundle.chal)?;
-    Ok(())
+    bind_fri_mmcs_bundle_to_proof_width(proof, bundle, AGG_WIDTH)
 }
 
 #[cfg(test)]
@@ -763,6 +886,8 @@ mod tests {
     use crate::aggregation::CHILD_HASH_LEN;
     use crate::plonky3_stark::aggregation::AggregationContext;
     use crate::plonky3_stark::generate_aggregation_proof;
+    use crate::plonky3_stark::recursion::fri_fs_replay::replay_agg_fri_challenges;
+    use crate::plonky3_stark::recursion::fri_ro::reconstruct_agg_query_ro;
     use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
     #[test]

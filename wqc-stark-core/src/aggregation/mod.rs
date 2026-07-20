@@ -13,15 +13,19 @@
 mod leaf;
 mod leaf_compose;
 mod leaf_compose_born;
+
+pub(crate) use leaf_compose::parse_trajectory_leaf_prefix;
+pub(crate) use leaf_compose_born::parse_born_leaf_prefix;
 mod transcript_v3;
 
 #[cfg(feature = "plonky3-stark")]
 use crate::plonky3_stark::{
-    append_agg_tail, append_rec_tail, build_agg_pcs_certificate, child_aggregation_transcript,
-    child_stark_binding, generate_aggregation_proof, generate_recursive_aggregation_proof,
-    split_agg_tail, split_rec_tail, verify_agg_pcs_certificate, verify_aggregation_proof,
-    verify_recursive_aggregation_proof, AggregationContext, RecursiveAggregationContext,
-    REC_KIND_AGG, REC_KIND_LEAF,
+    append_agg_tail, append_rec_tail, build_agg_pcs_certificate, build_leaf_pcs_bundle_from_child,
+    child_aggregation_transcript, child_stark_binding, generate_aggregation_proof,
+    generate_recursive_aggregation_proof, split_agg_tail, split_rec_tail,
+    verify_agg_pcs_certificate, verify_aggregation_proof, verify_leaf_pcs_bundle,
+    verify_recursive_aggregation_proof, AggregationContext, LeafPcsBundle,
+    RecursiveAggregationContext, REC_KIND_AGG, REC_KIND_LEAF,
 };
 
 pub use leaf::{parse_leaf_binding, parsed_to_stark_context, ParsedLeafBinding};
@@ -160,21 +164,8 @@ pub fn compose_stark_proofs(
 
         let left_bind = child_stark_binding(left_child);
         let right_bind = child_stark_binding(right_child);
-        let left_agg_cert = cert_for_child(left_child, context.parent_task_id)?;
-        let right_agg_cert = cert_for_child(right_child, context.parent_task_id)?;
-
-        // Align kinds with certificate availability (compose without V4 stays leaf-binding).
-        let left_kind = if left_agg_cert.is_some() {
-            REC_KIND_AGG
-        } else {
-            REC_KIND_LEAF
-        };
-        let right_kind = if right_agg_cert.is_some() {
-            REC_KIND_AGG
-        } else {
-            REC_KIND_LEAF
-        };
-        let _ = (left_bind.kind, right_bind.kind);
+        let left_pcs = pcs_for_child(left_child, context.parent_task_id)?;
+        let right_pcs = pcs_for_child(right_child, context.parent_task_id)?;
 
         let rec_ctx = RecursiveAggregationContext {
             parent_task_id: context.parent_task_id,
@@ -184,10 +175,12 @@ pub fn compose_stark_proofs(
             right_child_hash: right_hash,
             left_stark_digest: left_bind.stark_digest,
             right_stark_digest: right_bind.stark_digest,
-            left_kind,
-            right_kind,
-            left_agg_cert,
-            right_agg_cert,
+            left_kind: left_pcs.kind,
+            right_kind: right_pcs.kind,
+            left_agg_cert: left_pcs.agg_cert,
+            right_agg_cert: right_pcs.agg_cert,
+            left_leaf_bundle: left_pcs.leaf_bundle,
+            right_leaf_bundle: right_pcs.leaf_bundle,
         };
         let rec_proof = generate_recursive_aggregation_proof(&rec_ctx)
             .map_err(|e| format!("R3-M2 recursive aggregation STARK prove failed: {e}"))?;
@@ -198,15 +191,64 @@ pub fn compose_stark_proofs(
 }
 
 #[cfg(feature = "plonky3-stark")]
-fn cert_for_child(
-    child: &[u8],
-    _parent_task_id: &str,
-) -> Result<Option<crate::plonky3_stark::AggPcsCertificate>, String> {
+struct ChildPcs {
+    kind: u8,
+    agg_cert: Option<crate::plonky3_stark::AggPcsCertificate>,
+    leaf_bundle: Option<LeafPcsBundle>,
+}
+
+#[cfg(feature = "plonky3-stark")]
+fn pcs_for_child(child: &[u8], _parent_task_id: &str) -> Result<ChildPcs, String> {
+    if let Some(agg) = child_aggregation_transcript(child) {
+        let cert = cert_for_child_agg(agg)?;
+        return Ok(ChildPcs {
+            kind: REC_KIND_AGG,
+            agg_cert: Some(cert),
+            leaf_bundle: None,
+        });
+    }
+
+    if child_supports_leaf_pcs(child) {
+        match build_leaf_pcs_bundle_from_child(child) {
+            Ok(bundle) if verify_leaf_pcs_bundle(child, &bundle).is_ok() => {
+                return Ok(ChildPcs {
+                    kind: REC_KIND_LEAF,
+                    agg_cert: None,
+                    leaf_bundle: Some(bundle),
+                });
+            }
+            Ok(_) | Err(_) => {
+                // Legacy compose without bundle when cert build/verify fails (e.g. DistributionAir FRI).
+                eprintln!("[Aggregation] leaf PCS bundle deferred for child");
+            }
+        }
+    }
+
+    Ok(ChildPcs {
+        kind: REC_KIND_LEAF,
+        agg_cert: None,
+        leaf_bundle: None,
+    })
+}
+
+#[cfg(feature = "plonky3-stark")]
+fn child_supports_leaf_pcs(child: &[u8]) -> bool {
+    if child_aggregation_transcript(child).is_some() {
+        return false;
+    }
+    if is_born_leaf_proof(child) || is_trajectory_leaf_proof(child) {
+        return true;
+    }
+    let base = crate::trajectory::base_proof_without_aux_tails(
+        crate::distribution::base_proof_without_distribution_tail(child),
+    );
+    parse_leaf_binding(base).is_some()
+}
+
+#[cfg(feature = "plonky3-stark")]
+fn cert_for_child_agg(agg: &[u8]) -> Result<crate::plonky3_stark::AggPcsCertificate, String> {
     use crate::plonky3_stark::parse_agg_v4_header_any;
 
-    let Some(agg) = child_aggregation_transcript(child) else {
-        return Ok(None);
-    };
     let header = parse_agg_v4_header_any(agg)
         .ok_or_else(|| "cannot parse child AggregationAir V4 header".to_string())?;
     let agg_ctx = AggregationContext {
@@ -221,7 +263,7 @@ fn cert_for_child(
     if !verify_agg_pcs_certificate(&agg_ctx, agg, &cert) {
         return Err("R3-M2 AggregationAir PCS certificate self-check failed".to_string());
     }
-    Ok(Some(cert))
+    Ok(cert)
 }
 
 /// Recursively verifies a v3 compose tree (all embedded leaves).
@@ -308,6 +350,28 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
     Ok(())
 }
 
+/// Rebuilds R3 recursive aggregation context (PCS certs / leaf bundles) for two children.
+#[cfg(feature = "plonky3-stark")]
+pub fn recursive_context_for_children<'a>(
+    parent_task_id: &'a str,
+    compose_label: &'a str,
+    manifest_root_hash: &'a str,
+    left_child_hash: [u8; CHILD_HASH_LEN],
+    right_child_hash: [u8; CHILD_HASH_LEN],
+    left_child: &'a [u8],
+    right_child: &'a [u8],
+) -> Result<RecursiveAggregationContext<'a>, String> {
+    rebuild_rec_context(
+        parent_task_id,
+        compose_label,
+        manifest_root_hash,
+        left_child_hash,
+        right_child_hash,
+        left_child,
+        right_child,
+    )
+}
+
 #[cfg(feature = "plonky3-stark")]
 fn rebuild_rec_context<'a>(
     parent_task_id: &'a str,
@@ -320,18 +384,8 @@ fn rebuild_rec_context<'a>(
 ) -> Result<RecursiveAggregationContext<'a>, String> {
     let left_bind = child_stark_binding(left_child);
     let right_bind = child_stark_binding(right_child);
-    let left_agg_cert = cert_for_child(left_child, parent_task_id)?;
-    let right_agg_cert = cert_for_child(right_child, parent_task_id)?;
-    let left_kind = if left_agg_cert.is_some() {
-        REC_KIND_AGG
-    } else {
-        REC_KIND_LEAF
-    };
-    let right_kind = if right_agg_cert.is_some() {
-        REC_KIND_AGG
-    } else {
-        REC_KIND_LEAF
-    };
+    let left_pcs = pcs_for_child(left_child, parent_task_id)?;
+    let right_pcs = pcs_for_child(right_child, parent_task_id)?;
     Ok(RecursiveAggregationContext {
         parent_task_id,
         compose_label,
@@ -340,10 +394,12 @@ fn rebuild_rec_context<'a>(
         right_child_hash,
         left_stark_digest: left_bind.stark_digest,
         right_stark_digest: right_bind.stark_digest,
-        left_kind,
-        right_kind,
-        left_agg_cert,
-        right_agg_cert,
+        left_kind: left_pcs.kind,
+        right_kind: right_pcs.kind,
+        left_agg_cert: left_pcs.agg_cert,
+        right_agg_cert: right_pcs.agg_cert,
+        left_leaf_bundle: left_pcs.leaf_bundle,
+        right_leaf_bundle: right_pcs.leaf_bundle,
     })
 }
 

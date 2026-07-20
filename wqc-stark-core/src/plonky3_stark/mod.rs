@@ -39,11 +39,11 @@ pub use distribution_stark::{
 pub use quantum_air::QuantumExecutionAir;
 #[cfg(feature = "plonky3-stark")]
 pub use recursion::{
-    append_rec_tail, build_agg_pcs_certificate, child_aggregation_transcript, child_stark_binding,
-    generate_recursive_aggregation_proof, has_rec_tail, parse_agg_v4_header,
-    parse_agg_v4_header_any, split_rec_tail, verify_agg_pcs_certificate,
-    verify_recursive_aggregation_proof, AggPcsCertificate, RecursiveAggregationContext,
-    REC_KIND_AGG, REC_KIND_LEAF,
+    append_rec_tail, build_agg_pcs_certificate, build_leaf_pcs_bundle_from_child,
+    child_aggregation_transcript, child_stark_binding, generate_recursive_aggregation_proof,
+    has_rec_tail, parse_agg_v4_header, parse_agg_v4_header_any, split_rec_tail,
+    verify_agg_pcs_certificate, verify_leaf_pcs_bundle, verify_recursive_aggregation_proof,
+    AggPcsCertificate, LeafPcsBundle, RecursiveAggregationContext, REC_KIND_AGG, REC_KIND_LEAF,
 };
 #[cfg(feature = "plonky3-stark")]
 pub use trajectory_stark::{
