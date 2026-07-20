@@ -87,7 +87,7 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
 
 - Prove-time witness oracles in-circuit (verify-time OOD is done; proving still extracts OOD / DeepRo / FriFold witnesses via native Plonky3)
 - Multi-chunk quotient leaf DeepRo STARKs (deferred today)
-- Orchestrator RecAgg V6 compose E2E on devnet
+- Full-stack multislice RecAgg V6 compose on docs/devnet (orch CGO unit E2E: `TestRecAggV6ComposeE2E`)
 
 ## Contributing
 

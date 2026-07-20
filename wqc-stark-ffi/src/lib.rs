@@ -3,10 +3,11 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    compose_stark_proofs, is_unitary_born_leaf_compose, is_unitary_trajectory_leaf_compose,
-    proof_has_trajectory_unitary_link, proof_has_unitary_statevector_link, trajectory_proof_view,
-    verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
-    verify_trajectory_binding, ComposeContext, RootVerifyContext, StarkContext,
+    compose_stark_proofs, generate_stark_proof, is_unitary_born_leaf_compose,
+    is_unitary_trajectory_leaf_compose, proof_has_trajectory_unitary_link,
+    proof_has_unitary_statevector_link, trajectory_proof_view, verify_distribution_binding,
+    verify_root_proof, verify_stark_proof_core, verify_trajectory_binding, ComposeContext,
+    RootVerifyContext, StarkContext,
 };
 
 fn unwind_to_ffi_code(result: Result<i32, Box<dyn std::any::Any + Send>>) -> i32 {
@@ -107,7 +108,8 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
 ///
 /// Pass null `left_circuit_id` / `right_circuit_id` when the child is already a v3 compose node.
 ///
-/// Returns composed byte length on success, `0` on failure, `-99` on panic.
+/// Returns composed byte length on success, `0` on failure, `-2` if `out_buf_cap`
+/// is too small (retry with a larger buffer), `-99` on panic.
 ///
 /// # Safety
 ///
@@ -189,7 +191,7 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
                 composed.len(),
                 out_buf_cap
             );
-            return 0;
+            return -2;
         }
 
         let out = slice::from_raw_parts_mut(out_buf, composed.len());
@@ -197,6 +199,69 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
         composed.len() as i32
     });
 
+    unwind_to_ffi_code(result)
+}
+
+/// Generates a minimal idle-qubit leaf proof for orch CGO RecAgg V6 compose E2E.
+///
+/// Uses the lightweight v1 AIR leaf (same idle trace as engine integration tests).
+/// Compose still appends AggregationAir + RecAgg V6 tails via `wqc_compose_stark_proofs`.
+///
+/// Returns proof length on success, `0` on failure, `-2` if `out_buf_cap` is too small,
+/// `-99` on panic.
+///
+/// # Safety
+///
+/// String pointers must be null-terminated UTF-8. `out_buf` must be writable for at
+/// least `out_buf_cap` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_generate_demo_leaf_proof(
+    circuit_id: *const c_char,
+    sub_task_id: *const c_char,
+    node_id: *const c_char,
+    slice_id: *const c_char,
+    output_hash: *const c_char,
+    out_buf: *mut u8,
+    out_buf_cap: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if circuit_id.is_null()
+            || sub_task_id.is_null()
+            || node_id.is_null()
+            || slice_id.is_null()
+            || output_hash.is_null()
+            || out_buf.is_null()
+        {
+            eprintln!("[Rust FFI] demo leaf: null required pointer");
+            return 0;
+        }
+        let context = StarkContext {
+            circuit_id: cstr_or_empty(circuit_id),
+            sub_task_id: cstr_or_empty(sub_task_id),
+            node_id: cstr_or_empty(node_id),
+            slice_id: cstr_or_empty(slice_id),
+            output_hash: cstr_or_empty(output_hash),
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+        };
+        let proof =
+            generate_stark_proof(&context, &wqc_stark_core::trace_spec::idle_qubit0_trace());
+        if proof.is_empty() {
+            eprintln!("[Rust FFI] demo leaf prove returned empty");
+            return 0;
+        }
+        if proof.len() > out_buf_cap as usize {
+            eprintln!(
+                "[Rust FFI] demo leaf too large: need {}, cap {}",
+                proof.len(),
+                out_buf_cap
+            );
+            return -2;
+        }
+        let out = slice::from_raw_parts_mut(out_buf, proof.len());
+        out.copy_from_slice(&proof);
+        proof.len() as i32
+    });
     unwind_to_ffi_code(result)
 }
 
