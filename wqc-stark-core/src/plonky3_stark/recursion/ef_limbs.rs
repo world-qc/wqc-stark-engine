@@ -66,10 +66,28 @@ pub fn ef_square_limbs<AB: AirBuilder>(a: &[AB::Expr; 3]) -> [AB::Expr; 3]
 where
     AB::F: PrimeCharacteristicRing,
 {
-    ef_mul_values(a, a)
+    ef_mul_limbs::<AB>(a, a)
 }
 
-/// Extension mul on raw limb arrays (no [`AirBuilder`]).
+/// Embed a base-field element as the constant term of EF.
+pub fn ef_embed_base<AB: AirBuilder>(value: AB::Expr) -> [AB::Expr; 3] {
+    [value, AB::Expr::ZERO, AB::Expr::ZERO]
+}
+
+pub fn ef_one<AB: AirBuilder>() -> [AB::Expr; 3] {
+    ef_embed_base::<AB>(AB::Expr::ONE)
+}
+
+/// Booleanity check `x * (x - 1)` on EF limbs (values embed in limb 0 at OOD).
+pub fn ef_bool_check_limbs<AB: AirBuilder>(x: &[AB::Expr; 3]) -> [AB::Expr; 3]
+where
+    AB::F: PrimeCharacteristicRing,
+{
+    ef_mul_limbs::<AB>(x, &ef_sub_limbs::<AB>(x, &ef_one::<AB>()))
+}
+
+/// Extension mul on raw limb arrays (no [`AirBuilder`]); used by unit tests.
+#[allow(dead_code)]
 pub fn ef_mul_values<E: PrimeCharacteristicRing + Clone>(a: &[E; 3], b: &[E; 3]) -> [E; 3] {
     let w = E::from_u32(5);
     let a0_b0 = a[0].clone() * b[0].clone();

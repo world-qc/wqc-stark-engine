@@ -15,6 +15,9 @@ use crate::trace_spec::AIR_WIDTH;
 
 use super::ef_limbs::{ef_add_limbs, ef_assert_eq, ef_mul_limbs, ef_sub_limbs};
 use super::fri_fold_native::{challenge_to_limbs, limbs_to_challenge};
+use super::ood_leaf_fold::{
+    fold_distribution_in_circuit, fold_shot_sampling_in_circuit, fold_unitary_in_circuit,
+};
 use super::ood_native::OodWitness;
 use super::pcs_geom::LEAF_DEEP_RO_MAX_WIDTH;
 
@@ -160,7 +163,11 @@ where
         let quotient = [pv[off].clone(), pv[off + 1].clone(), pv[off + 2].clone()];
         off += 3;
         let inv_vanishing = [pv[off].clone(), pv[off + 1].clone(), pv[off + 2].clone()];
-        off += 3 + 3 + 3; // is_first, is_last
+        off += 3;
+        let is_first_row = [pv[off].clone(), pv[off + 1].clone(), pv[off + 2].clone()];
+        off += 3;
+        let is_last_row = [pv[off].clone(), pv[off + 1].clone(), pv[off + 2].clone()];
+        off += 3;
         let is_transition = [pv[off].clone(), pv[off + 1].clone(), pv[off + 2].clone()];
         off += 3;
         let folded_public = [pv[off].clone(), pv[off + 1].clone(), pv[off + 2].clone()];
@@ -193,7 +200,30 @@ where
                 ef_assert_eq(builder, &computed, &folded_public);
                 computed
             }
-            _ => folded_public,
+            OodAirKind::Unitary => {
+                let computed =
+                    fold_unitary_in_circuit::<AB>(&local_rows, &next_rows, &is_transition, &alpha);
+                ef_assert_eq(builder, &computed, &folded_public);
+                computed
+            }
+            OodAirKind::Distribution => {
+                let computed = fold_distribution_in_circuit::<AB>(
+                    self.num_outcomes,
+                    &local_rows,
+                    &next_rows,
+                    &is_first_row,
+                    &is_last_row,
+                    &is_transition,
+                    &alpha,
+                );
+                ef_assert_eq(builder, &computed, &folded_public);
+                computed
+            }
+            OodAirKind::ShotSampling => {
+                let computed = fold_shot_sampling_in_circuit::<AB>(&local_rows, &alpha);
+                ef_assert_eq(builder, &computed, &folded_public);
+                computed
+            }
         };
 
         let lhs = ef_mul_limbs::<AB>(&folded, &inv_vanishing);
@@ -476,6 +506,48 @@ mod tests {
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let witness = extract_agg_ood_witness(&proof).expect("witness");
+        let step = generate_ood_proof_from_witness(&witness).expect("ood prove");
+        assert!(verify_ood_proof(&step));
+    }
+
+    #[test]
+    fn born_leaf_ood_stark_roundtrip() {
+        use crate::distribution::DistributionSegment;
+        use crate::plonky3_stark::generate_born_stark_proof;
+        use crate::plonky3_stark::transcript_born::decode_born_stark_owned;
+        use crate::plonky3_stark::BornStarkContext;
+
+        let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
+        let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
+        let probs = vec![("00".into(), 0.5), ("11".into(), 0.5)];
+        let binding = crate::distribution::BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv)
+            .expect("bind");
+        let segment = DistributionSegment {
+            sample_seed: 42,
+            shots: 128,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: crate::distribution::calculate_probability_digest(&probs),
+            probabilities: probs,
+            born_binding: Some(binding),
+        };
+        let link = segment
+            .born_binding
+            .as_ref()
+            .unwrap()
+            .terminal_statevector_digest
+            .clone();
+        let born_ctx = BornStarkContext {
+            sub_task_id: "sub-born-ood",
+            probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: &link,
+        };
+        let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
+        let plonky3 = decode_born_stark_owned(&born_inner, &born_ctx).expect("decode born plonky3");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let width = proof.opened_values.trace_local.len();
+        let num_outcomes = (width - 3) / 3;
+        let witness =
+            extract_leaf_ood_witness(&proof, LeafKind::Born, num_outcomes).expect("witness");
         let step = generate_ood_proof_from_witness(&witness).expect("ood prove");
         assert!(verify_ood_proof(&step));
     }

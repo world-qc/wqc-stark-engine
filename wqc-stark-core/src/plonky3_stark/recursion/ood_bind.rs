@@ -189,21 +189,6 @@ pub fn bind_ood_to_proof(proof: &Proof<WqcStarkConfig>, step: &OodStepProof) -> 
     if limbs_to_challenge(step.quotient_limbs) != quotient {
         return Err("quotient mismatch".into());
     }
-
-    let expected_folded = super::ood_fold::fold_ood_native(
-        step.kind,
-        step.num_outcomes as usize,
-        proof.degree_bits,
-        &proof.opened_values.trace_local,
-        trace_next,
-        limbs_to_challenge(step.is_first_row_limbs),
-        limbs_to_challenge(step.is_last_row_limbs),
-        limbs_to_challenge(step.is_transition_limbs),
-        alpha,
-    );
-    if limbs_to_challenge(step.folded_limbs) != expected_folded {
-        return Err("folded constraint mismatch".into());
-    }
     Ok(())
 }
 

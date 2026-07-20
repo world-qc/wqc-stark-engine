@@ -31,6 +31,7 @@ mod merkle_keccak;
 mod ood_air;
 mod ood_bind;
 mod ood_fold;
+mod ood_leaf_fold;
 mod ood_native;
 mod opening_cert;
 mod pcs_geom;
