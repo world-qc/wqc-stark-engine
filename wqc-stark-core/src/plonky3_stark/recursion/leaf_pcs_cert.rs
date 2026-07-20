@@ -15,9 +15,6 @@ use crate::aggregation::{
 use crate::aggregation::{parse_born_leaf_prefix, parse_trajectory_leaf_prefix};
 use crate::distribution::base_proof_without_distribution_tail;
 use crate::plonky3_stark::config::{ValMmcs, WqcStarkConfig};
-use crate::plonky3_stark::distribution_air::DistributionAir;
-use crate::plonky3_stark::quantum_air::QuantumExecutionAir;
-use crate::plonky3_stark::shot_sampling_air::ShotSamplingAir;
 use crate::plonky3_stark::shot_sampling_stark::split_shot_sampling_from_bundle;
 use crate::plonky3_stark::transcript_born::BORN_STARK_INNER_MARKER;
 use crate::plonky3_stark::transcript_trajectory_stark::{
@@ -39,7 +36,9 @@ use super::fri_mmcs_bind::{
     FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
 use super::fri_mmcs_path::FriMmcsPathProof;
-use super::fri_ood::verify_leaf_ood;
+use super::ood_air::{verify_ood_proof, OodStepProof};
+use super::ood_bind::verify_leaf_ood_step;
+use super::ood_native::generate_leaf_ood_proof;
 use super::opening_cert::LEAF_PCS_MAX_SIBLINGS;
 use super::pcs_geom::{LeafKind, UNITARY_TRACE_WIDTH};
 
@@ -61,6 +60,8 @@ pub struct LeafPcsCertificate {
     pub fri_folds: Vec<FriFoldStepProof>,
     pub deep_ros: Vec<DeepRoStepProof>,
     pub deep_ro_traces: Vec<DeepRoLeafTraceStepProof>,
+    /// R3 OOD: in-circuit constraint fold + quotient check at ζ.
+    pub ood: OodStepProof,
     pub fri_val_mmcs: Vec<FriValMmcsQueryProof>,
     pub fri_chal_mmcs: Vec<FriChalMmcsQueryProof>,
 }
@@ -121,35 +122,25 @@ fn num_outcomes_from_width(width: usize) -> Result<usize, String> {
     Ok((width - 3) / 3)
 }
 
-enum LeafOodAir {
-    Unitary(QuantumExecutionAir),
-    Distribution(DistributionAir),
-    Shot(ShotSamplingAir),
+enum LeafOodParams {
+    Unitary,
+    Distribution { num_outcomes: usize },
+    Shot,
 }
 
-impl LeafOodAir {
-    fn verify(&self, proof: &Proof<WqcStarkConfig>) -> Result<(), String> {
-        match self {
-            Self::Unitary(air) => verify_leaf_ood(proof, air),
-            Self::Distribution(air) => verify_leaf_ood(proof, air),
-            Self::Shot(air) => verify_leaf_ood(proof, air),
-        }
-    }
-}
-
-fn air_for_kind(kind: LeafKind, proof: &Proof<WqcStarkConfig>) -> Result<LeafOodAir, String> {
+fn ood_params_for_kind(
+    kind: LeafKind,
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<LeafOodParams, String> {
     match kind {
-        LeafKind::Unitary => Ok(LeafOodAir::Unitary(QuantumExecutionAir)),
+        LeafKind::Unitary => Ok(LeafOodParams::Unitary),
         LeafKind::Born | LeafKind::TrajMarginal => {
             let width = proof.opened_values.trace_local.len();
-            let num_outcomes = num_outcomes_from_width(width)?;
-            let dim = 1usize << proof.degree_bits;
-            Ok(LeafOodAir::Distribution(DistributionAir {
-                dim,
-                num_outcomes,
-            }))
+            Ok(LeafOodParams::Distribution {
+                num_outcomes: num_outcomes_from_width(width)?,
+            })
         }
-        LeafKind::ShotSampling => Ok(LeafOodAir::Shot(ShotSamplingAir)),
+        LeafKind::ShotSampling => Ok(LeafOodParams::Shot),
     }
 }
 
@@ -173,9 +164,16 @@ pub fn build_leaf_pcs_certificate(
         ));
     }
 
-    let air = air_for_kind(kind, proof)?;
-    air.verify(proof)
-        .map_err(|e| format!("R3-M3e leaf OOD failed: {e}"))?;
+    let ood_params = ood_params_for_kind(kind, proof)?;
+    let num_outcomes = match ood_params {
+        LeafOodParams::Distribution { num_outcomes } => num_outcomes,
+        _ => 0,
+    };
+    let ood = generate_leaf_ood_proof(proof, kind, num_outcomes)
+        .map_err(|e| format!("R3-M3e leaf OOD prove failed: {e}"))?;
+    if !verify_ood_proof(&ood) {
+        return Err("R3-M3e leaf OOD self-check failed".into());
+    }
 
     let fri_bundle = fri_fold_bundle_from_proof(proof, trace_width)
         .map_err(|e| format!("R3-M3e FRI fold prove failed: {e}"))?;
@@ -270,6 +268,7 @@ pub fn build_leaf_pcs_certificate(
         fri_folds: fri_bundle.fold_xs,
         deep_ros,
         deep_ro_traces,
+        ood,
         fri_val_mmcs: mmcs_bundle.val,
         fri_chal_mmcs: mmcs_bundle.chal,
     })
@@ -308,15 +307,12 @@ pub fn verify_leaf_pcs_certificate(
         return false;
     }
 
-    let air = match air_for_kind(cert.kind, proof) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("[LeafPcsCertificate] Failed: {e}");
-            return false;
-        }
-    };
-    if let Err(e) = air.verify(proof) {
-        eprintln!("[LeafPcsCertificate] Failed: OOD: {e}");
+    if !verify_ood_proof(&cert.ood) {
+        eprintln!("[LeafPcsCertificate] Failed: OOD STARK");
+        return false;
+    }
+    if let Err(e) = verify_leaf_ood_step(proof, &cert.ood, cert.kind) {
+        eprintln!("[LeafPcsCertificate] Failed: OOD bind: {e}");
         return false;
     }
 
@@ -680,8 +676,6 @@ mod tests {
             crate::aggregation::encode_born_leaf("sub-born-pcs", &segment, Some(&born_inner));
         let plonky3 = born_plonky3_from_child(&leaf).expect("born plonky3");
         let proof = proof_from_plonky3(&plonky3).expect("proof");
-        let air = air_for_kind(LeafKind::Born, &proof).expect("air");
-        air.verify(&proof).expect("born OOD");
         let stmt = leaf_stmt_digest(LeafKind::Born, &proof).expect("stmt");
         let cert = build_leaf_pcs_certificate(&proof, LeafKind::Born, stmt).expect("cert");
         assert!(verify_leaf_pcs_certificate(&proof, &cert));

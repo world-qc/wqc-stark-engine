@@ -66,7 +66,26 @@ pub fn ef_square_limbs<AB: AirBuilder>(a: &[AB::Expr; 3]) -> [AB::Expr; 3]
 where
     AB::F: PrimeCharacteristicRing,
 {
-    ef_mul_limbs::<AB>(a, a)
+    ef_mul_values(a, a)
+}
+
+/// Extension mul on raw limb arrays (no [`AirBuilder`]).
+pub fn ef_mul_values<E: PrimeCharacteristicRing + Clone>(a: &[E; 3], b: &[E; 3]) -> [E; 3] {
+    let w = E::from_u32(5);
+    let a0_b0 = a[0].clone() * b[0].clone();
+    let a1_b1 = a[1].clone() * b[1].clone();
+    let a2_b2 = a[2].clone() * b[2].clone();
+    let c0 = a0_b0.clone()
+        + ((a[1].clone() + a[2].clone()) * (b[1].clone() + b[2].clone())
+            - a1_b1.clone()
+            - a2_b2.clone())
+            * w.clone();
+    let c1 = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone())
+        - a0_b0.clone()
+        - a1_b1.clone()
+        + a2_b2.clone() * w;
+    let c2 = (a[0].clone() + a[2].clone()) * (b[0].clone() + b[2].clone()) - a0_b0 - a2_b2 + a1_b1;
+    [c0, c1, c2]
 }
 
 /// Assert `a == b` limbwise.

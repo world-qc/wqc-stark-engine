@@ -28,6 +28,10 @@ mod keccak_f_native;
 mod keccak_merkle_air;
 mod leaf_pcs_cert;
 mod merkle_keccak;
+mod ood_air;
+mod ood_bind;
+mod ood_fold;
+mod ood_native;
 mod opening_cert;
 mod pcs_geom;
 mod prove;
@@ -97,6 +101,18 @@ pub use leaf_pcs_cert::{
 };
 pub use merkle_keccak::{
     compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
+};
+pub use ood_air::{
+    generate_ood_proof, verify_ood_proof, OodAirKind, OodCheckAir, OodStepProof,
+    OOD_MAX_TRACE_WIDTH,
+};
+pub use ood_bind::{
+    bind_leaf_ood_to_proof, bind_ood_to_proof, verify_agg_ood_step, verify_leaf_ood_step,
+    verify_ood_step_bound,
+};
+pub use ood_native::{
+    extract_agg_ood_witness, extract_leaf_ood_witness, generate_agg_ood_proof,
+    generate_leaf_ood_proof, generate_ood_proof_from_witness, ood_kind_for_leaf, OodWitness,
 };
 pub use opening_cert::{
     build_agg_pcs_certificate, child_aggregation_transcript, parse_agg_v4_header,

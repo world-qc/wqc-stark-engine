@@ -32,7 +32,9 @@ use super::fri_mmcs_bind::{
     FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
 use super::fri_mmcs_path::FriMmcsPathProof;
-use super::fri_ood::verify_agg_ood;
+use super::ood_air::{verify_ood_proof, OodStepProof};
+use super::ood_bind::verify_agg_ood_step;
+use super::ood_native::generate_agg_ood_proof;
 
 /// Max Merkle siblings retained for legacy V6 decode (LDE rebuild removed).
 pub const AGG_PCS_MAX_SIBLINGS: usize = 8;
@@ -62,6 +64,8 @@ pub struct AggPcsCertificate {
     pub deep_ros: Vec<DeepRoStepProof>,
     /// R3-M3c3: DeepRoTrace (DEEP+λ) for all proven queries' trace batches; bound into FriFoldY.
     pub deep_ro_traces: Vec<DeepRoTraceStepProof>,
+    /// R3 OOD: in-circuit constraint fold + quotient check at ζ.
+    pub ood: OodStepProof,
     /// R3-M3d: ValMmcs (trace+quot) Merkle paths for all proven FRI queries.
     pub fri_val_mmcs: Vec<FriValMmcsQueryProof>,
     /// R3-M3d: ChallengeMmcs (first-layer + commit-phase) paths for all proven FRI queries.
@@ -122,7 +126,10 @@ pub fn build_agg_pcs_certificate(
     let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3_bytes)
         .map_err(|e| format!("postcard decode AggregationAir proof: {e}"))?;
 
-    verify_agg_ood(&proof).map_err(|e| format!("R3-M3b4 OOD failed: {e}"))?;
+    let ood = generate_agg_ood_proof(&proof).map_err(|e| format!("R3 OOD prove failed: {e}"))?;
+    if !verify_ood_proof(&ood) {
+        return Err("R3 OOD self-check failed".into());
+    }
 
     let natural_row = natural_row_from_hashes(context.left_child_hash, context.right_child_hash);
     if !aggregation_air_constraints_hold(&natural_row, &natural_row) {
@@ -218,6 +225,7 @@ pub fn build_agg_pcs_certificate(
         fri_folds: fri_bundle.fold_xs,
         deep_ros: deep_bundle.deep_ros,
         deep_ro_traces: deep_bundle.deep_ro_traces,
+        ood,
         fri_val_mmcs: mmcs_bundle.val,
         fri_chal_mmcs: mmcs_bundle.chal,
     })
@@ -225,7 +233,7 @@ pub fn build_agg_pcs_certificate(
 
 /// Host-verifies a certificate against an AggregationAir transcript + context.
 ///
-/// Checks host OOD, in-circuit FriFold / DeepRo / FRI Mmcs STARKs, and FS+RO binds
+/// Checks in-circuit OOD + FriFold / DeepRo / FRI Mmcs STARKs and FS+RO binds
 /// without Plonky3 PCS commit / LDE rebuild or host `verify_agg_fri_openings`.
 pub fn verify_agg_pcs_certificate(
     context: &AggregationContext<'_>,
@@ -245,6 +253,10 @@ pub fn verify_agg_pcs_certificate(
     }
     if !aggregation_air_constraints_hold(&cert.natural_row, &cert.natural_row) {
         eprintln!("[AggPcsCertificate] Failed: AggregationAir constraints");
+        return false;
+    }
+    if !verify_ood_proof(&cert.ood) {
+        eprintln!("[AggPcsCertificate] Failed: OOD STARK");
         return false;
     }
     for (i, fold) in cert.fri_fold_ys.iter().enumerate() {
@@ -326,6 +338,7 @@ pub fn verify_agg_pcs_certificate(
                     || rebuilt.fri_folds != cert.fri_folds
                     || rebuilt.deep_ros != cert.deep_ros
                     || rebuilt.deep_ro_traces != cert.deep_ro_traces
+                    || rebuilt.ood != cert.ood
                     || rebuilt.fri_val_mmcs != cert.fri_val_mmcs
                     || rebuilt.fri_chal_mmcs != cert.fri_chal_mmcs
                 {
@@ -363,7 +376,7 @@ fn verify_agg_pcs_certificate_fri_bound(
         }
     };
 
-    if let Err(e) = verify_agg_ood(&proof) {
+    if let Err(e) = verify_agg_ood_step(&proof, &cert.ood) {
         eprintln!("[AggPcsCertificate] Failed: OOD: {e}");
         return false;
     }

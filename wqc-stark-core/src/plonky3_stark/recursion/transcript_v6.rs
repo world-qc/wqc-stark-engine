@@ -22,6 +22,7 @@ use super::fri_mmcs_bind::{FriChalBatchPathProof, FriChalMmcsQueryProof, FriValM
 use super::fri_mmcs_path::{FriMmcsPathProof, FRI_MMCS_MAX_DEPTH};
 use super::keccak256_air::Keccak256StarkProof;
 use super::leaf_pcs_cert::{LeafPcsBundle, LeafPcsCertificate};
+use super::ood_air::{OodAirKind, OodStepProof, OOD_MAX_TRACE_WIDTH};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS, LEAF_PCS_MAX_SIBLINGS};
 use super::pcs_geom::{LeafKind, LEAF_DEEP_RO_MAX_WIDTH, MAX_QUOT_BATCH_LEAF_ROWS};
 use super::STARK_DIGEST_LEN;
@@ -162,6 +163,115 @@ fn decode_fri_folds(
         cursor = next;
     }
     Some((folds, cursor))
+}
+
+fn encode_ood(out: &mut Vec<u8>, ood: &OodStepProof) {
+    out.push(ood.kind as u8);
+    out.extend_from_slice(&ood.num_outcomes.to_le_bytes());
+    out.extend_from_slice(&ood.width.to_le_bytes());
+    out.extend_from_slice(&ood.degree_bits.to_le_bytes());
+    write_m31_row(out, &ood.zeta_limbs);
+    write_m31_row(out, &ood.alpha_limbs);
+    write_m31_row(out, &ood.quotient_limbs);
+    write_m31_row(out, &ood.inv_vanishing_limbs);
+    write_m31_row(out, &ood.is_first_row_limbs);
+    write_m31_row(out, &ood.is_last_row_limbs);
+    write_m31_row(out, &ood.is_transition_limbs);
+    write_m31_row(out, &ood.folded_limbs);
+    out.extend_from_slice(&(ood.trace_local_limbs.len() as u32).to_le_bytes());
+    for limbs in &ood.trace_local_limbs {
+        write_m31_row(out, limbs);
+    }
+    out.extend_from_slice(&(ood.trace_next_limbs.len() as u32).to_le_bytes());
+    for limbs in &ood.trace_next_limbs {
+        write_m31_row(out, limbs);
+    }
+    out.extend_from_slice(&(ood.ood_stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&ood.ood_stark);
+}
+
+fn decode_ood(proof: &[u8], offset: usize) -> Option<(OodStepProof, usize)> {
+    let kind = OodAirKind::from_u8(*proof.get(offset)?)?;
+    let cursor = offset + 1;
+    let (num_outcomes, cursor) = read_u32_le(proof, cursor)?;
+    let (width, cursor) = read_u32_le(proof, cursor)?;
+    let (degree_bits, cursor) = read_u32_le(proof, cursor)?;
+    if width as usize > OOD_MAX_TRACE_WIDTH {
+        return None;
+    }
+    let (zeta_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (alpha_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (quotient_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (inv_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (first_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (last_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (trans_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (folded_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (local_len, cursor) = read_u32_le(proof, cursor)?;
+    if local_len as usize > OOD_MAX_TRACE_WIDTH {
+        return None;
+    }
+    let mut trace_local_limbs = Vec::with_capacity(local_len as usize);
+    let mut cursor = cursor;
+    for _ in 0..local_len {
+        let (row, next) = read_m31_row(proof, cursor, 3)?;
+        let mut limbs = [Mersenne31::ZERO; 3];
+        limbs.copy_from_slice(&row);
+        trace_local_limbs.push(limbs);
+        cursor = next;
+    }
+    let (next_len, cursor) = read_u32_le(proof, cursor)?;
+    if next_len != local_len || next_len as usize > OOD_MAX_TRACE_WIDTH {
+        return None;
+    }
+    let mut trace_next_limbs = Vec::with_capacity(next_len as usize);
+    let mut cursor = cursor;
+    for _ in 0..next_len {
+        let (row, next) = read_m31_row(proof, cursor, 3)?;
+        let mut limbs = [Mersenne31::ZERO; 3];
+        limbs.copy_from_slice(&row);
+        trace_next_limbs.push(limbs);
+        cursor = next;
+    }
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let ood_stark = proof.get(cursor..end)?.to_vec();
+    let mut zeta_limbs = [Mersenne31::ZERO; 3];
+    let mut alpha_limbs = [Mersenne31::ZERO; 3];
+    let mut quotient_limbs = [Mersenne31::ZERO; 3];
+    let mut inv_vanishing_limbs = [Mersenne31::ZERO; 3];
+    let mut is_first_row_limbs = [Mersenne31::ZERO; 3];
+    let mut is_last_row_limbs = [Mersenne31::ZERO; 3];
+    let mut is_transition_limbs = [Mersenne31::ZERO; 3];
+    let mut folded_limbs = [Mersenne31::ZERO; 3];
+    zeta_limbs.copy_from_slice(&zeta_vec);
+    alpha_limbs.copy_from_slice(&alpha_vec);
+    quotient_limbs.copy_from_slice(&quotient_vec);
+    inv_vanishing_limbs.copy_from_slice(&inv_vec);
+    is_first_row_limbs.copy_from_slice(&first_vec);
+    is_last_row_limbs.copy_from_slice(&last_vec);
+    is_transition_limbs.copy_from_slice(&trans_vec);
+    folded_limbs.copy_from_slice(&folded_vec);
+    Some((
+        OodStepProof {
+            kind,
+            num_outcomes,
+            width,
+            degree_bits,
+            zeta_limbs,
+            alpha_limbs,
+            quotient_limbs,
+            inv_vanishing_limbs,
+            is_first_row_limbs,
+            is_last_row_limbs,
+            is_transition_limbs,
+            folded_limbs,
+            trace_local_limbs,
+            trace_next_limbs,
+            ood_stark,
+        },
+        end,
+    ))
 }
 
 fn encode_deep_ro(out: &mut Vec<u8>, deep: &DeepRoStepProof) {
@@ -904,6 +1014,7 @@ fn encode_leaf_cert(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
     encode_fri_folds(out, &c.fri_folds);
     encode_deep_ros(out, &c.deep_ros);
     encode_deep_ro_leaf_traces(out, &c.deep_ro_traces);
+    encode_ood(out, &c.ood);
     encode_fri_val_mmcs(out, &c.fri_val_mmcs);
     encode_fri_chal_mmcs(out, &c.fri_chal_mmcs);
 }
@@ -936,6 +1047,7 @@ fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, 
     let (deep_ros, cursor) = decode_leaf_deep_ros(proof, cursor)?;
     let (deep_ro_traces, cursor) =
         decode_deep_ro_leaf_traces(proof, cursor, LEAF_FRI_PROVEN_QUERIES)?;
+    let (ood, cursor) = decode_ood(proof, cursor)?;
     let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor)?;
     let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor)?;
     Some((
@@ -953,6 +1065,7 @@ fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, 
             fri_folds,
             deep_ros,
             deep_ro_traces,
+            ood,
             fri_val_mmcs,
             fri_chal_mmcs,
         },
@@ -1060,6 +1173,7 @@ fn diagnose_decode_leaf_cert(
     let (deep_ro_traces, cursor) =
         decode_deep_ro_leaf_traces(proof, cursor, LEAF_FRI_PROVEN_QUERIES)
             .ok_or("deep_ro_traces")?;
+    let (ood, cursor) = decode_ood(proof, cursor).ok_or("ood")?;
     let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor).ok_or("fri_val_mmcs")?;
     let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor).ok_or("fri_chal_mmcs")?;
     Ok((
@@ -1077,6 +1191,7 @@ fn diagnose_decode_leaf_cert(
             fri_folds,
             deep_ros,
             deep_ro_traces,
+            ood,
             fri_val_mmcs,
             fri_chal_mmcs,
         },
@@ -1135,6 +1250,7 @@ fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
     encode_fri_folds(out, &c.fri_folds);
     encode_deep_ros(out, &c.deep_ros);
     encode_deep_ro_traces(out, &c.deep_ro_traces);
+    encode_ood(out, &c.ood);
     encode_fri_val_mmcs(out, &c.fri_val_mmcs);
     encode_fri_chal_mmcs(out, &c.fri_chal_mmcs);
 }
@@ -1170,6 +1286,7 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
         decode_fri_folds(proof, cursor, AGG_FRI_MAX_ROUNDS * AGG_FRI_PROVEN_QUERIES)?;
     let (deep_ros, cursor) = decode_deep_ros(proof, cursor, AGG_DEEP_RO_MAX)?;
     let (deep_ro_traces, cursor) = decode_deep_ro_traces(proof, cursor, AGG_DEEP_RO_TRACE_MAX)?;
+    let (ood, cursor) = decode_ood(proof, cursor)?;
     let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor)?;
     let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor)?;
     Some((
@@ -1186,6 +1303,7 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
             fri_folds,
             deep_ros,
             deep_ro_traces,
+            ood,
             fri_val_mmcs,
             fri_chal_mmcs,
         },
