@@ -21,7 +21,6 @@ use super::fri_fold_bind::{
 use super::fri_mmcs_bind::{FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof};
 use super::fri_mmcs_path::{FriMmcsPathProof, FRI_MMCS_MAX_DEPTH};
 use super::keccak256_air::Keccak256StarkProof;
-use super::keccak_merkle_air::{KeccakMerklePathProof, MERKLE_FOLD_DEPTH};
 use super::leaf_pcs_cert::{LeafPcsBundle, LeafPcsCertificate};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS, LEAF_PCS_MAX_SIBLINGS};
 use super::pcs_geom::{LeafKind, LEAF_DEEP_RO_MAX_WIDTH, MAX_QUOT_BATCH_LEAF_ROWS};
@@ -90,61 +89,6 @@ fn decode_keccak256_stark(proof: &[u8], offset: usize) -> Option<(Keccak256Stark
             stark,
         },
         end,
-    ))
-}
-
-fn encode_merkle_fold(out: &mut Vec<u8>, fold: &KeccakMerklePathProof) {
-    out.extend_from_slice(&fold.leaf_digest);
-    out.extend_from_slice(&(fold.layer_digests.len() as u32).to_le_bytes());
-    for d in &fold.layer_digests {
-        out.extend_from_slice(d);
-    }
-    out.extend_from_slice(&(fold.fold_stark.len() as u32).to_le_bytes());
-    out.extend_from_slice(&fold.fold_stark);
-    encode_keccak256_stark(out, &fold.leaf_keccak);
-    out.extend_from_slice(&(fold.compress_starks.len() as u32).to_le_bytes());
-    for c in &fold.compress_starks {
-        encode_keccak256_stark(out, c);
-    }
-}
-
-fn decode_merkle_fold(proof: &[u8], offset: usize) -> Option<(KeccakMerklePathProof, usize)> {
-    let (leaf_digest, cursor) = read_fixed::<32>(proof, offset)?;
-    let (layer_len, cursor) = read_u32_le(proof, cursor)?;
-    if layer_len as usize != MERKLE_FOLD_DEPTH {
-        return None;
-    }
-    let mut layer_digests = Vec::with_capacity(MERKLE_FOLD_DEPTH);
-    let mut cursor = cursor;
-    for _ in 0..MERKLE_FOLD_DEPTH {
-        let (d, next) = read_fixed::<32>(proof, cursor)?;
-        layer_digests.push(d);
-        cursor = next;
-    }
-    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
-    let end = cursor + stark_len as usize;
-    let fold_stark = proof.get(cursor..end)?.to_vec();
-    let (leaf_keccak, cursor) = decode_keccak256_stark(proof, end)?;
-    let (comp_len, cursor) = read_u32_le(proof, cursor)?;
-    if comp_len as usize != MERKLE_FOLD_DEPTH {
-        return None;
-    }
-    let mut compress_starks = Vec::with_capacity(MERKLE_FOLD_DEPTH);
-    let mut cursor = cursor;
-    for _ in 0..MERKLE_FOLD_DEPTH {
-        let (c, next) = decode_keccak256_stark(proof, cursor)?;
-        compress_starks.push(c);
-        cursor = next;
-    }
-    Some((
-        KeccakMerklePathProof {
-            leaf_digest,
-            layer_digests,
-            fold_stark,
-            leaf_keccak,
-            compress_starks,
-        },
-        cursor,
     ))
 }
 
@@ -1186,7 +1130,7 @@ fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
     for sib in &c.siblings {
         out.extend_from_slice(sib);
     }
-    encode_merkle_fold(out, &c.merkle_fold);
+    encode_fri_mmcs_path(out, &c.merkle_fold);
     encode_fri_folds(out, &c.fri_fold_ys);
     encode_fri_folds(out, &c.fri_folds);
     encode_deep_ros(out, &c.deep_ros);
@@ -1204,10 +1148,11 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
     natural_row.copy_from_slice(&natural_vec);
     let (lde_index, cursor) = read_u32_le(proof, cursor)?;
     let (lde_len, cursor) = read_u32_le(proof, cursor)?;
-    if lde_len as usize != AGG_WIDTH {
-        return None;
-    }
-    let (lde_row, cursor) = read_m31_row(proof, cursor, lde_len as usize)?;
+    let (lde_row, cursor) = match lde_len as usize {
+        0 => (Vec::new(), cursor),
+        AGG_WIDTH => read_m31_row(proof, cursor, lde_len as usize)?,
+        _ => return None,
+    };
     let (sib_len, cursor) = read_u32_le(proof, cursor)?;
     if sib_len as usize > AGG_PCS_MAX_SIBLINGS {
         return None;
@@ -1219,7 +1164,7 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
         siblings.push(sib);
         cursor = next;
     }
-    let (merkle_fold, cursor) = decode_merkle_fold(proof, cursor)?;
+    let (merkle_fold, cursor) = decode_fri_mmcs_path(proof, cursor)?;
     let (fri_fold_ys, cursor) = decode_fri_folds(proof, cursor, AGG_FRI_MAX_FOLD_YS)?;
     let (fri_folds, cursor) =
         decode_fri_folds(proof, cursor, AGG_FRI_MAX_ROUNDS * AGG_FRI_PROVEN_QUERIES)?;
@@ -1406,10 +1351,8 @@ pub fn diagnose_decode_rec_agg_v6(
     let left_kind = *proof.get(cursor).ok_or("left_kind")?;
     let right_kind = *proof.get(cursor + 1).ok_or("right_kind")?;
     let cursor = cursor + 2;
-    let (left_cert, left_leaf, cursor) =
-        diagnose_decode_side(proof, cursor, "left")?;
-    let (right_cert, right_leaf, cursor) =
-        diagnose_decode_side(proof, cursor, "right")?;
+    let (left_cert, left_leaf, cursor) = diagnose_decode_side(proof, cursor, "left")?;
+    let (right_cert, right_leaf, cursor) = diagnose_decode_side(proof, cursor, "right")?;
 
     if compose_label != expected.compose_label {
         return Err(format!(
@@ -1515,6 +1458,29 @@ mod tests {
         let (left, right) = split_rec_tail_v6(&combined).expect("split");
         assert_eq!(left, body);
         assert_eq!(right, rec);
+    }
+
+    #[test]
+    fn agg_cert_v6_codec_roundtrip() {
+        use crate::aggregation::CHILD_HASH_LEN;
+        use crate::plonky3_stark::aggregation::AggregationContext;
+        use crate::plonky3_stark::generate_aggregation_proof;
+        use crate::plonky3_stark::recursion::opening_cert::build_agg_pcs_certificate;
+
+        let ctx = AggregationContext {
+            parent_task_id: "parent-codec",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [9u8; CHILD_HASH_LEN],
+            right_child_hash: [10u8; CHILD_HASH_LEN],
+        };
+        let agg = generate_aggregation_proof(&ctx).expect("prove");
+        let cert = build_agg_pcs_certificate(&ctx, &agg).expect("cert");
+        let mut out = Vec::new();
+        encode_agg_cert(&mut out, &cert);
+        let (decoded, end) = decode_agg_cert(&out, 0).expect("decode agg cert");
+        assert_eq!(end, out.len());
+        assert_eq!(decoded, cert);
     }
 
     #[test]

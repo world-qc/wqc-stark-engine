@@ -1,21 +1,18 @@
 //! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b4 / M3c3 / M3d).
 //!
-//! Rebuild Circle PCS commitment, open an LDE row, host-check LDE `Mmcs::verify_batch`,
-//! attach Merkle/FriFold STARKs for all FRI queries, all-query DeepRo + DeepRoTrace,
-//! and in-circuit FRI ValMmcs + ChallengeMmcs paths (M3d). Build/verify use host OOD
-//! only (no host FRI Mmcs on the cert path).
+//! Mirrors leaf PCS flow (M3e): host OOD + in-circuit FriFold / DeepRo / FRI Val+Challenge
+//! Mmcs. Skips natural-row LDE rebuild (no prover_data); `merkle_fold` reuses query-0 ValMmcs
+//! trace path like [`super::leaf_pcs_cert::LeafPcsCertificate`].
 
-use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
+use p3_commit::Mmcs;
 use p3_field::PrimeCharacteristicRing;
-use p3_matrix::{Dimensions, Matrix};
 use p3_mersenne_31::Mersenne31;
-use p3_uni_stark::{Proof, StarkGenericConfig};
+use p3_uni_stark::Proof;
 
 use crate::aggregation::CHILD_HASH_LEN;
-use crate::air::pad_air_matrix_for_uni_stark;
-use crate::plonky3_stark::aggregation::{build_agg_matrix, AggregationContext};
+use crate::plonky3_stark::aggregation::AggregationContext;
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
-use crate::plonky3_stark::config::{devnet_circle_config, ValMmcs, WqcStarkConfig};
+use crate::plonky3_stark::config::{ValMmcs, WqcStarkConfig};
 use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
 use super::agg_constraints::aggregation_air_constraints_hold;
@@ -34,14 +31,10 @@ use super::fri_mmcs_bind::{
     bind_fri_mmcs_bundle_to_proof, fri_mmcs_bundle_from_agg_proof, AggFriMmcsBundle,
     FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
+use super::fri_mmcs_path::FriMmcsPathProof;
 use super::fri_ood::verify_agg_ood;
-use super::keccak_merkle_air::{
-    generate_keccak_merkle_path_proof, verify_keccak_merkle_path_proof, KeccakMerklePathProof,
-};
-use super::merkle_keccak::verify_agg_merkle_path;
 
-/// Max Merkle siblings for AggregationAir LDE (height 8 with log_blowup=1).
-/// Leaf STARKs may use deeper paths up to [`super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH`].
+/// Max Merkle siblings retained for legacy V6 decode (LDE rebuild removed).
 pub const AGG_PCS_MAX_SIBLINGS: usize = 8;
 /// Max siblings for leaf PCS LDE / FRI Mmcs paths.
 pub const LEAF_PCS_MAX_SIBLINGS: usize = 20;
@@ -55,14 +48,12 @@ pub struct AggPcsCertificate {
     pub trace_commitment: [u8; 32],
     /// Natural-order AggregationAir row (width 66) used for in-circuit constraints.
     pub natural_row: [Mersenne31; AGG_WIDTH],
-    /// LDE row index opened against the PCS commitment.
+    /// LDE statement open deferred (always 0 / empty).
     pub lde_index: u32,
-    /// Opened LDE row values (length = AGG_WIDTH).
     pub lde_row: Vec<Mersenne31>,
-    /// Merkle siblings authenticating `lde_row` to `trace_commitment`.
     pub siblings: Vec<[u8; 32]>,
-    /// R3-M2.5b: Merkle fold + in-circuit Keccak-256 leaf/compress sponges.
-    pub merkle_fold: KeccakMerklePathProof,
+    /// Query-0 ValMmcs trace path (variable-depth stand-in; LDE rebuild skipped).
+    pub merkle_fold: FriMmcsPathProof,
     /// R3-M3b3: first-layer Circle FRI `fold_y` steps (all proven queries).
     pub fri_fold_ys: Vec<FriFoldStepProof>,
     /// R3-M3b3: commit-phase Circle FRI `fold_x` steps (all proven queries × rounds) with FS β + RO.
@@ -101,9 +92,27 @@ fn natural_row_from_hashes(
     row
 }
 
+fn path_self_check_val(qp: &FriValMmcsQueryProof) -> bool {
+    qp.trace_path.depth as usize == qp.trace_siblings.len()
+        && qp.quot_path.depth as usize == qp.quot_siblings.len()
+        && !qp.trace_siblings.is_empty()
+        && !qp.quot_siblings.is_empty()
+}
+
+fn path_self_check_chal(qp: &FriChalMmcsQueryProof) -> bool {
+    !qp.first_layer.siblings.is_empty()
+        && qp.commit_paths.len() == qp.commit_siblings.len()
+        && qp.commit_paths.len() == qp.commit_indices.len()
+        && qp
+            .commit_paths
+            .iter()
+            .zip(qp.commit_siblings.iter())
+            .all(|(p, s)| p.depth as usize == s.len() && !s.is_empty())
+}
+
 /// Builds a PCS opening certificate for an AggregationAir transcript.
 ///
-/// M3d: host OOD + in-circuit FRI Val/Challenge Mmcs (no host `verify_agg_fri_openings`).
+/// M3d: host OOD + in-circuit FRI Val/Challenge Mmcs (no host PCS commit / LDE rebuild).
 pub fn build_agg_pcs_certificate(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -115,87 +124,9 @@ pub fn build_agg_pcs_certificate(
 
     verify_agg_ood(&proof).map_err(|e| format!("R3-M3b4 OOD failed: {e}"))?;
 
-    let matrix = pad_air_matrix_for_uni_stark(build_agg_matrix(
-        context.left_child_hash,
-        context.right_child_hash,
-    ));
     let natural_row = natural_row_from_hashes(context.left_child_hash, context.right_child_hash);
     if !aggregation_air_constraints_hold(&natural_row, &natural_row) {
         return Err("natural AggregationAir row fails constraints".to_string());
-    }
-
-    let config = devnet_circle_config();
-    let pcs = config.pcs();
-    let domain = <crate::plonky3_stark::config::Pcs as Pcs<
-        crate::plonky3_stark::config::Challenge,
-        crate::plonky3_stark::config::Challenger,
-    >>::natural_domain_for_degree(pcs, matrix.height());
-    let (comm, prover_data) = <crate::plonky3_stark::config::Pcs as Pcs<
-        crate::plonky3_stark::config::Challenge,
-        crate::plonky3_stark::config::Challenger,
-    >>::commit(pcs, vec![(domain, matrix)]);
-    if comm != proof.commitments.trace {
-        return Err("rebuilt PCS commitment does not match AggregationAir proof".to_string());
-    }
-
-    let trace_commitment = commitment_root(&comm)?;
-    // Open the first LDE leaf; height is small (AggregationAir-sized).
-    let lde_index = 0usize;
-    let batch = pcs.mmcs.open_batch(lde_index, &prover_data);
-    let dims: Vec<Dimensions> = pcs
-        .mmcs
-        .get_matrices(&prover_data)
-        .iter()
-        .map(|m| Dimensions {
-            width: m.width(),
-            height: m.height(),
-        })
-        .collect();
-    pcs.mmcs
-        .verify_batch(
-            &comm,
-            &dims,
-            lde_index,
-            BatchOpeningRef::new(&batch.opened_values, &batch.opening_proof),
-        )
-        .map_err(|e| format!("AggregationAir PCS Merkle verify failed: {e:?}"))?;
-
-    let lde_row = batch
-        .opened_values
-        .first()
-        .cloned()
-        .ok_or_else(|| "empty PCS batch opening".to_string())?;
-    if lde_row.len() != AGG_WIDTH {
-        return Err(format!(
-            "unexpected LDE row width: got {}, want {AGG_WIDTH}",
-            lde_row.len()
-        ));
-    }
-    if batch.opening_proof.len() > AGG_PCS_MAX_SIBLINGS {
-        return Err(format!(
-            "too many Merkle siblings: {}",
-            batch.opening_proof.len()
-        ));
-    }
-
-    if !verify_agg_merkle_path(&lde_row, &batch.opening_proof, lde_index, &trace_commitment) {
-        return Err("ValMmcs Keccak Merkle path self-check failed".into());
-    }
-    let merkle_fold = generate_keccak_merkle_path_proof(
-        &lde_row,
-        &batch.opening_proof,
-        lde_index,
-        &trace_commitment,
-    )
-    .map_err(|e| format!("R3-M2.5 Merkle fold prove failed: {e}"))?;
-    if !verify_keccak_merkle_path_proof(
-        &lde_row,
-        &batch.opening_proof,
-        lde_index,
-        &trace_commitment,
-        &merkle_fold,
-    ) {
-        return Err("R3-M2.5 Merkle fold self-check failed".into());
     }
 
     let fri_bundle = fri_fold_bundle_from_agg_proof(&proof)
@@ -271,14 +202,17 @@ pub fn build_agg_pcs_certificate(
     bind_fri_mmcs_bundle_to_proof(&proof, &mmcs_bundle)
         .map_err(|e| format!("R3-M3d FRI Mmcs bind failed: {e}"))?;
 
+    let trace_commitment = commitment_root(&proof.commitments.trace)?;
+    let merkle_fold = mmcs_bundle.val[0].trace_path.clone();
+
     Ok(AggPcsCertificate {
         stmt_left_hash: context.left_child_hash,
         stmt_right_hash: context.right_child_hash,
         trace_commitment,
         natural_row,
-        lde_index: lde_index as u32,
-        lde_row,
-        siblings: batch.opening_proof,
+        lde_index: 0,
+        lde_row: Vec::new(),
+        siblings: Vec::new(),
         merkle_fold,
         fri_fold_ys: fri_bundle.fold_ys,
         fri_folds: fri_bundle.fold_xs,
@@ -289,29 +223,10 @@ pub fn build_agg_pcs_certificate(
     })
 }
 
-fn path_self_check_val(qp: &FriValMmcsQueryProof) -> bool {
-    qp.trace_path.depth as usize == qp.trace_siblings.len()
-        && qp.quot_path.depth as usize == qp.quot_siblings.len()
-        && !qp.trace_siblings.is_empty()
-        && !qp.quot_siblings.is_empty()
-}
-
-fn path_self_check_chal(qp: &FriChalMmcsQueryProof) -> bool {
-    !qp.first_layer.siblings.is_empty()
-        && qp.commit_paths.len() == qp.commit_siblings.len()
-        && qp.commit_paths.len() == qp.commit_indices.len()
-        && qp
-            .commit_paths
-            .iter()
-            .zip(qp.commit_siblings.iter())
-            .all(|(p, s)| p.depth as usize == s.len() && !s.is_empty())
-}
-
 /// Host-verifies a certificate against an AggregationAir transcript + context.
 ///
-/// M3d: when the cert covers all FRI queries, verification binds fold/Mmcs publics to the
-/// transcript via FS+RO, checks host OOD, and verifies Merkle/FriFold/DeepRo/FRI Mmcs
-/// STARKs **without** Plonky3 AggregationAir FRI or host `verify_agg_fri_openings`.
+/// Checks host OOD, in-circuit FriFold / DeepRo / FRI Mmcs STARKs, and FS+RO binds
+/// without Plonky3 PCS commit / LDE rebuild or host `verify_agg_fri_openings`.
 pub fn verify_agg_pcs_certificate(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -330,16 +245,6 @@ pub fn verify_agg_pcs_certificate(
     }
     if !aggregation_air_constraints_hold(&cert.natural_row, &cert.natural_row) {
         eprintln!("[AggPcsCertificate] Failed: AggregationAir constraints");
-        return false;
-    }
-    if !verify_keccak_merkle_path_proof(
-        &cert.lde_row,
-        &cert.siblings,
-        cert.lde_index as usize,
-        &cert.trace_commitment,
-        &cert.merkle_fold,
-    ) {
-        eprintln!("[AggPcsCertificate] Failed: Merkle fold STARK");
         return false;
     }
     for (i, fold) in cert.fri_fold_ys.iter().enumerate() {
@@ -410,7 +315,6 @@ pub fn verify_agg_pcs_certificate(
     if covers_all_devnet_fri_queries() {
         verify_agg_pcs_certificate_fri_bound(context, agg_transcript, cert)
     } else {
-        // Partial query coverage: fall back to full rebuild.
         match build_agg_pcs_certificate(context, agg_transcript) {
             Ok(rebuilt) => {
                 if rebuilt.trace_commitment != cert.trace_commitment
@@ -438,7 +342,7 @@ pub fn verify_agg_pcs_certificate(
     }
 }
 
-/// Binds cert to AggregationAir proof via PCS rebuild + OOD + FS/RO fold/Mmcs publics.
+/// Binds cert to AggregationAir proof via OOD + FS/RO fold/Mmcs publics (no PCS rebuild).
 fn verify_agg_pcs_certificate_fri_bound(
     context: &AggregationContext<'_>,
     agg_transcript: &[u8],
@@ -464,25 +368,7 @@ fn verify_agg_pcs_certificate_fri_bound(
         return false;
     }
 
-    let matrix = pad_air_matrix_for_uni_stark(build_agg_matrix(
-        context.left_child_hash,
-        context.right_child_hash,
-    ));
-    let config = devnet_circle_config();
-    let pcs = config.pcs();
-    let domain = <crate::plonky3_stark::config::Pcs as Pcs<
-        crate::plonky3_stark::config::Challenge,
-        crate::plonky3_stark::config::Challenger,
-    >>::natural_domain_for_degree(pcs, matrix.height());
-    let (comm, prover_data) = <crate::plonky3_stark::config::Pcs as Pcs<
-        crate::plonky3_stark::config::Challenge,
-        crate::plonky3_stark::config::Challenger,
-    >>::commit(pcs, vec![(domain, matrix)]);
-    if comm != proof.commitments.trace {
-        eprintln!("[AggPcsCertificate] Failed: rebuilt PCS commitment mismatch");
-        return false;
-    }
-    let trace_commitment = match commitment_root(&comm) {
+    let trace_commitment = match commitment_root(&proof.commitments.trace) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[AggPcsCertificate] Failed: {e}");
@@ -494,19 +380,8 @@ fn verify_agg_pcs_certificate_fri_bound(
         return false;
     }
 
-    let lde_index = cert.lde_index as usize;
-    let batch = pcs.mmcs.open_batch(lde_index, &prover_data);
-    if batch.opened_values.first() != Some(&cert.lde_row) || batch.opening_proof != cert.siblings {
-        eprintln!("[AggPcsCertificate] Failed: LDE opening mismatch");
-        return false;
-    }
-    if !verify_agg_merkle_path(
-        &cert.lde_row,
-        &cert.siblings,
-        lde_index,
-        &cert.trace_commitment,
-    ) {
-        eprintln!("[AggPcsCertificate] Failed: Merkle path");
+    if cert.merkle_fold != cert.fri_val_mmcs[0].trace_path {
+        eprintln!("[AggPcsCertificate] Failed: merkle_fold mismatch");
         return false;
     }
 
@@ -611,5 +486,7 @@ mod tests {
         let cert = build_agg_pcs_certificate(&ctx, &proof).expect("cert");
         assert!(verify_agg_pcs_certificate(&ctx, &proof, &cert));
         assert_eq!(cert.natural_row[64], Mersenne31::ONE);
+        assert!(cert.lde_row.is_empty());
+        assert_eq!(cert.merkle_fold, cert.fri_val_mmcs[0].trace_path);
     }
 }
