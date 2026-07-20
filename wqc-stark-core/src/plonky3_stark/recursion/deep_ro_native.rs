@@ -113,6 +113,120 @@ pub fn deep_ro_w3_witness(
     }
 }
 
+/// One deep reduction's intermediates (shared by W=3 and W=66 paths).
+#[derive(Debug, Clone)]
+pub struct DeepPartialWitness {
+    pub re: Challenge,
+    pub im: Challenge,
+    pub numer: Challenge,
+    pub denom: Challenge,
+    pub linear: Challenge,
+    pub out_pre: Challenge,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deep_partial(
+    alpha: Challenge,
+    sx: Val,
+    sy: Val,
+    at_x: Challenge,
+    at_y: Challenge,
+    alpha_pow_w: Challenge,
+    px: &[Val],
+    pz: &[Challenge],
+) -> DeepPartialWitness {
+    let (re, im) = v_p(sx, sy, at_x, at_y);
+    let numer = re - alpha_pow_w * im;
+    let denom = re.square() + im.square();
+    let mut linear = Challenge::ZERO;
+    let mut a = Challenge::ONE;
+    for (&p_x, &p_z) in px.iter().zip(pz.iter()) {
+        linear += a * (Challenge::from(p_x) - p_z);
+        a *= alpha;
+    }
+    let out_pre = (numer / denom) * linear;
+    DeepPartialWitness {
+        re,
+        im,
+        numer,
+        denom,
+        linear,
+        out_pre,
+    }
+}
+
+/// Trace-batch DEEP + λ witness (W=66 @ ζ and ζ_next).
+#[derive(Debug, Clone)]
+pub struct DeepRoTraceWitness {
+    pub at_x: Challenge,
+    pub at_y: Challenge,
+    pub atn_x: Challenge,
+    pub atn_y: Challenge,
+    pub alpha2: Challenge,
+    pub alpha4: Challenge,
+    pub alpha8: Challenge,
+    pub alpha16: Challenge,
+    pub alpha32: Challenge,
+    pub alpha64: Challenge,
+    pub alpha66: Challenge,
+    pub alpha132: Challenge,
+    pub deep0: DeepPartialWitness,
+    pub deep1: DeepPartialWitness,
+    pub combined: Challenge,
+    pub v_n: Val,
+    pub out: Challenge,
+}
+
+/// Builds intermediates for DeepRoTraceAir (AggregationAir width 66).
+#[allow(clippy::too_many_arguments)]
+pub fn deep_ro_trace_witness(
+    alpha: Challenge,
+    sx: Val,
+    sy: Val,
+    zeta: Challenge,
+    zeta_next: Challenge,
+    px: &[Val; 66],
+    pz_local: &[Challenge; 66],
+    pz_next: &[Challenge; 66],
+    lambda: Challenge,
+    log_n: usize,
+) -> DeepRoTraceWitness {
+    let (at_x, at_y) = ef_from_projective_line(zeta);
+    let (atn_x, atn_y) = ef_from_projective_line(zeta_next);
+    let alpha2 = alpha.square();
+    let alpha4 = alpha2.square();
+    let alpha8 = alpha4.square();
+    let alpha16 = alpha8.square();
+    let alpha32 = alpha16.square();
+    let alpha64 = alpha32.square();
+    let alpha66 = alpha64 * alpha2;
+    let alpha132 = alpha66.square();
+    let deep0 = deep_partial(alpha, sx, sy, at_x, at_y, alpha66, px, pz_local);
+    let deep1 = deep_partial(alpha, sx, sy, atn_x, atn_y, alpha66, px, pz_next);
+    let combined = deep0.out_pre + alpha132 * deep1.out_pre;
+    let v_n = point_v_n(sx, log_n);
+    let out = combined - lambda * Challenge::from(v_n);
+    DeepRoTraceWitness {
+        at_x,
+        at_y,
+        atn_x,
+        atn_y,
+        alpha2,
+        alpha4,
+        alpha8,
+        alpha16,
+        alpha32,
+        alpha64,
+        alpha66,
+        alpha132,
+        deep0,
+        deep1,
+        combined,
+        v_n,
+        out,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +262,47 @@ mod tests {
             lambda_correct(ro, lambda, sx, log_n)
         };
         assert_eq!(w.out, expect);
+    }
+
+    #[test]
+    fn deep_ro_trace_matches_fri_ro_formula() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(99);
+        let alpha = Challenge::new([
+            Val::from_u32(rng.gen()),
+            Val::from_u32(rng.gen()),
+            Val::from_u32(rng.gen()),
+        ]);
+        let zeta = Challenge::new([
+            Val::from_u32(rng.gen()),
+            Val::from_u32(rng.gen()),
+            Val::from_u32(rng.gen()),
+        ]);
+        let zeta_next = Challenge::new([
+            Val::from_u32(rng.gen()),
+            Val::from_u32(rng.gen()),
+            Val::from_u32(rng.gen()),
+        ]);
+        let sx = Val::from_u32(3);
+        let sy = Val::from_u32(5);
+        let mut px = [Val::ZERO; 66];
+        let mut pz_local = [Challenge::ZERO; 66];
+        let mut pz_next = [Challenge::ZERO; 66];
+        for i in 0..66 {
+            px[i] = Val::from_u32(rng.gen::<u32>() % 100);
+            pz_local[i] = Challenge::from(Val::from_u32(rng.gen::<u32>() % 100));
+            pz_next[i] = Challenge::from(Val::from_u32(rng.gen::<u32>() % 100));
+        }
+        let lambda = Challenge::new([Val::from_u32(1), Val::from_u32(2), Val::from_u32(3)]);
+        let log_n = 3usize;
+        let w = deep_ro_trace_witness(
+            alpha, sx, sy, zeta, zeta_next, &px, &pz_local, &pz_next, lambda, log_n,
+        );
+        let ro0 = deep_quotient_reduce_row(alpha, sx, sy, zeta, &px, &pz_local);
+        let ro1 = deep_quotient_reduce_row(alpha, sx, sy, zeta_next, &px, &pz_next);
+        let alpha132 = alpha.exp_u64(66).square();
+        let expect = ro0 + alpha132 * ro1 - lambda * Challenge::from(point_v_n(sx, log_n));
+        assert_eq!(w.out, expect);
+        assert_eq!(w.deep0.out_pre, ro0);
+        assert_eq!(w.deep1.out_pre, ro1);
     }
 }

@@ -1,11 +1,16 @@
-//! Bind DeepRoAir (quotient W=3, query 0) to AggregationAir FriFoldY (R3-M3c1).
+//! Bind DeepRo / DeepRoTrace (query 0) to AggregationAir FriFoldY (R3-M3c1 / M3c2).
 
 use p3_commit::{Pcs, PolynomialSpace};
+use p3_field::PrimeCharacteristicRing;
 use p3_uni_stark::{Proof, StarkGenericConfig};
 
+use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use crate::plonky3_stark::config::{devnet_circle_config, Challenge, WqcStarkConfig};
 
 use super::deep_ro_air::{generate_deep_ro_proof, verify_deep_ro_proof, DeepRoStepProof};
+use super::deep_ro_trace_air::{
+    generate_deep_ro_trace_proof, verify_deep_ro_trace_proof, DeepRoTraceStepProof,
+};
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_native::{
     cfft_permute_index, challenge_to_limbs, limbs_to_challenge, standard_nth_point,
@@ -15,6 +20,9 @@ use super::fri_ro::{decode_input_proof, reconstruct_agg_query_ro};
 
 /// M3c1: at most one DeepRo step (query-0 quotient).
 pub const AGG_DEEP_RO_MAX: usize = 1;
+
+/// M3c2: at most one DeepRoTrace step (query-0 trace batch).
+pub const AGG_DEEP_RO_TRACE_MAX: usize = 1;
 
 fn log2_size(n: usize) -> usize {
     let mut log = 0usize;
@@ -202,6 +210,217 @@ pub fn bind_deep_ro_to_fold_y(
     Ok(())
 }
 
+/// Prove DeepRoTrace for AggregationAir FRI query 0 trace batch (ζ + ζ_next).
+pub fn deep_ro_trace_query0_from_agg_proof(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<DeepRoTraceStepProof, String> {
+    let chal = replay_agg_fri_challenges(proof)?;
+    let view = decode_pcs_view(proof)?;
+    let qp = view
+        .fri_proof
+        .query_proofs
+        .first()
+        .ok_or_else(|| "missing FRI query 0".to_string())?;
+    let input = decode_input_proof(&qp.input_proof)?;
+    if input.input_openings.len() != 2 {
+        return Err("expected 2 input openings".into());
+    }
+
+    let config = devnet_circle_config();
+    let pcs = config.pcs();
+    let degree = 1usize << proof.degree_bits;
+    let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+        Challenge,
+        crate::plonky3_stark::config::Challenger,
+    >>::natural_domain_for_degree(pcs, degree);
+    let zeta = chal.zeta;
+    let zeta_next = init_trace_domain
+        .next_point(zeta)
+        .ok_or_else(|| "trace domain next_point unavailable".to_string())?;
+    let log_blowup = chal.log_blowup;
+    let trace_log_height = log2_size(init_trace_domain.size()) + log_blowup;
+    let quotient_domain = init_trace_domain.create_disjoint_domain(degree);
+    let quot_log_height = log2_size(quotient_domain.size()) + log_blowup;
+    let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+    let query_index = chal.query_indices[0];
+    let bits_reduced = log_global_max_height - trace_log_height;
+    let orig_idx = cfft_permute_index(query_index >> bits_reduced, trace_log_height);
+    let p = standard_nth_point(trace_log_height, orig_idx);
+
+    let opened = input.input_openings[0]
+        .opened_values
+        .first()
+        .ok_or_else(|| "empty trace opening".to_string())?;
+    if opened.len() != AGG_WIDTH {
+        return Err(format!(
+            "trace opening width {}, want {AGG_WIDTH}",
+            opened.len()
+        ));
+    }
+    let mut px_arr = [opened[0]; AGG_WIDTH];
+    px_arr.copy_from_slice(opened.as_slice());
+
+    let trace_local = &proof.opened_values.trace_local;
+    let trace_next = proof
+        .opened_values
+        .trace_next
+        .as_ref()
+        .ok_or_else(|| "missing trace_next".to_string())?;
+    if trace_local.len() != AGG_WIDTH || trace_next.len() != AGG_WIDTH {
+        return Err("trace OOD width mismatch".into());
+    }
+    let mut pz_local = [Challenge::ZERO; AGG_WIDTH];
+    let mut pz_next = [Challenge::ZERO; AGG_WIDTH];
+    pz_local.copy_from_slice(trace_local.as_slice());
+    pz_next.copy_from_slice(trace_next.as_slice());
+
+    let mut heights = [trace_log_height, quot_log_height];
+    heights.sort();
+    let lambda_idx = heights
+        .iter()
+        .position(|&h| h == trace_log_height)
+        .ok_or_else(|| "trace height missing".to_string())?;
+    let lambda = *view
+        .lambdas
+        .get(lambda_idx)
+        .ok_or_else(|| "missing lambda for trace height".to_string())?;
+
+    let log_n = trace_log_height - log_blowup;
+    generate_deep_ro_trace_proof(
+        p.x,
+        p.y,
+        chal.batch_alpha,
+        &px_arr,
+        &pz_local,
+        &pz_next,
+        lambda,
+        log_n,
+        zeta,
+        zeta_next,
+    )
+}
+
+/// Bind DeepRoTrace out to the trace-height FriFoldY queried leaf (query 0).
+pub fn bind_deep_ro_trace_to_fold_y(
+    proof: &Proof<WqcStarkConfig>,
+    deep_ro: &DeepRoTraceStepProof,
+    fold_ys: &[FriFoldStepProof],
+) -> Result<(), String> {
+    if !verify_deep_ro_trace_proof(deep_ro) {
+        return Err("DeepRoTrace STARK verify failed".into());
+    }
+    let chal = replay_agg_fri_challenges(proof)?;
+    let view = decode_pcs_view(proof)?;
+    let (_ros, y_wits) = reconstruct_agg_query_ro(proof, &chal, &view, 0)?;
+
+    let config = devnet_circle_config();
+    let pcs = config.pcs();
+    let degree = 1usize << proof.degree_bits;
+    let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+        Challenge,
+        crate::plonky3_stark::config::Challenger,
+    >>::natural_domain_for_degree(pcs, degree);
+    let zeta_next = init_trace_domain
+        .next_point(chal.zeta)
+        .ok_or_else(|| "trace domain next_point unavailable".to_string())?;
+    let log_blowup = chal.log_blowup;
+    let trace_log_height = log2_size(init_trace_domain.size()) + log_blowup;
+    let log_folded = trace_log_height - 1;
+    let quotient_domain = init_trace_domain.create_disjoint_domain(degree);
+    let quot_log_height = log2_size(quotient_domain.size()) + log_blowup;
+    let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+    let query_index = chal.query_indices[0];
+    let bits_reduced = log_global_max_height - trace_log_height;
+    let queried_slot = (query_index >> bits_reduced) & 1;
+
+    if deep_ro.alpha_limbs != challenge_to_limbs(chal.batch_alpha) {
+        return Err("DeepRoTrace alpha != batch_alpha".into());
+    }
+    if deep_ro.zeta_limbs != challenge_to_limbs(chal.zeta) {
+        return Err("DeepRoTrace zeta mismatch".into());
+    }
+    if deep_ro.zeta_next_limbs != challenge_to_limbs(zeta_next) {
+        return Err("DeepRoTrace zeta_next mismatch".into());
+    }
+    if deep_ro.log_n as usize != trace_log_height - log_blowup {
+        return Err("DeepRoTrace log_n mismatch".into());
+    }
+
+    let qp = &view.fri_proof.query_proofs[0];
+    let input = decode_input_proof(&qp.input_proof)?;
+    let opened = input.input_openings[0]
+        .opened_values
+        .first()
+        .ok_or_else(|| "empty trace opening".to_string())?;
+    if opened.len() != AGG_WIDTH || deep_ro.px.as_slice() != opened.as_slice() {
+        return Err("DeepRoTrace px != trace opening".into());
+    }
+    let trace_local = &proof.opened_values.trace_local;
+    let trace_next = proof
+        .opened_values
+        .trace_next
+        .as_ref()
+        .ok_or_else(|| "missing trace_next".to_string())?;
+    if trace_local.len() != AGG_WIDTH || trace_next.len() != AGG_WIDTH {
+        return Err("trace OOD width mismatch".into());
+    }
+    for i in 0..AGG_WIDTH {
+        if deep_ro.pz_local_limbs[i] != challenge_to_limbs(trace_local[i]) {
+            return Err(format!("DeepRoTrace pz_local[{i}] mismatch"));
+        }
+        if deep_ro.pz_next_limbs[i] != challenge_to_limbs(trace_next[i]) {
+            return Err(format!("DeepRoTrace pz_next[{i}] mismatch"));
+        }
+    }
+
+    let orig_idx = cfft_permute_index(query_index >> bits_reduced, trace_log_height);
+    let p = standard_nth_point(trace_log_height, orig_idx);
+    if deep_ro.sx != p.x || deep_ro.sy != p.y {
+        return Err("DeepRoTrace circle point mismatch".into());
+    }
+
+    let mut heights = [trace_log_height, quot_log_height];
+    heights.sort();
+    let lambda_idx = heights
+        .iter()
+        .position(|&h| h == trace_log_height)
+        .ok_or_else(|| "trace height missing".to_string())?;
+    let lambda = view.lambdas[lambda_idx];
+    if deep_ro.lambda_limbs != challenge_to_limbs(lambda) {
+        return Err("DeepRoTrace lambda mismatch".into());
+    }
+
+    let y_wit = y_wits
+        .iter()
+        .find(|w| w.log_folded_height == log_folded)
+        .ok_or_else(|| "missing fold_y witness for trace height".to_string())?;
+    let fold = fold_ys
+        .iter()
+        .take(y_wits.len())
+        .find(|f| f.log_folded_height as usize == log_folded && f.index as usize == y_wit.index)
+        .ok_or_else(|| "missing FriFoldY for trace height on query 0".to_string())?;
+
+    let out = limbs_to_challenge(deep_ro.out_limbs);
+    let leaf = if queried_slot == 0 {
+        limbs_to_challenge(fold.v0_limbs)
+    } else {
+        limbs_to_challenge(fold.v1_limbs)
+    };
+    if out != leaf {
+        return Err("DeepRoTrace out != FriFoldY queried leaf".into());
+    }
+    if out
+        != (if queried_slot == 0 {
+            y_wit.v0
+        } else {
+            y_wit.v1
+        })
+    {
+        return Err("DeepRoTrace out != reconstructed fold_y leaf".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +446,23 @@ mod tests {
         assert!(verify_deep_ro_proof(&deep));
         let bundle = fri_fold_bundle_from_agg_proof(&proof).expect("bundle");
         bind_deep_ro_to_fold_y(&proof, &deep, &bundle.fold_ys).expect("bind");
+    }
+
+    #[test]
+    fn deep_ro_trace_query0_binds_fold_y() {
+        let ctx = AggregationContext {
+            parent_task_id: "parent",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [41u8; CHILD_HASH_LEN],
+            right_child_hash: [43u8; CHILD_HASH_LEN],
+        };
+        let transcript = generate_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let deep = deep_ro_trace_query0_from_agg_proof(&proof).expect("deep");
+        assert!(verify_deep_ro_trace_proof(&deep));
+        let bundle = fri_fold_bundle_from_agg_proof(&proof).expect("bundle");
+        bind_deep_ro_trace_to_fold_y(&proof, &deep, &bundle.fold_ys).expect("bind");
     }
 }

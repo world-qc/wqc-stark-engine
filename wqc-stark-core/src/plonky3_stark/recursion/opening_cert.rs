@@ -1,8 +1,9 @@
-//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b4 / M3c1).
+//! AggregationAir PCS opening certificates (R3-M2 / M2.5 / M2.5b / M3b4 / M3c1 / M3c2).
 //!
 //! Rebuild Circle PCS commitment, open an LDE row, host-check LDE `Mmcs::verify_batch`,
 //! attach Merkle/FriFold STARKs for all FRI queries, plus query-0 quotient [`DeepRoStepProof`]
-//! (DEEP+λ bound into FriFoldY). Build/verify use host OOD + FRI Mmcs (no Plonky3 FRI).
+//! and trace [`DeepRoTraceStepProof`] (DEEP+λ bound into FriFoldY). Build/verify use host
+//! OOD + FRI Mmcs (no Plonky3 FRI).
 
 use p3_commit::{BatchOpeningRef, Mmcs, Pcs};
 use p3_field::PrimeCharacteristicRing;
@@ -20,8 +21,10 @@ use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 use super::agg_constraints::aggregation_air_constraints_hold;
 use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
 use super::deep_ro_bind::{
-    bind_deep_ro_to_fold_y, deep_ro_quot_query0_from_agg_proof, AGG_DEEP_RO_MAX,
+    bind_deep_ro_to_fold_y, bind_deep_ro_trace_to_fold_y, deep_ro_quot_query0_from_agg_proof,
+    deep_ro_trace_query0_from_agg_proof, AGG_DEEP_RO_MAX, AGG_DEEP_RO_TRACE_MAX,
 };
+use super::deep_ro_trace_air::{verify_deep_ro_trace_proof, DeepRoTraceStepProof};
 use super::fri_fold_air::{verify_fri_fold_proof, verify_fri_fold_y_proof, FriFoldStepProof};
 use super::fri_fold_bind::{
     bind_fri_fold_bundle_to_proof, covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof,
@@ -60,6 +63,8 @@ pub struct AggPcsCertificate {
     pub fri_folds: Vec<FriFoldStepProof>,
     /// R3-M3c1: DeepRo (DEEP+λ) for query-0 quotient batch; bound into FriFoldY.
     pub deep_ros: Vec<DeepRoStepProof>,
+    /// R3-M3c2: DeepRoTrace (DEEP+λ) for query-0 trace batch; bound into FriFoldY.
+    pub deep_ro_traces: Vec<DeepRoTraceStepProof>,
 }
 
 fn commitment_root(com: &<ValMmcs as Mmcs<Mersenne31>>::Commitment) -> Result<[u8; 32], String> {
@@ -220,6 +225,15 @@ pub fn build_agg_pcs_certificate(
         .map_err(|e| format!("R3-M3c1 DeepRo bind failed: {e}"))?;
     let deep_ros = vec![deep_ro];
 
+    let deep_ro_trace = deep_ro_trace_query0_from_agg_proof(&proof)
+        .map_err(|e| format!("R3-M3c2 DeepRoTrace prove failed: {e}"))?;
+    if !verify_deep_ro_trace_proof(&deep_ro_trace) {
+        return Err("R3-M3c2 DeepRoTrace self-check failed".into());
+    }
+    bind_deep_ro_trace_to_fold_y(&proof, &deep_ro_trace, &fri_bundle.fold_ys)
+        .map_err(|e| format!("R3-M3c2 DeepRoTrace bind failed: {e}"))?;
+    let deep_ro_traces = vec![deep_ro_trace];
+
     Ok(AggPcsCertificate {
         stmt_left_hash: context.left_child_hash,
         stmt_right_hash: context.right_child_hash,
@@ -232,6 +246,7 @@ pub fn build_agg_pcs_certificate(
         fri_fold_ys: fri_bundle.fold_ys,
         fri_folds: fri_bundle.fold_xs,
         deep_ros,
+        deep_ro_traces,
     })
 }
 
@@ -295,6 +310,19 @@ pub fn verify_agg_pcs_certificate(
             return false;
         }
     }
+    if cert.deep_ro_traces.len() != AGG_DEEP_RO_TRACE_MAX {
+        eprintln!(
+            "[AggPcsCertificate] Failed: deep_ro_traces len {}, want {AGG_DEEP_RO_TRACE_MAX}",
+            cert.deep_ro_traces.len()
+        );
+        return false;
+    }
+    for (i, deep) in cert.deep_ro_traces.iter().enumerate() {
+        if !verify_deep_ro_trace_proof(deep) {
+            eprintln!("[AggPcsCertificate] Failed: DeepRoTrace STARK at {i}");
+            return false;
+        }
+    }
 
     if covers_all_devnet_fri_queries() {
         verify_agg_pcs_certificate_fri_bound(context, agg_transcript, cert)
@@ -310,6 +338,7 @@ pub fn verify_agg_pcs_certificate(
                     || rebuilt.fri_fold_ys != cert.fri_fold_ys
                     || rebuilt.fri_folds != cert.fri_folds
                     || rebuilt.deep_ros != cert.deep_ros
+                    || rebuilt.deep_ro_traces != cert.deep_ro_traces
                 {
                     eprintln!("[AggPcsCertificate] Failed: rebuilt certificate mismatch");
                     return false;
@@ -411,6 +440,15 @@ fn verify_agg_pcs_certificate_fri_bound(
         }
     } else {
         eprintln!("[AggPcsCertificate] Failed: missing DeepRo");
+        return false;
+    }
+    if let Some(deep) = cert.deep_ro_traces.first() {
+        if let Err(e) = bind_deep_ro_trace_to_fold_y(&proof, deep, &cert.fri_fold_ys) {
+            eprintln!("[AggPcsCertificate] Failed: DeepRoTrace bind: {e}");
+            return false;
+        }
+    } else {
+        eprintln!("[AggPcsCertificate] Failed: missing DeepRoTrace");
         return false;
     }
     true

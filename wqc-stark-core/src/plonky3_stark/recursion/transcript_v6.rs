@@ -1,5 +1,5 @@
-//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2): M1 fields + AggregationAir
-//! PCS certs (Merkle fold + Keccak sponges + FRI fold_y + fold_x).
+//! V6 recursive aggregation transcript (R3-M2 / M2.5 / M3b2 / M3c2): M1 fields + AggregationAir
+//! PCS certs (Merkle fold + Keccak sponges + FRI fold_y + fold_x + DeepRo + DeepRoTrace).
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mersenne_31::Mersenne31;
@@ -10,7 +10,8 @@ use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use super::air::{REC_KIND_AGG, REC_KIND_LEAF};
 use super::context::RecursiveAggregationContext;
 use super::deep_ro_air::DeepRoStepProof;
-use super::deep_ro_bind::AGG_DEEP_RO_MAX;
+use super::deep_ro_bind::{AGG_DEEP_RO_MAX, AGG_DEEP_RO_TRACE_MAX};
+use super::deep_ro_trace_air::DeepRoTraceStepProof;
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES};
 use super::keccak256_air::Keccak256StarkProof;
@@ -302,6 +303,112 @@ fn decode_deep_ros(
     Some((deeps, cursor))
 }
 
+fn encode_deep_ro_trace(out: &mut Vec<u8>, deep: &DeepRoTraceStepProof) {
+    out.extend_from_slice(&deep.sx.as_canonical_u32().to_le_bytes());
+    out.extend_from_slice(&deep.sy.as_canonical_u32().to_le_bytes());
+    write_m31_row(out, &deep.alpha_limbs);
+    write_m31_row(out, &deep.px);
+    for pz in &deep.pz_local_limbs {
+        write_m31_row(out, pz);
+    }
+    for pz in &deep.pz_next_limbs {
+        write_m31_row(out, pz);
+    }
+    write_m31_row(out, &deep.lambda_limbs);
+    out.extend_from_slice(&deep.v_n.as_canonical_u32().to_le_bytes());
+    write_m31_row(out, &deep.out_limbs);
+    out.extend_from_slice(&deep.log_n.to_le_bytes());
+    write_m31_row(out, &deep.zeta_limbs);
+    write_m31_row(out, &deep.zeta_next_limbs);
+    out.extend_from_slice(&(deep.deep_stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&deep.deep_stark);
+}
+
+fn decode_deep_ro_trace(proof: &[u8], offset: usize) -> Option<(DeepRoTraceStepProof, usize)> {
+    let (sx_v, cursor) = read_m31_row(proof, offset, 1)?;
+    let (sy_v, cursor) = read_m31_row(proof, cursor, 1)?;
+    let (alpha_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (px_vec, cursor) = read_m31_row(proof, cursor, AGG_WIDTH)?;
+    let mut pz_local_limbs = [[Mersenne31::ZERO; 3]; AGG_WIDTH];
+    let mut cursor = cursor;
+    for pz in &mut pz_local_limbs {
+        let (pz_vec, next) = read_m31_row(proof, cursor, 3)?;
+        pz.copy_from_slice(&pz_vec);
+        cursor = next;
+    }
+    let mut pz_next_limbs = [[Mersenne31::ZERO; 3]; AGG_WIDTH];
+    for pz in &mut pz_next_limbs {
+        let (pz_vec, next) = read_m31_row(proof, cursor, 3)?;
+        pz.copy_from_slice(&pz_vec);
+        cursor = next;
+    }
+    let (lambda_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (v_n_v, cursor) = read_m31_row(proof, cursor, 1)?;
+    let (out_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (log_n, cursor) = read_u32_le(proof, cursor)?;
+    let (zeta_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (zeta_next_vec, cursor) = read_m31_row(proof, cursor, 3)?;
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let deep_stark = proof.get(cursor..end)?.to_vec();
+    let mut alpha_limbs = [Mersenne31::ZERO; 3];
+    let mut px = [Mersenne31::ZERO; AGG_WIDTH];
+    let mut lambda_limbs = [Mersenne31::ZERO; 3];
+    let mut out_limbs = [Mersenne31::ZERO; 3];
+    let mut zeta_limbs = [Mersenne31::ZERO; 3];
+    let mut zeta_next_limbs = [Mersenne31::ZERO; 3];
+    alpha_limbs.copy_from_slice(&alpha_vec);
+    px.copy_from_slice(&px_vec);
+    lambda_limbs.copy_from_slice(&lambda_vec);
+    out_limbs.copy_from_slice(&out_vec);
+    zeta_limbs.copy_from_slice(&zeta_vec);
+    zeta_next_limbs.copy_from_slice(&zeta_next_vec);
+    Some((
+        DeepRoTraceStepProof {
+            sx: sx_v[0],
+            sy: sy_v[0],
+            alpha_limbs,
+            px,
+            pz_local_limbs,
+            pz_next_limbs,
+            lambda_limbs,
+            v_n: v_n_v[0],
+            out_limbs,
+            log_n,
+            zeta_limbs,
+            zeta_next_limbs,
+            deep_stark,
+        },
+        end,
+    ))
+}
+
+fn encode_deep_ro_traces(out: &mut Vec<u8>, deeps: &[DeepRoTraceStepProof]) {
+    out.extend_from_slice(&(deeps.len() as u32).to_le_bytes());
+    for d in deeps {
+        encode_deep_ro_trace(out, d);
+    }
+}
+
+fn decode_deep_ro_traces(
+    proof: &[u8],
+    offset: usize,
+    max: usize,
+) -> Option<(Vec<DeepRoTraceStepProof>, usize)> {
+    let (len, cursor) = read_u32_le(proof, offset)?;
+    if len as usize == 0 || len as usize > max {
+        return None;
+    }
+    let mut deeps = Vec::with_capacity(len as usize);
+    let mut cursor = cursor;
+    for _ in 0..len {
+        let (d, next) = decode_deep_ro_trace(proof, cursor)?;
+        deeps.push(d);
+        cursor = next;
+    }
+    Some((deeps, cursor))
+}
+
 fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
     match cert {
         None => out.push(0),
@@ -322,6 +429,7 @@ fn encode_cert(out: &mut Vec<u8>, cert: &Option<AggPcsCertificate>) {
             encode_fri_folds(out, &c.fri_fold_ys);
             encode_fri_folds(out, &c.fri_folds);
             encode_deep_ros(out, &c.deep_ros);
+            encode_deep_ro_traces(out, &c.deep_ro_traces);
         }
     }
 }
@@ -363,6 +471,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
     let (fri_folds, cursor) =
         decode_fri_folds(proof, cursor, AGG_FRI_MAX_ROUNDS * AGG_FRI_PROVEN_QUERIES)?;
     let (deep_ros, cursor) = decode_deep_ros(proof, cursor, AGG_DEEP_RO_MAX)?;
+    let (deep_ro_traces, cursor) = decode_deep_ro_traces(proof, cursor, AGG_DEEP_RO_TRACE_MAX)?;
     Some((
         Some(AggPcsCertificate {
             stmt_left_hash,
@@ -376,6 +485,7 @@ fn decode_cert(proof: &[u8], offset: usize) -> Option<(Option<AggPcsCertificate>
             fri_fold_ys,
             fri_folds,
             deep_ros,
+            deep_ro_traces,
         }),
         cursor,
     ))

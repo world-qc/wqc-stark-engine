@@ -1,4 +1,4 @@
-//! R3 recursive aggregation (M1–M3c1).
+//! R3 recursive aggregation (M1–M3c2).
 //!
 //! See `doc/R3_RECURSION.md`.
 
@@ -10,6 +10,7 @@ mod context;
 mod deep_ro_air;
 mod deep_ro_bind;
 mod deep_ro_native;
+mod deep_ro_trace_air;
 mod ef_limbs;
 mod fri_fold_air;
 mod fri_fold_bind;
@@ -38,7 +39,11 @@ pub use child_binding::{child_stark_binding, ChildStarkBinding, STARK_DIGEST_LEN
 pub use context::RecursiveAggregationContext;
 pub use deep_ro_air::{generate_deep_ro_proof, verify_deep_ro_proof, DeepRoAir, DeepRoStepProof};
 pub use deep_ro_bind::{
-    bind_deep_ro_to_fold_y, deep_ro_quot_query0_from_agg_proof, AGG_DEEP_RO_MAX,
+    bind_deep_ro_to_fold_y, bind_deep_ro_trace_to_fold_y, deep_ro_quot_query0_from_agg_proof,
+    deep_ro_trace_query0_from_agg_proof, AGG_DEEP_RO_MAX, AGG_DEEP_RO_TRACE_MAX,
+};
+pub use deep_ro_trace_air::{
+    generate_deep_ro_trace_proof, verify_deep_ro_trace_proof, DeepRoTraceAir, DeepRoTraceStepProof,
 };
 pub use fri_fold_air::{
     generate_fri_fold_proof, generate_fri_fold_y_proof, verify_fri_fold_proof,
