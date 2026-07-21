@@ -505,6 +505,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn unitary_trajectory_compose_roundtrip() {
         let (ctx, composed) = if_compose_fixture();
         assert!(is_unitary_trajectory_leaf_compose(&composed));

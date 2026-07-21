@@ -634,6 +634,7 @@ mod tests {
     use crate::transcript::StarkContext;
 
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn unitary_leaf_pcs_certificate_roundtrip() {
         let ctx = StarkContext {
             circuit_id: "c-leaf",

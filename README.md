@@ -85,6 +85,7 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
 
 ## Roadmap
 
+- Reduce RecAgg V6 leaf PCS proof size / memory footprint (current all-query Plonky3 leaf PCS can push compose outputs into the GiB range because ValMmcs / ChallengeMmcs Keccak STARKs dominate)
 - Prove-time witness oracles in-circuit (verify-time OOD is done; proving still extracts OOD / DeepRo / FriFold witnesses via native Plonky3)
 - Multi-chunk quotient leaf DeepRo STARKs (deferred today)
 - Full-stack multislice RecAgg V6 compose on docs/devnet (orch CGO unit E2E: `TestRecAggV6ComposeE2E`)
