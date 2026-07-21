@@ -20,6 +20,7 @@ mod fri_fs_replay;
 mod fri_mmcs;
 mod fri_mmcs_bind;
 mod fri_mmcs_path;
+mod fri_mmcs_path_m4a;
 mod fri_ood;
 mod fri_ro;
 mod keccak256_air;
@@ -83,6 +84,10 @@ pub use fri_mmcs_bind::{
 pub use fri_mmcs_path::{
     generate_fri_mmcs_path_proof, verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof,
     FRI_MMCS_MAX_DEPTH,
+};
+pub use fri_mmcs_path_m4a::{
+    generate_fri_mmcs_batched_path_proof, verify_fri_mmcs_batched_path_proof,
+    FriMmcsBatchedPathProof, MmcsBatchedPathAir,
 };
 pub use fri_ood::{verify_agg_ood, verify_leaf_ood, verify_ood_for_air};
 pub use keccak256_air::{
