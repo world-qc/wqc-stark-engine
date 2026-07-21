@@ -275,7 +275,7 @@ fn generate_chal_batch_path(
     })
 }
 
-fn verify_chal_batch_path_replay(
+pub(crate) fn verify_chal_batch_path_replay(
     opened_vals: &[Vec<Mersenne31>],
     dimensions: &[Dimensions],
     mut index: usize,

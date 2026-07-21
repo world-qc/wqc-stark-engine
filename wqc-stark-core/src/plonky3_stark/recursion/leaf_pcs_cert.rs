@@ -1,8 +1,10 @@
-//! Leaf uni-STARK PCS opening certificates (R3-M3e).
+//! Leaf uni-STARK PCS opening certificates (R3-M3e / M4c).
 //!
 //! Mirrors AggregationAir M3d flow on a leaf `Proof`: host OOD, FriFold, DeepRo
 //! (quot + leaf-trace), and in-circuit Val/Challenge Mmcs. Skips natural-row LDE
 //! rebuild (no prover_data); `merkle_fold` reuses query-0 ValMmcs trace path.
+//! M4c folds eligible single-matrix paths into `LeafMmcsFoldGroups` and strips
+//! nested Keccak STARKs from the wire.
 
 use p3_commit::Mmcs;
 use p3_mersenne_31::Mersenne31;
@@ -35,6 +37,9 @@ use super::fri_mmcs_bind::{
     bind_fri_mmcs_bundle_to_proof_width, fri_mmcs_bundle_from_proof, AggFriMmcsBundle,
     FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
+use super::fri_mmcs_m4c::{
+    apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
+};
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_leaf_ood_step;
@@ -56,8 +61,10 @@ pub struct LeafPcsCertificate {
     pub lde_index: u32,
     pub lde_row: Vec<Mersenne31>,
     pub siblings: Vec<[u8; 32]>,
-    /// Query-0 ValMmcs trace path (variable-depth stand-in; LDE rebuild skipped).
+    /// Query-0 ValMmcs trace path (may be STARK-stripped when `mmcs_groups.val_trace` is set).
     pub merkle_fold: FriMmcsPathProof,
+    /// M4c group folds for eligible single-matrix Val/Chal paths (`LEAF_MMCS_FOLD_V`).
+    pub mmcs_groups: LeafMmcsFoldGroups,
     pub fri_fold_ys: Vec<FriFoldStepProof>,
     pub fri_folds: Vec<FriFoldStepProof>,
     pub deep_ros: Vec<DeepRoStepProof>,
@@ -265,6 +272,12 @@ pub fn build_leaf_pcs_certificate(
     bind_fri_mmcs_bundle_to_proof_width(proof, &mmcs_bundle, trace_width)
         .map_err(|e| format!("R3-M3e FRI Mmcs bind failed: {e}"))?;
 
+    let mut mmcs_bundle = mmcs_bundle;
+    let mmcs_groups = apply_leaf_mmcs_m4c_folds(proof, trace_width, &mut mmcs_bundle)
+        .map_err(|e| format!("R3-M4c Mmcs group fold failed: {e}"))?;
+    bind_leaf_mmcs_with_groups(proof, &mmcs_bundle, &mmcs_groups, trace_width)
+        .map_err(|e| format!("R3-M4c Mmcs group bind failed: {e}"))?;
+
     let trace_commitment = commitment_root(&proof.commitments.trace)?;
     let merkle_fold = mmcs_bundle.val[0].trace_path.clone();
 
@@ -278,6 +291,7 @@ pub fn build_leaf_pcs_certificate(
         lde_row: Vec::new(),
         siblings: Vec::new(),
         merkle_fold,
+        mmcs_groups,
         fri_fold_ys: fri_bundle.fold_ys,
         fri_folds: fri_bundle.fold_xs,
         deep_ros,
@@ -418,7 +432,8 @@ pub fn verify_leaf_pcs_certificate(
         val: cert.fri_val_mmcs.clone(),
         chal: cert.fri_chal_mmcs.clone(),
     };
-    if let Err(e) = bind_fri_mmcs_bundle_to_proof_width(proof, &mmcs_bundle, trace_width) {
+    if let Err(e) = bind_leaf_mmcs_with_groups(proof, &mmcs_bundle, &cert.mmcs_groups, trace_width)
+    {
         eprintln!("[LeafPcsCertificate] Failed: FRI Mmcs bind: {e}");
         return false;
     }

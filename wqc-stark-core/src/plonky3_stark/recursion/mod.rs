@@ -20,6 +20,7 @@ mod fri_fs_replay;
 mod fri_mmcs;
 mod fri_mmcs_bind;
 mod fri_mmcs_group_m4b;
+mod fri_mmcs_m4c;
 mod fri_mmcs_path;
 mod fri_mmcs_path_m4a;
 mod fri_ood;
@@ -86,6 +87,7 @@ pub use fri_mmcs_group_m4b::{
     generate_keccak_group_fold_proof, verify_keccak_group_fold_proof, KeccakGroupFoldProof,
     MmcsGroupPathAir, MmcsPathStatement,
 };
+pub use fri_mmcs_m4c::{LeafMmcsFoldGroups, LEAF_MMCS_FOLD_V};
 pub use fri_mmcs_path::{
     generate_fri_mmcs_path_proof, verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof,
     FRI_MMCS_MAX_DEPTH,
