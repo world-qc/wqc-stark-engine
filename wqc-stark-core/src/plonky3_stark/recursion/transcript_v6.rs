@@ -590,6 +590,8 @@ fn decode_opt_group(proof: &[u8], offset: usize) -> Option<(Option<KeccakGroupFo
 fn encode_mmcs_groups(out: &mut Vec<u8>, groups: &LeafMmcsFoldGroups) {
     encode_opt_group(out, &groups.val_trace);
     encode_opt_group(out, &groups.val_quot);
+    encode_opt_group(out, &groups.val_quot_batch);
+    encode_opt_group(out, &groups.chal_first_layer);
     out.extend_from_slice(&(groups.chal_commit.len() as u32).to_le_bytes());
     for g in &groups.chal_commit {
         encode_keccak_group_fold(out, g);
@@ -599,6 +601,8 @@ fn encode_mmcs_groups(out: &mut Vec<u8>, groups: &LeafMmcsFoldGroups) {
 fn decode_mmcs_groups(proof: &[u8], offset: usize) -> Option<(LeafMmcsFoldGroups, usize)> {
     let (val_trace, cursor) = decode_opt_group(proof, offset)?;
     let (val_quot, cursor) = decode_opt_group(proof, cursor)?;
+    let (val_quot_batch, cursor) = decode_opt_group(proof, cursor)?;
+    let (chal_first_layer, cursor) = decode_opt_group(proof, cursor)?;
     let (chal_len, cursor) = read_u32_le(proof, cursor)?;
     if chal_len as usize > FRI_MMCS_MAX_DEPTH {
         return None;
@@ -614,6 +618,8 @@ fn decode_mmcs_groups(proof: &[u8], offset: usize) -> Option<(LeafMmcsFoldGroups
         LeafMmcsFoldGroups {
             val_trace,
             val_quot,
+            val_quot_batch,
+            chal_first_layer,
             chal_commit,
         },
         cursor,
@@ -1815,6 +1821,8 @@ mod tests {
         let groups = LeafMmcsFoldGroups {
             val_trace: Some(g),
             val_quot: None,
+            val_quot_batch: None,
+            chal_first_layer: None,
             chal_commit: vec![],
         };
         let mut out = Vec::new();

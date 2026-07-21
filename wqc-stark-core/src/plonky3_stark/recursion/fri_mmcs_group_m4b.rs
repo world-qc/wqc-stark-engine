@@ -1,10 +1,11 @@
 //! R3-M4b: fold many homogeneous single-matrix Merkle paths into one group STARK.
 //!
-//! Builds on M4a segments: each path is `(1 + depth)` single-perm sponges; the group
-//! concatenates `path_count` paths and proves them under one `MmcsGroupPathAir`.
+//! Builds on M4a segments: each path is `(1 + depth)` sponges; the group concatenates
+//! `path_count` paths and proves them under one `MmcsGroupPathAir`.
 //!
 //! MVP limits (same as M4a per path):
-//! - single-permutation leaf (`msg_len ≤ KECCAK_RATE`)
+//! - leaf messages with **1 or 2** Keccak permutations (`msg_len ≤ 2·KECCAK_RATE`)
+//! - compress messages stay single-perm / 64 bytes
 //! - **homogeneous** `leaf_width` and `depth` across the group
 //! - batch openings (`FriChalBatchPathProof` / multi-chunk quot) deferred
 
@@ -203,13 +204,44 @@ fn first_block_rate_byte_leaf<AB: AirBuilder>(
 where
     AB::F: PrimeCharacteristicRing,
 {
-    let is_msg = byte_i < msg_len;
-    let is_delim = byte_i == msg_len;
+    if msg_len <= KECCAK_RATE {
+        let is_msg = byte_i < msg_len;
+        let is_delim = byte_i == msg_len;
+        let is_end = byte_i == KECCAK_RATE - 1;
+        if is_delim && is_end {
+            AB::F::from_u32((KECCAK_DELIM as u32) ^ 0x80).into()
+        } else if is_msg {
+            pv[msg_base + byte_i].clone()
+        } else if is_delim {
+            AB::F::from_u32(KECCAK_DELIM as u32).into()
+        } else if is_end {
+            AB::F::from_u32(0x80).into()
+        } else {
+            AB::Expr::ZERO
+        }
+    } else {
+        pv[msg_base + byte_i].clone()
+    }
+}
+
+/// Rate-byte XOR mask absorbed between permutation 0 and 1 (2-perm leaf only).
+fn second_block_rate_byte<AB: AirBuilder>(
+    pv: &[AB::Expr],
+    msg_base: usize,
+    msg_len: usize,
+    byte_i: usize,
+) -> AB::Expr
+where
+    AB::F: PrimeCharacteristicRing,
+{
+    let rest = msg_len - KECCAK_RATE;
+    let is_msg = byte_i < rest;
+    let is_delim = byte_i == rest;
     let is_end = byte_i == KECCAK_RATE - 1;
     if is_delim && is_end {
         AB::F::from_u32((KECCAK_DELIM as u32) ^ 0x80).into()
     } else if is_msg {
-        pv[msg_base + byte_i].clone()
+        pv[msg_base + KECCAK_RATE + byte_i].clone()
     } else if is_delim {
         AB::F::from_u32(KECCAK_DELIM as u32).into()
     } else if is_end {
@@ -283,7 +315,7 @@ where
             let n: AB::Expr = path_bits_n[k].into();
             same_meta *= one.clone() - (c.clone() + n.clone() - two.clone() * c * n);
         }
-        let cont = both_live * (one.clone() - wrap) * same_meta.clone();
+        let cont = both_live.clone() * (one.clone() - wrap.clone()) * same_meta.clone();
 
         constrain_keccak_round_with_rc(
             builder,
@@ -360,6 +392,39 @@ where
             }
             builder.assert_zero(leaf_start.clone() * (live_c.clone() - one.clone()));
             builder.assert_zero(leaf_start * round_val_c.clone());
+
+            // Second-block absorb on wrap inside the leaf segment (2-perm leaves).
+            if l > KECCAK_RATE {
+                let wrap_en = is_tr.clone()
+                    * both_live.clone()
+                    * wrap.clone()
+                    * same_meta.clone()
+                    * eq_bits_const::<AB>(seg_bits_c, 0)
+                    * path_sel.clone();
+                let expected = super::keccak_f_air::keccak_round_bits_expr_with_rc::<AB>(
+                    &curr[..KECCAK_STATE_BITS],
+                    &rc_bits,
+                );
+                for byte_i in 0..KECCAK_RATE {
+                    let mut xor_pack = AB::Expr::ZERO;
+                    let mut pow = AB::Expr::ONE;
+                    for bit in 0..8 {
+                        let idx = byte_i * 8 + bit;
+                        let nb: AB::Expr = next[idx].into();
+                        let eb = expected[idx].clone();
+                        let x = nb.clone() + eb.clone() - two.clone() * nb * eb;
+                        xor_pack += x * pow.clone();
+                        pow *= two.clone();
+                    }
+                    let want = second_block_rate_byte::<AB>(&pv, msg_base, l, byte_i);
+                    builder.assert_zero(wrap_en.clone() * (xor_pack - want));
+                }
+                for i in KECCAK_RATE * 8..KECCAK_STATE_BITS {
+                    let nb: AB::Expr = next[i].into();
+                    builder.assert_zero(wrap_en.clone() * (nb - expected[i].clone()));
+                }
+                builder.assert_zero(wrap_en * round_val_n.clone());
+            }
 
             for layer in 0..depth {
                 let start = seg_start_c.clone()
@@ -476,21 +541,28 @@ fn append_sponge_segment(
     seg_idx: usize,
     path_idx: usize,
 ) -> Result<(), String> {
-    if num_permutations(msg.len()) != 1 {
+    let n_perm = num_permutations(msg.len());
+    if seg_idx == 0 {
+        if n_perm == 0 || n_perm > 2 {
+            return Err(format!(
+                "M4b leaf requires 1..=2 perms (msg_len {}); got {n_perm}",
+                msg.len()
+            ));
+        }
+    } else if n_perm != 1 {
         return Err(format!(
-            "M4b requires single-perm sponge (msg_len {}); got {} perms",
-            msg.len(),
-            num_permutations(msg.len())
+            "M4b compress requires single-perm sponge (msg_len {}); got {n_perm}",
+            msg.len()
         ));
     }
     let sponge = build_sponge_matrix(msg);
-    if sponge.height() != M4A_SEG_ROWS {
+    let height = sponge.height();
+    if seg_idx > 0 && height != M4A_SEG_ROWS {
         return Err(format!(
-            "expected {M4A_SEG_ROWS}-row sponge, got {}",
-            sponge.height()
+            "expected {M4A_SEG_ROWS}-row compress sponge, got {height}"
         ));
     }
-    for r in 0..M4A_SEG_ROWS {
+    for r in 0..height {
         let start = r * SPONGE_WIDTH;
         values.extend_from_slice(&sponge.values[start..start + SPONGE_WIDTH]);
         push_row_meta(values, r == 0, seg_idx, path_idx);
@@ -532,9 +604,15 @@ fn fold_path_witness(
         return Err(format!("unsupported Merkle depth {depth}"));
     }
     let leaf_msg = val_row_to_bytes(row);
-    if leaf_msg.len() > KECCAK_RATE || !leaf_msg.len().is_multiple_of(4) || leaf_msg.len() < 12 {
+    let n_perm = num_permutations(leaf_msg.len());
+    if leaf_msg.len() < 12
+        || leaf_msg.len() > 2 * KECCAK_RATE
+        || !leaf_msg.len().is_multiple_of(4)
+        || n_perm == 0
+        || n_perm > 2
+    {
         return Err(format!(
-            "M4b leaf msg_len {} unsupported (need 12..=136, multiple of 4)",
+            "M4b leaf msg_len {} unsupported (need 12..=272, multiple of 4, ≤2 perms; got {n_perm})",
             leaf_msg.len()
         ));
     }
@@ -900,6 +978,49 @@ mod tests {
         assert!(
             proof.group_stark.len() < separate,
             "m4b {} not smaller than 4×m4a {}",
+            proof.group_stark.len(),
+            separate
+        );
+    }
+
+    /// Two homogeneous 48-wide (192-byte / 2-perm) leaves, depth 1.
+    #[test]
+    fn m4b_group_two_concat_width48_depth1() {
+        let stmts: Vec<_> = (0..2)
+            .map(|p| {
+                let row: Vec<_> = (0..48)
+                    .map(|i| Mersenne31::from_u32((p as u32 + 1) * 100 + i as u32 * 17 + 3))
+                    .collect();
+                assert_eq!(val_row_to_bytes(&row).len(), 192);
+                let leaf = hash_val_leaf(&row);
+                let sibling = [u8::try_from(p + 11).unwrap(); 32];
+                let index = p;
+                let root = if index % 2 == 0 {
+                    keccak256_compress(leaf, sibling)
+                } else {
+                    keccak256_compress(sibling, leaf)
+                };
+                MmcsPathStatement {
+                    row,
+                    siblings: vec![sibling],
+                    index,
+                    root,
+                }
+            })
+            .collect();
+        let proof = generate_keccak_group_fold_proof(&stmts).expect("m4b prove");
+        assert!(verify_keccak_group_fold_proof(&stmts, &proof));
+        assert_eq!(proof.path_count, 2);
+        assert_eq!(proof.leaf_width, 48);
+
+        let mut separate = 0usize;
+        for s in &stmts {
+            let p = generate_fri_mmcs_batched_path_proof(&s.row, &s.siblings, s.index, &s.root)
+                .expect("m4a");
+            separate += p.path_stark.len();
+        }
+        eprintln!(
+            "M4b W=48 N=2 size: group_stark={} vs 2×M4a={}",
             proof.group_stark.len(),
             separate
         );

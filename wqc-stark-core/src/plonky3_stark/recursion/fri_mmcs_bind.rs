@@ -421,6 +421,140 @@ pub(crate) fn verify_chal_batch_path_replay(
     true
 }
 
+/// Native digest replay for a batch path (no nested uni-STARK verify).
+pub(crate) fn verify_chal_batch_path_digests(
+    opened_vals: &[Vec<Mersenne31>],
+    dimensions: &[Dimensions],
+    mut index: usize,
+    expected_root: &[u8; 32],
+    proof: &FriChalBatchPathProof,
+) -> bool {
+    if dimensions.len() != opened_vals.len() {
+        return false;
+    }
+    let max_height = match dimensions.iter().map(|d| d.height).max() {
+        Some(h) if h.is_power_of_two() => h,
+        _ => return false,
+    };
+    let mut order: Vec<usize> = (0..dimensions.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(dimensions[i].height));
+    if proof.leaf_keccs.len() < dimensions.len() || proof.leaf_digests.len() < dimensions.len() {
+        return false;
+    }
+    for (i, &oi) in order.iter().enumerate() {
+        if i >= proof.leaf_rows.len()
+            || proof.leaf_rows[i].as_slice() != opened_vals[oi].as_slice()
+            || hash_val_leaf(&proof.leaf_rows[i]) != proof.leaf_digests[i]
+            || proof.leaf_keccs[i].digest != proof.leaf_digests[i]
+        {
+            eprintln!("[FriChalBatchDigests] leaf {i}");
+            return false;
+        }
+    }
+    let mut digest_of = vec![0usize; dimensions.len()];
+    for (pos, &i) in order.iter().enumerate() {
+        digest_of[i] = pos;
+    }
+    let leaf_height_npt = max_height.next_power_of_two();
+    let mut remaining: Vec<usize> = order.clone();
+    let mut at_leaf = Vec::new();
+    remaining.retain(|&i| {
+        if dimensions[i].height.next_power_of_two() == leaf_height_npt {
+            at_leaf.push(i);
+            false
+        } else {
+            true
+        }
+    });
+    let mut digest = if at_leaf.len() == 1 {
+        proof.leaf_digests[digest_of[at_leaf[0]]]
+    } else {
+        let mut concat = Vec::new();
+        for &i in &at_leaf {
+            concat.extend_from_slice(&opened_vals[i]);
+        }
+        let expect = hash_val_leaf(&concat);
+        let mut found = false;
+        for i in dimensions.len()..proof.leaf_rows.len() {
+            if proof.leaf_digests[i] == expect
+                && hash_val_leaf(&proof.leaf_rows[i]) == expect
+                && proof.leaf_keccs[i].digest == expect
+            {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            eprintln!("[FriChalBatchDigests] multi leaf");
+            return false;
+        }
+        expect
+    };
+
+    let mut sib_i = 0usize;
+    let mut inj_i = 0usize;
+    let mut curr_height = max_height;
+    let steps = match log2_strict(max_height) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    for _ in 0..steps {
+        if sib_i >= proof.siblings.len() || sib_i >= proof.sib_layer_digests.len() {
+            eprintln!("[FriChalBatchDigests] sib overrun");
+            return false;
+        }
+        let sib = proof.siblings[sib_i];
+        let (left, right) = if index.is_multiple_of(2) {
+            (digest, sib)
+        } else {
+            (sib, digest)
+        };
+        let expect = proof.sib_layer_digests[sib_i];
+        if keccak256_compress(left, right) != expect {
+            eprintln!("[FriChalBatchDigests] sib compress {sib_i}");
+            return false;
+        }
+        digest = expect;
+        sib_i += 1;
+        index /= 2;
+        curr_height /= 2;
+
+        let inject_idxs: Vec<usize> = remaining
+            .iter()
+            .copied()
+            .filter(|&i| dimensions[i].height == curr_height)
+            .collect();
+        if !inject_idxs.is_empty() {
+            remaining.retain(|i| !inject_idxs.contains(i));
+            let inj_digest = if inject_idxs.len() == 1 {
+                proof.leaf_digests[digest_of[inject_idxs[0]]]
+            } else {
+                let mut concat = Vec::new();
+                for &i in &inject_idxs {
+                    concat.extend_from_slice(&opened_vals[i]);
+                }
+                hash_val_leaf(&concat)
+            };
+            if inj_i >= proof.inject_digests.len() {
+                eprintln!("[FriChalBatchDigests] inject overrun");
+                return false;
+            }
+            let expect = proof.inject_digests[inj_i];
+            if keccak256_compress(digest, inj_digest) != expect {
+                eprintln!("[FriChalBatchDigests] inject compress {inj_i}");
+                return false;
+            }
+            digest = expect;
+            inj_i += 1;
+        }
+    }
+    if sib_i != proof.siblings.len() || &digest != expected_root {
+        eprintln!("[FriChalBatchDigests] final root/sib");
+        return false;
+    }
+    true
+}
+
 /// Prove ValMmcs openings for all FRI queries (any trace width).
 pub fn fri_val_mmcs_bundle_from_proof(
     proof: &Proof<WqcStarkConfig>,
