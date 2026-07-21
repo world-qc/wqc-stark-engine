@@ -511,6 +511,11 @@ mod tests {
         assert!(is_unitary_trajectory_leaf_compose(&composed));
         assert!(verify_unitary_trajectory_leaf_compose(&ctx, &composed));
         assert!(trajectory_child_from_compose(&composed).is_some());
+        eprintln!(
+            "[M4c size] unitary↔traj compose={} bytes ({:.2} MiB)",
+            composed.len(),
+            composed.len() as f64 / (1024.0 * 1024.0)
+        );
     }
 
     #[cfg(feature = "plonky3-stark")]

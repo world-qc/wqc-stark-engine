@@ -526,6 +526,13 @@ pub fn apply_leaf_mmcs_m4c_folds(
             }
             groups.chal_first_layer = Some(g);
         }
+    } else {
+        // Inject / multi-height first_layer: strip nested STARKs (host digest verify).
+        for qp in &mut bundle.chal {
+            if !qp.first_layer.inject_compresses.is_empty() {
+                strip_chal_batch_starks(&mut qp.first_layer);
+            }
+        }
     }
 
     let chal_by_depth = collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?;
@@ -834,6 +841,17 @@ fn bind_chal_with_groups(
                 &qp_proof.first_layer,
             ) {
                 return Err(format!("q{q}: first-layer digests failed"));
+            }
+        } else if batch_starks_stripped(&qp_proof.first_layer) {
+            // Inject / multi-RO: nested STARKs stripped; native Merkle digest replay.
+            if !super::fri_mmcs_bind::verify_chal_batch_path_digests(
+                &fl_opened,
+                &fl_dims,
+                query_index >> 1,
+                &fl_root,
+                &qp_proof.first_layer,
+            ) {
+                return Err(format!("q{q}: first-layer stripped digests failed"));
             }
         } else if !super::fri_mmcs_bind::verify_chal_batch_path_replay(
             &fl_opened,

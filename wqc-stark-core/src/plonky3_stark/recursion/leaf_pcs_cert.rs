@@ -669,6 +669,58 @@ mod tests {
         let cert = build_leaf_pcs_certificate(&proof, kind, stmt).expect("cert");
         assert_eq!(cert.trace_width as usize, UNITARY_TRACE_WIDTH);
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
+        assert!(
+            cert.mmcs_groups.val_trace.is_some(),
+            "expected val_trace group"
+        );
+        assert!(
+            cert.mmcs_groups.val_quot_batch.is_some() || cert.mmcs_groups.val_quot.is_some(),
+            "expected val quot or quot_batch group"
+        );
+        assert!(
+            cert.mmcs_groups.chal_first_layer.is_some(),
+            "expected chal_first_layer group"
+        );
+
+        // Approximate cert wire size from group STARKs + stripped Mmcs meta (excludes FriFold/DeepRo/OOD).
+        let group_bytes = cert
+            .mmcs_groups
+            .val_trace
+            .as_ref()
+            .map(|g| g.group_stark.len())
+            .unwrap_or(0)
+            + cert
+                .mmcs_groups
+                .val_quot
+                .as_ref()
+                .map(|g| g.group_stark.len())
+                .unwrap_or(0)
+            + cert
+                .mmcs_groups
+                .val_quot_batch
+                .as_ref()
+                .map(|g| g.group_stark.len())
+                .unwrap_or(0)
+            + cert
+                .mmcs_groups
+                .chal_first_layer
+                .as_ref()
+                .map(|g| g.group_stark.len())
+                .unwrap_or(0)
+            + cert
+                .mmcs_groups
+                .chal_commit
+                .iter()
+                .map(|g| g.group_stark.len())
+                .sum::<usize>();
+        eprintln!(
+            "[M4c size] unitary leaf Mmcs groups total={group_bytes} bytes ({:.2} MiB); trace={} quot_batch={} first_layer={} chal_commit={}",
+            group_bytes as f64 / (1024.0 * 1024.0),
+            cert.mmcs_groups.val_trace.as_ref().map(|g| g.group_stark.len()).unwrap_or(0),
+            cert.mmcs_groups.val_quot_batch.as_ref().map(|g| g.group_stark.len()).unwrap_or(0),
+            cert.mmcs_groups.chal_first_layer.as_ref().map(|g| g.group_stark.len()).unwrap_or(0),
+            cert.mmcs_groups.chal_commit.iter().map(|g| g.group_stark.len()).sum::<usize>(),
+        );
 
         let bundle = build_leaf_pcs_bundle_from_child(&transcript).expect("bundle");
         assert_eq!(bundle.certs.len(), 1);

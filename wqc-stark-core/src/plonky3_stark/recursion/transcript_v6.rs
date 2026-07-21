@@ -1397,6 +1397,8 @@ fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
     for sib in &c.siblings {
         out.extend_from_slice(sib);
     }
+    out.push(LEAF_MMCS_FOLD_V);
+    encode_mmcs_groups(out, &c.mmcs_groups);
     encode_fri_mmcs_path(out, &c.merkle_fold);
     encode_fri_folds(out, &c.fri_fold_ys);
     encode_fri_folds(out, &c.fri_folds);
@@ -1432,6 +1434,12 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
         siblings.push(sib);
         cursor = next;
     }
+    let fold_v = *proof.get(cursor)?;
+    if fold_v != LEAF_MMCS_FOLD_V {
+        return None;
+    }
+    let cursor = cursor + 1;
+    let (mmcs_groups, cursor) = decode_mmcs_groups(proof, cursor)?;
     let (merkle_fold, cursor) = decode_fri_mmcs_path(proof, cursor)?;
     let (fri_fold_ys, cursor) = decode_fri_folds(proof, cursor, AGG_FRI_MAX_FOLD_YS)?;
     let (fri_folds, cursor) =
@@ -1451,6 +1459,7 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
             lde_row,
             siblings,
             merkle_fold,
+            mmcs_groups,
             fri_fold_ys,
             fri_folds,
             deep_ros,

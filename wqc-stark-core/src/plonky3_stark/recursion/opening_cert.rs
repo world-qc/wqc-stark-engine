@@ -31,6 +31,9 @@ use super::fri_mmcs_bind::{
     bind_fri_mmcs_bundle_to_proof, fri_mmcs_bundle_from_agg_proof, AggFriMmcsBundle,
     FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
+use super::fri_mmcs_m4c::{
+    apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
+};
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_agg_ood_step;
@@ -56,6 +59,8 @@ pub struct AggPcsCertificate {
     pub siblings: Vec<[u8; 32]>,
     /// Query-0 ValMmcs trace path (variable-depth stand-in; LDE rebuild skipped).
     pub merkle_fold: FriMmcsPathProof,
+    /// M4c group folds / stripped batch digests (`LEAF_MMCS_FOLD_V`).
+    pub mmcs_groups: LeafMmcsFoldGroups,
     /// R3-M3b3: first-layer Circle FRI `fold_y` steps (all proven queries).
     pub fri_fold_ys: Vec<FriFoldStepProof>,
     /// R3-M3b3: commit-phase Circle FRI `fold_x` steps (all proven queries × rounds) with FS β + RO.
@@ -209,6 +214,14 @@ pub fn build_agg_pcs_certificate(
     bind_fri_mmcs_bundle_to_proof(&proof, &mmcs_bundle)
         .map_err(|e| format!("R3-M3d FRI Mmcs bind failed: {e}"))?;
 
+    let mut mmcs_bundle = mmcs_bundle;
+    let mmcs_groups = apply_leaf_mmcs_m4c_folds(&proof, AGG_WIDTH, &mut mmcs_bundle)
+        .map_err(|e| format!("R3-M4c Agg Mmcs group fold failed: {e}"))?;
+    // Inject / multi-RO first_layer: strip nested STARKs; host digest replay is sound for PCS.
+    strip_inject_first_layers(&mut mmcs_bundle);
+    bind_leaf_mmcs_with_groups(&proof, &mmcs_bundle, &mmcs_groups, AGG_WIDTH)
+        .map_err(|e| format!("R3-M4c Agg Mmcs group bind failed: {e}"))?;
+
     let trace_commitment = commitment_root(&proof.commitments.trace)?;
     let merkle_fold = mmcs_bundle.val[0].trace_path.clone();
 
@@ -221,6 +234,7 @@ pub fn build_agg_pcs_certificate(
         lde_row: Vec::new(),
         siblings: Vec::new(),
         merkle_fold,
+        mmcs_groups,
         fri_fold_ys: fri_bundle.fold_ys,
         fri_folds: fri_bundle.fold_xs,
         deep_ros: deep_bundle.deep_ros,
@@ -229,6 +243,15 @@ pub fn build_agg_pcs_certificate(
         fri_val_mmcs: mmcs_bundle.val,
         fri_chal_mmcs: mmcs_bundle.chal,
     })
+}
+
+fn strip_inject_first_layers(bundle: &mut AggFriMmcsBundle) {
+    use super::fri_mmcs_m4c::{batch_starks_stripped, strip_chal_batch_starks};
+    for qp in &mut bundle.chal {
+        if !qp.first_layer.inject_compresses.is_empty() && !batch_starks_stripped(&qp.first_layer) {
+            strip_chal_batch_starks(&mut qp.first_layer);
+        }
+    }
 }
 
 /// Host-verifies a certificate against an AggregationAir transcript + context.
@@ -334,6 +357,7 @@ pub fn verify_agg_pcs_certificate(
                     || rebuilt.lde_row != cert.lde_row
                     || rebuilt.siblings != cert.siblings
                     || rebuilt.merkle_fold != cert.merkle_fold
+                    || rebuilt.mmcs_groups != cert.mmcs_groups
                     || rebuilt.fri_fold_ys != cert.fri_fold_ys
                     || rebuilt.fri_folds != cert.fri_folds
                     || rebuilt.deep_ros != cert.deep_ros
@@ -415,7 +439,7 @@ fn verify_agg_pcs_certificate_fri_bound(
         val: cert.fri_val_mmcs.clone(),
         chal: cert.fri_chal_mmcs.clone(),
     };
-    if let Err(e) = bind_fri_mmcs_bundle_to_proof(&proof, &mmcs_bundle) {
+    if let Err(e) = bind_leaf_mmcs_with_groups(&proof, &mmcs_bundle, &cert.mmcs_groups, AGG_WIDTH) {
         eprintln!("[AggPcsCertificate] Failed: FRI Mmcs bind: {e}");
         return false;
     }
