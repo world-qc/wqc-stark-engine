@@ -14,6 +14,7 @@ jobs:
   build-fast:
     name: Build and fast tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,16 +37,13 @@ jobs:
       - name: cargo build
         run: cargo build --locked --verbose
 
-      - name: cargo test
-        run: cargo test --locked --verbose
-
-      - name: cargo test (plonky3-stark fast)
-        run: cargo test -p wqc-stark-core --features plonky3-stark --locked --verbose
+      - name: cargo test (fast, release)
+        run: cargo test --release --locked --verbose
 
   plonky3-slow-release:
     name: Plonky3 slow tests (release)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4

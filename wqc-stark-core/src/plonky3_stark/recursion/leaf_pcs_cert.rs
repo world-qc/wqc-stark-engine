@@ -661,6 +661,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn born_leaf_plonky3_extract_and_ood() {
         use crate::distribution::DistributionSegment;
         use crate::plonky3_stark::generate_born_stark_proof;

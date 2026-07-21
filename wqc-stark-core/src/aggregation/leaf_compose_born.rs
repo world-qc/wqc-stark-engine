@@ -530,6 +530,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn verify_stark_proof_core_routes_born_composed_leaf() {
         use crate::verify_stark_proof_core;
 

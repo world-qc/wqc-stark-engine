@@ -547,6 +547,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn composed_proof_rejects_tampered_children_and_agg_tail() {
         use crate::aggregation::transcript_v3::decode_compose_v3_slices;
         use crate::plonky3_stark::{split_agg_tail, split_rec_tail};
@@ -582,6 +583,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn composed_proof_rejects_wrong_verify_context() {
         let (ctx, composed) = if_compose_fixture();
         assert!(verify_unitary_trajectory_leaf_compose(&ctx, &composed));
@@ -616,6 +618,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn composed_proof_rejects_tampered_unitary_link_in_trajectory_child() {
         let (ctx, composed) = if_compose_fixture();
         let link = ctx.terminal_statevector_digest.as_bytes();
@@ -626,6 +629,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
+    #[ignore = "slow; run in release CI"]
     fn verify_stark_proof_core_routes_composed_leaf() {
         use crate::verify_stark_proof_core;
 
