@@ -487,7 +487,7 @@ mod tests {
     use crate::plonky3_stark::generate_aggregation_proof;
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn agg_pcs_certificate_roundtrip() {
         let ctx = AggregationContext {
             parent_task_id: "parent",

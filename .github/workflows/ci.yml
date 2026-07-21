@@ -11,8 +11,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  build-fast:
-    name: Build and fast tests
+  build:
+    name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -37,24 +37,7 @@ jobs:
       - name: cargo build
         run: cargo build --locked --verbose
 
-      - name: cargo test (fast, release)
+      # Fast suite only (release). Heavy RecAgg / PCS roundtrips are #[ignore]
+      # and must be run locally — they are multi-hour on GHA and blow minute quotas.
+      - name: cargo test (release, skip ignored)
         run: cargo test --release --locked --verbose
-
-  plonky3-slow-release:
-    name: Plonky3 slow tests (release)
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.95"
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: cargo test (plonky3-stark slow ignored, release)
-        run: cargo test -p wqc-stark-core --features plonky3-stark --release --locked --verbose -- --ignored

@@ -52,8 +52,17 @@ All transcript details (field layout, verification steps, binding rules) are def
 
 ```bash
 cargo build --release
-cargo test
-cargo test -p wqc-stark-core --features plonky3-stark
+# CI / default: fast suite only (ignored heavy tests are skipped)
+cargo test --release
+```
+
+### Heavy tests (local only)
+
+RecAgg V6 / leaf PCS roundtrips prove nested Keccak STARKs and can take **hours** even in release. They are marked `#[ignore]` and **not** run on GitHub Actions (timeout + Actions minute quota).
+
+```bash
+# Optional local stress / regression (release strongly recommended)
+cargo test -p wqc-stark-core --features plonky3-stark --release -- --ignored
 ```
 
 ### Docker

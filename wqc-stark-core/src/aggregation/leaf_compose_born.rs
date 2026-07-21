@@ -443,7 +443,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn unitary_born_v6_rec_tail_decodes() {
         use crate::plonky3_stark::recursion::{
             decode_rec_agg_proof_owned_v6, diagnose_decode_rec_agg_v6,
@@ -472,7 +472,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn unitary_born_compose_roundtrip() {
         let (ctx, composed) = born_compose_fixture();
         assert!(is_unitary_born_leaf_compose(&composed));
@@ -530,7 +530,7 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn verify_stark_proof_core_routes_born_composed_leaf() {
         use crate::verify_stark_proof_core;
 

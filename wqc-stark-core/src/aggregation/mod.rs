@@ -571,7 +571,7 @@ mod integration_tests {
     }
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn compose_builds_binary_tree() {
         let t = sample_trace();
         let leaves: Vec<_> = [

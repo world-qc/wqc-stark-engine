@@ -634,7 +634,7 @@ mod tests {
     use crate::transcript::StarkContext;
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn unitary_leaf_pcs_certificate_roundtrip() {
         let ctx = StarkContext {
             circuit_id: "c-leaf",
@@ -661,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn born_leaf_plonky3_extract_and_ood() {
         use crate::distribution::DistributionSegment;
         use crate::plonky3_stark::generate_born_stark_proof;

@@ -1579,7 +1579,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn agg_cert_v6_codec_roundtrip() {
         use crate::aggregation::CHILD_HASH_LEN;
         use crate::plonky3_stark::aggregation::AggregationContext;
@@ -1603,7 +1603,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn unitary_leaf_bundle_v6_codec_roundtrip() {
         let ctx = StarkContext {
             circuit_id: "c-codec",

@@ -318,7 +318,7 @@ mod tests {
     use crate::plonky3_stark::AggregationContext;
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn recursive_agg_leaf_pair_roundtrip() {
         let ctx = RecursiveAggregationContext {
             parent_task_id: "parent",
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "slow; run in release CI"]
+    #[ignore = "slow; local only — not run in CI"]
     fn recursive_agg_with_child_agg_certs() {
         let agg_ctx = AggregationContext {
             parent_task_id: "child-parent",
