@@ -166,6 +166,8 @@ pub fn compose_stark_proofs(
         let right_bind = child_stark_binding(right_child);
         let left_pcs = pcs_for_child(left_child, context.parent_task_id)?;
         let right_pcs = pcs_for_child(right_child, context.parent_task_id)?;
+        log_child_pcs_sizes("left", &left_pcs);
+        log_child_pcs_sizes("right", &right_pcs);
 
         let rec_ctx = RecursiveAggregationContext {
             parent_task_id: context.parent_task_id,
@@ -198,6 +200,28 @@ struct ChildPcs {
 }
 
 #[cfg(feature = "plonky3-stark")]
+fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
+    use crate::plonky3_stark::leaf_bundle_stark_sizes;
+    if let Some(bundle) = &pcs.leaf_bundle {
+        let s = leaf_bundle_stark_sizes(bundle);
+        eprintln!(
+            "[M4c size] compose {side} leaf PCS STARKs total={} bytes ({:.2} MiB); certs={} mmcs_groups={} fri_fold={} deep_ro={} ood={}",
+            s.total,
+            s.total as f64 / (1024.0 * 1024.0),
+            bundle.certs.len(),
+            s.mmcs_groups,
+            s.fri_fold,
+            s.deep_ro,
+            s.ood,
+        );
+    } else if pcs.agg_cert.is_some() {
+        eprintln!("[M4c size] compose {side} agg PCS present (nested)");
+    } else {
+        eprintln!("[M4c size] compose {side} PCS absent (deferred)");
+    }
+}
+
+#[cfg(feature = "plonky3-stark")]
 fn pcs_for_child(child: &[u8], _parent_task_id: &str) -> Result<ChildPcs, String> {
     if let Some(agg) = child_aggregation_transcript(child) {
         let cert = cert_for_child_agg(agg)?;
@@ -210,16 +234,21 @@ fn pcs_for_child(child: &[u8], _parent_task_id: &str) -> Result<ChildPcs, String
 
     if child_supports_leaf_pcs(child) {
         match build_leaf_pcs_bundle_from_child(child) {
-            Ok(bundle) if verify_leaf_pcs_bundle(child, &bundle).is_ok() => {
-                return Ok(ChildPcs {
-                    kind: REC_KIND_LEAF,
-                    agg_cert: None,
-                    leaf_bundle: Some(bundle),
-                });
-            }
-            Ok(_) | Err(_) => {
-                // Legacy compose without bundle when cert build/verify fails (e.g. DistributionAir FRI).
-                eprintln!("[Aggregation] leaf PCS bundle deferred for child");
+            Ok(bundle) => match verify_leaf_pcs_bundle(child, &bundle) {
+                Ok(()) => {
+                    return Ok(ChildPcs {
+                        kind: REC_KIND_LEAF,
+                        agg_cert: None,
+                        leaf_bundle: Some(bundle),
+                    });
+                }
+                Err(e) => {
+                    // Legacy compose without bundle when cert verify fails (e.g. DistributionAir FRI).
+                    eprintln!("[Aggregation] leaf PCS bundle deferred (verify): {e}");
+                }
+            },
+            Err(e) => {
+                eprintln!("[Aggregation] leaf PCS bundle deferred (build): {e}");
             }
         }
     }

@@ -80,6 +80,92 @@ pub struct LeafPcsBundle {
     pub certs: Vec<LeafPcsCertificate>,
 }
 
+/// Approximate nested-STARK payload sizes inside a leaf PCS certificate (postcard blobs).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LeafPcsStarkSizes {
+    pub mmcs_groups: usize,
+    pub fri_fold: usize,
+    pub deep_ro: usize,
+    pub ood: usize,
+    pub total: usize,
+}
+
+/// Sums `group_stark` / `fold_stark` / `deep_stark` / `ood_stark` lengths (excludes meta / digests).
+pub fn leaf_pcs_stark_sizes(cert: &LeafPcsCertificate) -> LeafPcsStarkSizes {
+    let mmcs_groups = cert
+        .mmcs_groups
+        .val_trace
+        .as_ref()
+        .map(|g| g.group_stark.len())
+        .unwrap_or(0)
+        + cert
+            .mmcs_groups
+            .val_quot
+            .as_ref()
+            .map(|g| g.group_stark.len())
+            .unwrap_or(0)
+        + cert
+            .mmcs_groups
+            .val_quot_batch
+            .as_ref()
+            .map(|g| g.group_stark.len())
+            .unwrap_or(0)
+        + cert
+            .mmcs_groups
+            .chal_first_layer
+            .as_ref()
+            .map(|g| g.group_stark.len())
+            .unwrap_or(0)
+        + cert
+            .mmcs_groups
+            .chal_commit
+            .iter()
+            .map(|g| g.group_stark.len())
+            .sum::<usize>();
+    let fri_fold = cert
+        .fri_fold_ys
+        .iter()
+        .map(|f| f.fold_stark.len())
+        .sum::<usize>()
+        + cert
+            .fri_folds
+            .iter()
+            .map(|f| f.fold_stark.len())
+            .sum::<usize>();
+    let deep_ro = cert
+        .deep_ros
+        .iter()
+        .map(|d| d.deep_stark.len())
+        .sum::<usize>()
+        + cert
+            .deep_ro_traces
+            .iter()
+            .map(|d| d.deep_stark.len())
+            .sum::<usize>();
+    let ood = cert.ood.ood_stark.len();
+    LeafPcsStarkSizes {
+        mmcs_groups,
+        fri_fold,
+        deep_ro,
+        ood,
+        total: mmcs_groups + fri_fold + deep_ro + ood,
+    }
+}
+
+/// Sums nested-STARK sizes across every cert in a leaf PCS bundle.
+pub fn leaf_bundle_stark_sizes(bundle: &LeafPcsBundle) -> LeafPcsStarkSizes {
+    let mut out = LeafPcsStarkSizes::default();
+    for cert in &bundle.certs {
+        let s = leaf_pcs_stark_sizes(cert);
+        out.mmcs_groups += s.mmcs_groups;
+        out.fri_fold += s.fri_fold;
+        out.deep_ro += s.deep_ro;
+        out.ood += s.ood;
+        out.total += s.total;
+    }
+    out
+}
+
 fn commitment_root(com: &<ValMmcs as Mmcs<Mersenne31>>::Commitment) -> Result<[u8; 32], String> {
     com.roots()
         .first()
@@ -491,9 +577,7 @@ fn born_plonky3_from_child(child: &[u8]) -> Result<Vec<u8>, String> {
     plonky3_after_inner_marker(born_inner, BORN_STARK_INNER_MARKER, 2)
 }
 
-fn marginal_inners_from_bundle(bundle: &[u8]) -> Result<Vec<&[u8]>, String> {
-    let (marginal_bundle, _shot) = split_shot_sampling_from_bundle(bundle)
-        .ok_or_else(|| "malformed trajectory STARK bundle".to_string())?;
+fn marginal_inners_from_marginal_bundle(marginal_bundle: &[u8]) -> Result<Vec<&[u8]>, String> {
     let (witness_count, mut cursor) = read_u32_le(marginal_bundle, 0)
         .ok_or_else(|| "truncated marginal bundle header".to_string())?;
     let mut inners = Vec::with_capacity(witness_count as usize);
@@ -523,7 +607,7 @@ fn traj_plonky3_payloads_from_child(child: &[u8]) -> Result<Vec<(LeafKind, Vec<u
         .ok_or_else(|| "malformed trajectory STARK bundle".to_string())?;
 
     let mut out = Vec::new();
-    for inner in marginal_inners_from_bundle(marginal_bundle)? {
+    for inner in marginal_inners_from_marginal_bundle(marginal_bundle)? {
         let plonky3 = plonky3_after_inner_marker(inner, TRAJ_MARG_STARK_INNER_MARKER, 3)?;
         out.push((LeafKind::TrajMarginal, plonky3));
     }
@@ -682,44 +766,15 @@ mod tests {
             "expected chal_first_layer group"
         );
 
-        // Approximate cert wire size from group STARKs + stripped Mmcs meta (excludes FriFold/DeepRo/OOD).
-        let group_bytes = cert
-            .mmcs_groups
-            .val_trace
-            .as_ref()
-            .map(|g| g.group_stark.len())
-            .unwrap_or(0)
-            + cert
-                .mmcs_groups
-                .val_quot
-                .as_ref()
-                .map(|g| g.group_stark.len())
-                .unwrap_or(0)
-            + cert
-                .mmcs_groups
-                .val_quot_batch
-                .as_ref()
-                .map(|g| g.group_stark.len())
-                .unwrap_or(0)
-            + cert
-                .mmcs_groups
-                .chal_first_layer
-                .as_ref()
-                .map(|g| g.group_stark.len())
-                .unwrap_or(0)
-            + cert
-                .mmcs_groups
-                .chal_commit
-                .iter()
-                .map(|g| g.group_stark.len())
-                .sum::<usize>();
+        let sizes = leaf_pcs_stark_sizes(&cert);
         eprintln!(
-            "[M4c size] unitary leaf Mmcs groups total={group_bytes} bytes ({:.2} MiB); trace={} quot_batch={} first_layer={} chal_commit={}",
-            group_bytes as f64 / (1024.0 * 1024.0),
-            cert.mmcs_groups.val_trace.as_ref().map(|g| g.group_stark.len()).unwrap_or(0),
-            cert.mmcs_groups.val_quot_batch.as_ref().map(|g| g.group_stark.len()).unwrap_or(0),
-            cert.mmcs_groups.chal_first_layer.as_ref().map(|g| g.group_stark.len()).unwrap_or(0),
-            cert.mmcs_groups.chal_commit.iter().map(|g| g.group_stark.len()).sum::<usize>(),
+            "[M4c size] unitary leaf PCS STARKs total={} bytes ({:.2} MiB); mmcs_groups={} fri_fold={} deep_ro={} ood={}",
+            sizes.total,
+            sizes.total as f64 / (1024.0 * 1024.0),
+            sizes.mmcs_groups,
+            sizes.fri_fold,
+            sizes.deep_ro,
+            sizes.ood,
         );
 
         let bundle = build_leaf_pcs_bundle_from_child(&transcript).expect("bundle");

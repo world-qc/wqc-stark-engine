@@ -108,9 +108,9 @@ pub use keccak_merkle_air::{
     MerkleFoldAir, MERKLE_FOLD_DEPTH,
 };
 pub use leaf_pcs_cert::{
-    build_leaf_pcs_bundle_from_child, build_leaf_pcs_certificate, leaf_bundle_stmt_digest,
-    leaf_stmt_digest, verify_leaf_pcs_bundle, verify_leaf_pcs_certificate, LeafPcsBundle,
-    LeafPcsCertificate,
+    build_leaf_pcs_bundle_from_child, build_leaf_pcs_certificate, leaf_bundle_stark_sizes,
+    leaf_bundle_stmt_digest, leaf_pcs_stark_sizes, leaf_stmt_digest, verify_leaf_pcs_bundle,
+    verify_leaf_pcs_certificate, LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
 };
 pub use merkle_keccak::{
     compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,

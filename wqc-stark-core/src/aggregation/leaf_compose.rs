@@ -516,6 +516,17 @@ mod tests {
             composed.len(),
             composed.len() as f64 / (1024.0 * 1024.0)
         );
+        if let Some((v3_and_agg, rec)) = crate::plonky3_stark::split_rec_tail(&composed) {
+            let (v3, agg) = crate::plonky3_stark::split_agg_tail(v3_and_agg)
+                .map(|(v, a)| (v, Some(a)))
+                .unwrap_or((v3_and_agg, None));
+            eprintln!(
+                "[M4c size] compose parts: v3={} agg_tail={} rec_tail={} (FriFold/DeepRo/OOD live in rec_tail PCS)",
+                v3.len(),
+                agg.map(|a| a.len()).unwrap_or(0),
+                rec.len(),
+            );
+        }
     }
 
     #[cfg(feature = "plonky3-stark")]
