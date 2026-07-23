@@ -9,11 +9,11 @@ pub mod transcript;
 pub mod plonky3_stark;
 
 pub use aggregation::{
-    born_proof_view, compose_stark_proofs, is_unitary_born_leaf_compose,
-    is_unitary_trajectory_leaf_compose, parse_leaf_binding, trajectory_proof_view,
-    verify_child_proof, verify_composed_proof, verify_root_proof, ComposeContext, ComposeHeader,
-    ParsedLeafBinding, RootVerifyContext, UNITARY_BORN_COMPOSE_LABEL, UNITARY_TRAJ_COMPOSE_LABEL,
-    V3_COMPOSE_MARKER,
+    born_proof_view, compose_stark_proofs, compose_stark_proofs_with_pcs,
+    is_unitary_born_leaf_compose, is_unitary_trajectory_leaf_compose, parse_leaf_binding,
+    trajectory_proof_view, verify_child_proof, verify_composed_proof, verify_root_proof,
+    ComposeContext, ComposeHeader, ParsedLeafBinding, RootVerifyContext,
+    UNITARY_BORN_COMPOSE_LABEL, UNITARY_TRAJ_COMPOSE_LABEL, V3_COMPOSE_MARKER,
 };
 #[cfg(feature = "plonky3-stark")]
 pub use aggregation::{
@@ -75,12 +75,12 @@ pub fn generate_plonky3_stark_proof(
 
 #[cfg(feature = "plonky3-stark")]
 pub use plonky3_stark::{
-    append_born_stark_tail, append_trajectory_stark_tail, generate_born_stark_proof,
-    generate_trajectory_stark_bundle, has_born_stark_tail, has_trajectory_shot_sampling_stark,
-    has_trajectory_stark_tail, segment_supports_born_zk, segment_supports_trajectory_zk,
-    verify_born_stark_proof, verify_trajectory_stark_bundle, BornStarkContext,
-    BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS, TRAJ_MARGINAL_ZK_MAX_QUBITS,
-    TRAJ_SHOT_STARK_INNER_MARKER, TRAJ_STARK_TAIL_MARKER,
+    append_born_stark_tail, append_trajectory_stark_tail, build_encoded_leaf_pcs_bundle_from_child,
+    generate_born_stark_proof, generate_trajectory_stark_bundle, has_born_stark_tail,
+    has_trajectory_shot_sampling_stark, has_trajectory_stark_tail, segment_supports_born_zk,
+    segment_supports_trajectory_zk, verify_born_stark_proof, verify_trajectory_stark_bundle,
+    BornStarkContext, BORN_STARK_TAIL_MARKER, BORN_ZK_MAX_OUTCOMES, BORN_ZK_MAX_QUBITS,
+    TRAJ_MARGINAL_ZK_MAX_QUBITS, TRAJ_SHOT_STARK_INNER_MARKER, TRAJ_STARK_TAIL_MARKER,
 };
 
 /// Generates a v1 AIR commitment proof: embeds the execution trace and AIR digest.

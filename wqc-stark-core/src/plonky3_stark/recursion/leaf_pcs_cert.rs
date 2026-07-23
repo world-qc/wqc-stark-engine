@@ -726,6 +726,12 @@ pub fn build_leaf_pcs_bundle_from_child(child_bytes: &[u8]) -> Result<LeafPcsBun
     Ok(bundle)
 }
 
+/// Builds and encodes a standalone leaf PCS bundle for wire / compose prebuilt delivery.
+pub fn build_encoded_leaf_pcs_bundle_from_child(child_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let bundle = build_leaf_pcs_bundle_from_child(child_bytes)?;
+    Ok(crate::plonky3_stark::recursion::encode_leaf_pcs_bundle_bytes(&bundle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

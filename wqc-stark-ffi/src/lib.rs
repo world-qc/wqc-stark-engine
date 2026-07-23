@@ -3,11 +3,11 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    compose_stark_proofs, generate_stark_proof, is_unitary_born_leaf_compose,
-    is_unitary_trajectory_leaf_compose, proof_has_trajectory_unitary_link,
-    proof_has_unitary_statevector_link, trajectory_proof_view, verify_distribution_binding,
-    verify_root_proof, verify_stark_proof_core, verify_trajectory_binding, ComposeContext,
-    RootVerifyContext, StarkContext,
+    build_encoded_leaf_pcs_bundle_from_child, compose_stark_proofs_with_pcs, generate_stark_proof,
+    is_unitary_born_leaf_compose, is_unitary_trajectory_leaf_compose,
+    proof_has_trajectory_unitary_link, proof_has_unitary_statevector_link, trajectory_proof_view,
+    verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
+    verify_trajectory_binding, ComposeContext, RootVerifyContext, StarkContext,
 };
 
 fn unwind_to_ffi_code(result: Result<i32, Box<dyn std::any::Any + Send>>) -> i32 {
@@ -107,6 +107,7 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
 /// Composes two verified child proofs into a v3 proof-tree transcript.
 ///
 /// Pass null `left_circuit_id` / `right_circuit_id` when the child is already a v3 compose node.
+/// Optional `left_pcs` / `right_pcs` are prebuilt leaf PCS bundles (`null` / len 0 = fallback build).
 ///
 /// Returns composed byte length on success, `0` on failure, `-2` if `out_buf_cap`
 /// is too small (retry with a larger buffer), `-99` on panic.
@@ -135,6 +136,10 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
     right_output_hash: *const c_char,
     right_proof: *const u8,
     right_proof_len: u32,
+    left_pcs: *const u8,
+    left_pcs_len: u32,
+    right_pcs: *const u8,
+    right_pcs_len: u32,
     out_buf: *mut u8,
     out_buf_cap: u32,
 ) -> i32 {
@@ -151,6 +156,8 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
 
         let left_slice = slice::from_raw_parts(left_proof, left_proof_len as usize);
         let right_slice = slice::from_raw_parts(right_proof, right_proof_len as usize);
+        let left_pcs_slice = optional_bytes(left_pcs, left_pcs_len);
+        let right_pcs_slice = optional_bytes(right_pcs, right_pcs_len);
 
         let left_ctx = optional_leaf_context(
             left_circuit_id,
@@ -167,7 +174,7 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
             right_output_hash,
         );
 
-        let composed = match compose_stark_proofs(
+        let composed = match compose_stark_proofs_with_pcs(
             &ComposeContext {
                 parent_task_id: cstr_or_empty(parent_task_id),
                 compose_label: cstr_or_empty(compose_label),
@@ -177,6 +184,8 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
             right_slice,
             left_ctx.as_ref(),
             right_ctx.as_ref(),
+            left_pcs_slice,
+            right_pcs_slice,
         ) {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -200,6 +209,57 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
     });
 
     unwind_to_ffi_code(result)
+}
+
+/// Builds an encoded leaf PCS bundle from a leaf STARK proof.
+///
+/// Returns encoded byte length on success, `0` on failure, `-2` if `out_buf_cap`
+/// is too small, `-99` on panic.
+///
+/// # Safety
+///
+/// `proof` must reference at least `proof_len` bytes. `out_buf` must be writable
+/// for at least `out_buf_cap` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_build_leaf_pcs_bundle(
+    proof: *const u8,
+    proof_len: u32,
+    out_buf: *mut u8,
+    out_buf_cap: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof.is_null() || out_buf.is_null() {
+            eprintln!("[Rust FFI] build_leaf_pcs: null required pointer");
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof, proof_len as usize);
+        let encoded = match build_encoded_leaf_pcs_bundle_from_child(proof_slice) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                eprintln!("[Rust FFI] build_leaf_pcs failed: {err}");
+                return 0;
+            }
+        };
+        if encoded.len() > out_buf_cap as usize {
+            eprintln!(
+                "[Rust FFI] build_leaf_pcs output too large: need {}, cap {}",
+                encoded.len(),
+                out_buf_cap
+            );
+            return -2;
+        }
+        let out = slice::from_raw_parts_mut(out_buf, encoded.len());
+        out.copy_from_slice(&encoded);
+        encoded.len() as i32
+    });
+    unwind_to_ffi_code(result)
+}
+
+fn optional_bytes<'a>(ptr: *const u8, len: u32) -> Option<&'a [u8]> {
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    Some(unsafe { slice::from_raw_parts(ptr, len as usize) })
 }
 
 /// Generates a minimal idle-qubit leaf proof for orch CGO RecAgg V6 compose E2E.

@@ -108,9 +108,10 @@ pub use keccak_merkle_air::{
     MerkleFoldAir, MERKLE_FOLD_DEPTH,
 };
 pub use leaf_pcs_cert::{
-    build_leaf_pcs_bundle_from_child, build_leaf_pcs_certificate, leaf_bundle_stark_sizes,
-    leaf_bundle_stmt_digest, leaf_pcs_stark_sizes, leaf_stmt_digest, verify_leaf_pcs_bundle,
-    verify_leaf_pcs_certificate, LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
+    build_encoded_leaf_pcs_bundle_from_child, build_leaf_pcs_bundle_from_child,
+    build_leaf_pcs_certificate, leaf_bundle_stark_sizes, leaf_bundle_stmt_digest,
+    leaf_pcs_stark_sizes, leaf_stmt_digest, verify_leaf_pcs_bundle, verify_leaf_pcs_certificate,
+    LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
 };
 pub use merkle_keccak::{
     compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
@@ -142,6 +143,9 @@ pub use prove::{
     verify_recursive_aggregation_proof,
 };
 pub use transcript_v5::{V5_REC_AGG_INNER_MARKER, V5_REC_TAIL_MARKER};
+pub use transcript_v6::{
+    decode_leaf_bundle, decode_leaf_pcs_bundle_bytes, encode_leaf_bundle,
+    encode_leaf_pcs_bundle_bytes, V6_REC_AGG_INNER_MARKER, V6_REC_TAIL_MARKER,
+};
 #[cfg(test)]
 pub use transcript_v6::{decode_rec_agg_proof_owned_v6, diagnose_decode_rec_agg_v6};
-pub use transcript_v6::{V6_REC_AGG_INNER_MARKER, V6_REC_TAIL_MARKER};

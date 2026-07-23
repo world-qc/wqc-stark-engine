@@ -21,9 +21,9 @@ mod transcript_v3;
 #[cfg(feature = "plonky3-stark")]
 use crate::plonky3_stark::{
     append_agg_tail, append_rec_tail, build_agg_pcs_certificate, build_leaf_pcs_bundle_from_child,
-    child_aggregation_transcript, child_stark_binding, generate_aggregation_proof,
-    generate_recursive_aggregation_proof, split_agg_tail, split_rec_tail,
-    verify_agg_pcs_certificate, verify_aggregation_proof, verify_leaf_pcs_bundle,
+    child_aggregation_transcript, child_stark_binding, decode_leaf_pcs_bundle_bytes,
+    generate_aggregation_proof, generate_recursive_aggregation_proof, split_agg_tail,
+    split_rec_tail, verify_agg_pcs_certificate, verify_aggregation_proof, verify_leaf_pcs_bundle,
     verify_recursive_aggregation_proof, AggregationContext, LeafPcsBundle,
     RecursiveAggregationContext, REC_KIND_AGG, REC_KIND_LEAF,
 };
@@ -131,6 +131,30 @@ pub fn compose_stark_proofs(
     left_leaf_ctx: Option<&StarkContext<'_>>,
     right_leaf_ctx: Option<&StarkContext<'_>>,
 ) -> Result<Vec<u8>, String> {
+    compose_stark_proofs_with_pcs(
+        context,
+        left_child,
+        right_child,
+        left_leaf_ctx,
+        right_leaf_ctx,
+        None,
+        None,
+    )
+}
+
+/// Like [`compose_stark_proofs`], but accepts optional prebuilt leaf PCS bundles.
+///
+/// When a prebuilt blob is `Some(non-empty)`, it is decoded and verified against the
+/// corresponding child; when `None` or empty, the current prove-time PCS build runs.
+pub fn compose_stark_proofs_with_pcs(
+    context: &ComposeContext<'_>,
+    left_child: &[u8],
+    right_child: &[u8],
+    left_leaf_ctx: Option<&StarkContext<'_>>,
+    right_leaf_ctx: Option<&StarkContext<'_>>,
+    left_prebuilt_pcs: Option<&[u8]>,
+    right_prebuilt_pcs: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
     if context.parent_task_id.is_empty() {
         return Err("parent_task_id is required".to_string());
     }
@@ -164,8 +188,8 @@ pub fn compose_stark_proofs(
 
         let left_bind = child_stark_binding(left_child);
         let right_bind = child_stark_binding(right_child);
-        let left_pcs = pcs_for_child(left_child, context.parent_task_id)?;
-        let right_pcs = pcs_for_child(right_child, context.parent_task_id)?;
+        let left_pcs = pcs_for_child(left_child, context.parent_task_id, left_prebuilt_pcs)?;
+        let right_pcs = pcs_for_child(right_child, context.parent_task_id, right_prebuilt_pcs)?;
         log_child_pcs_sizes("left", &left_pcs);
         log_child_pcs_sizes("right", &right_pcs);
 
@@ -222,7 +246,11 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
 }
 
 #[cfg(feature = "plonky3-stark")]
-fn pcs_for_child(child: &[u8], _parent_task_id: &str) -> Result<ChildPcs, String> {
+fn pcs_for_child(
+    child: &[u8],
+    _parent_task_id: &str,
+    prebuilt_pcs: Option<&[u8]>,
+) -> Result<ChildPcs, String> {
     if let Some(agg) = child_aggregation_transcript(child) {
         let cert = cert_for_child_agg(agg)?;
         return Ok(ChildPcs {
@@ -232,10 +260,32 @@ fn pcs_for_child(child: &[u8], _parent_task_id: &str) -> Result<ChildPcs, String
         });
     }
 
+    if let Some(bytes) = prebuilt_pcs {
+        if !bytes.is_empty() {
+            let bundle = decode_leaf_pcs_bundle_bytes(bytes)
+                .ok_or_else(|| "prebuilt leaf PCS bundle decode failed".to_string())?;
+            verify_leaf_pcs_bundle(child, &bundle)
+                .map_err(|e| format!("prebuilt leaf PCS bundle verify failed: {e}"))?;
+            eprintln!(
+                "[Aggregation] using prebuilt leaf PCS bundle ({} bytes)",
+                bytes.len()
+            );
+            return Ok(ChildPcs {
+                kind: REC_KIND_LEAF,
+                agg_cert: None,
+                leaf_bundle: Some(bundle),
+            });
+        }
+    }
+
     if child_supports_leaf_pcs(child) {
         match build_leaf_pcs_bundle_from_child(child) {
             Ok(bundle) => match verify_leaf_pcs_bundle(child, &bundle) {
                 Ok(()) => {
+                    eprintln!(
+                        "[Aggregation] built leaf PCS bundle fallback (certs={})",
+                        bundle.certs.len()
+                    );
                     return Ok(ChildPcs {
                         kind: REC_KIND_LEAF,
                         agg_cert: None,
@@ -413,8 +463,8 @@ fn rebuild_rec_context<'a>(
 ) -> Result<RecursiveAggregationContext<'a>, String> {
     let left_bind = child_stark_binding(left_child);
     let right_bind = child_stark_binding(right_child);
-    let left_pcs = pcs_for_child(left_child, parent_task_id)?;
-    let right_pcs = pcs_for_child(right_child, parent_task_id)?;
+    let left_pcs = pcs_for_child(left_child, parent_task_id, None)?;
+    let right_pcs = pcs_for_child(right_child, parent_task_id, None)?;
     Ok(RecursiveAggregationContext {
         parent_task_id,
         compose_label,
@@ -681,5 +731,43 @@ mod integration_tests {
         )
         .unwrap_err();
         assert!(err.contains("verification failed"));
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    #[ignore = "slow; local only — not run in CI"]
+    fn compose_with_prebuilt_leaf_pcs_bundles() {
+        use crate::generate_plonky3_stark_proof;
+        use crate::plonky3_stark::build_encoded_leaf_pcs_bundle_from_child;
+
+        let left_ctx = leaf_context("sub-pre-l", "000");
+        let right_ctx = leaf_context("sub-pre-r", "001");
+        let left = generate_plonky3_stark_proof(&left_ctx, &sample_trace()).expect("left prove");
+        let right = generate_plonky3_stark_proof(&right_ctx, &sample_trace()).expect("right prove");
+        let left_pcs = build_encoded_leaf_pcs_bundle_from_child(&left).expect("left pcs");
+        let right_pcs = build_encoded_leaf_pcs_bundle_from_child(&right).expect("right pcs");
+
+        let root = compose_stark_proofs_with_pcs(
+            &ComposeContext {
+                parent_task_id: "parent-prebuilt",
+                compose_label: "root",
+                manifest_root_hash: "manifest-prebuilt",
+            },
+            &left,
+            &right,
+            Some(&left_ctx),
+            Some(&right_ctx),
+            Some(left_pcs.as_slice()),
+            Some(right_pcs.as_slice()),
+        )
+        .expect("compose with prebuilt pcs");
+
+        assert!(verify_root_proof(
+            &RootVerifyContext {
+                parent_task_id: "parent-prebuilt",
+                manifest_root_hash: "manifest-prebuilt",
+            },
+            &root,
+        ));
     }
 }

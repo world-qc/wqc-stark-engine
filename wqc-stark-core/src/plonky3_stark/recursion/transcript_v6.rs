@@ -1219,14 +1219,16 @@ fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, 
     ))
 }
 
-fn encode_leaf_bundle(out: &mut Vec<u8>, bundle: &LeafPcsBundle) {
+/// Encodes a leaf PCS bundle (cert count + certificates) into `out`.
+pub fn encode_leaf_bundle(out: &mut Vec<u8>, bundle: &LeafPcsBundle) {
     out.extend_from_slice(&(bundle.certs.len() as u32).to_le_bytes());
     for cert in &bundle.certs {
         encode_leaf_cert(out, cert);
     }
 }
 
-fn decode_leaf_bundle(proof: &[u8], offset: usize) -> Option<(LeafPcsBundle, usize)> {
+/// Decodes a leaf PCS bundle starting at `offset`.
+pub fn decode_leaf_bundle(proof: &[u8], offset: usize) -> Option<(LeafPcsBundle, usize)> {
     let (len, cursor) = read_u32_le(proof, offset)?;
     if len == 0 || len as usize > 64 {
         return None;
@@ -1239,6 +1241,22 @@ fn decode_leaf_bundle(proof: &[u8], offset: usize) -> Option<(LeafPcsBundle, usi
         cursor = next;
     }
     Some((LeafPcsBundle { certs }, cursor))
+}
+
+/// Serializes a standalone leaf PCS bundle (no surrounding RecAgg framing).
+pub fn encode_leaf_pcs_bundle_bytes(bundle: &LeafPcsBundle) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_leaf_bundle(&mut out, bundle);
+    out
+}
+
+/// Deserializes a standalone leaf PCS bundle produced by [`encode_leaf_pcs_bundle_bytes`].
+pub fn decode_leaf_pcs_bundle_bytes(bytes: &[u8]) -> Option<LeafPcsBundle> {
+    let (bundle, end) = decode_leaf_bundle(bytes, 0)?;
+    if end != bytes.len() {
+        return None;
+    }
+    Some(bundle)
 }
 
 const SIDE_NONE: u8 = 0;
