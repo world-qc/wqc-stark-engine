@@ -80,7 +80,8 @@ pub use fri_mmcs::verify_agg_fri_openings;
 pub use fri_mmcs_bind::{
     bind_fri_chal_mmcs_bundle, bind_fri_mmcs_bundle_to_proof, bind_fri_mmcs_bundle_to_proof_width,
     bind_fri_val_mmcs_bundle, fri_chal_mmcs_bundle_from_agg_proof, fri_mmcs_bundle_from_agg_proof,
-    fri_mmcs_bundle_from_proof, fri_val_mmcs_bundle_from_agg_proof, AggFriMmcsBundle,
+    fri_mmcs_bundle_from_agg_proof_drop_nested, fri_mmcs_bundle_from_proof,
+    fri_mmcs_bundle_from_proof_drop_nested, fri_val_mmcs_bundle_from_agg_proof, AggFriMmcsBundle,
     FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
 pub use fri_mmcs_group_m4b::{
@@ -89,8 +90,8 @@ pub use fri_mmcs_group_m4b::{
 };
 pub use fri_mmcs_m4c::{LeafMmcsFoldGroups, LEAF_MMCS_FOLD_V};
 pub use fri_mmcs_path::{
-    generate_fri_mmcs_path_proof, verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof,
-    FRI_MMCS_MAX_DEPTH,
+    generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
+    verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
 };
 pub use fri_mmcs_path_m4a::{
     generate_fri_mmcs_batched_path_proof, verify_fri_mmcs_batched_path_proof,

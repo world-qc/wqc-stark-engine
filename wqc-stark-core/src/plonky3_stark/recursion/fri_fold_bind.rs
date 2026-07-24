@@ -8,7 +8,10 @@ use p3_uni_stark::Proof;
 
 use crate::plonky3_stark::config::{Challenge, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES};
 
-use super::fri_fold_air::{generate_fri_fold_proof, generate_fri_fold_y_proof, FriFoldStepProof};
+use super::fri_fold_air::{
+    generate_fri_fold_proof, generate_fri_fold_y_proof, verify_fri_fold_proof,
+    verify_fri_fold_y_proof, FriFoldStepProof,
+};
 use super::fri_fold_native::{challenge_to_limbs, fold_x_row, fold_y_row};
 use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
 use super::fri_ro::reconstruct_query_ro;
@@ -92,13 +95,11 @@ pub fn fri_fold_bundle_from_proof(
             ));
         }
         for w in &y_wits {
-            fold_ys.push(generate_fri_fold_y_proof(
-                w.index,
-                w.log_folded_height,
-                w.beta,
-                w.v0,
-                w.v1,
-            )?);
+            let step = generate_fri_fold_y_proof(w.index, w.log_folded_height, w.beta, w.v0, w.v1)?;
+            if !verify_fri_fold_y_proof(&step) {
+                return Err(format!("fold_y self-check failed at query {q}"));
+            }
+            fold_ys.push(step);
         }
         let x_wits = extract_query_fold_chain_forward(
             qp,
@@ -111,13 +112,11 @@ pub fn fri_fold_bundle_from_proof(
             max_rounds,
         )?;
         for w in x_wits {
-            fold_xs.push(generate_fri_fold_proof(
-                w.index,
-                w.log_folded_height,
-                w.beta,
-                w.v0,
-                w.v1,
-            )?);
+            let step = generate_fri_fold_proof(w.index, w.log_folded_height, w.beta, w.v0, w.v1)?;
+            if !verify_fri_fold_proof(&step) {
+                return Err(format!("fold_x self-check failed at query {q}"));
+            }
+            fold_xs.push(step);
         }
     }
     Ok(AggFriFoldBundle { fold_ys, fold_xs })

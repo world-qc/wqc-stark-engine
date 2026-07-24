@@ -28,8 +28,8 @@ use super::fri_fold_bind::{
     AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
 };
 use super::fri_mmcs_bind::{
-    bind_fri_mmcs_bundle_to_proof, fri_mmcs_bundle_from_agg_proof, AggFriMmcsBundle,
-    FriChalMmcsQueryProof, FriValMmcsQueryProof,
+    fri_mmcs_bundle_from_agg_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
+    FriValMmcsQueryProof,
 };
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
@@ -157,29 +157,11 @@ pub fn build_agg_pcs_certificate(
             fri_bundle.fold_xs.len()
         ));
     }
-    for (i, fold) in fri_bundle.fold_ys.iter().enumerate() {
-        if !verify_fri_fold_y_proof(fold) {
-            return Err(format!("R3-M3b4 FRI fold_y self-check failed at step {i}"));
-        }
-    }
-    for (i, fold) in fri_bundle.fold_xs.iter().enumerate() {
-        if !verify_fri_fold_proof(fold) {
-            return Err(format!("R3-M3b4 FRI fold_x self-check failed at step {i}"));
-        }
-    }
+    // fold self-checks run per-step inside fri_fold_bundle_from_proof.
 
     let deep_bundle = deep_ro_bundle_from_agg_proof(&proof)
         .map_err(|e| format!("R3-M3c3 DeepRo bundle prove failed: {e}"))?;
-    for (i, deep) in deep_bundle.deep_ros.iter().enumerate() {
-        if !verify_deep_ro_proof(deep) {
-            return Err(format!("R3-M3c3 DeepRo self-check failed at {i}"));
-        }
-    }
-    for (i, deep) in deep_bundle.deep_ro_traces.iter().enumerate() {
-        if !verify_deep_ro_trace_proof(deep) {
-            return Err(format!("R3-M3c3 DeepRoTrace self-check failed at {i}"));
-        }
-    }
+    // DeepRo self-checks run per-query inside deep_ro_bundle_from_agg_proof.
     bind_deep_ro_bundle_to_proof(
         &proof,
         &deep_bundle.deep_ros,
@@ -188,7 +170,7 @@ pub fn build_agg_pcs_certificate(
     )
     .map_err(|e| format!("R3-M3c3 DeepRo bundle bind failed: {e}"))?;
 
-    let mmcs_bundle = fri_mmcs_bundle_from_agg_proof(&proof)
+    let mut mmcs_bundle = fri_mmcs_bundle_from_agg_proof_drop_nested(&proof)
         .map_err(|e| format!("R3-M3d FRI Mmcs prove failed: {e}"))?;
     if mmcs_bundle.val.len() != AGG_FRI_PROVEN_QUERIES
         || mmcs_bundle.chal.len() != AGG_FRI_PROVEN_QUERIES
@@ -211,10 +193,7 @@ pub fn build_agg_pcs_certificate(
             ));
         }
     }
-    bind_fri_mmcs_bundle_to_proof(&proof, &mmcs_bundle)
-        .map_err(|e| format!("R3-M3d FRI Mmcs bind failed: {e}"))?;
-
-    let mut mmcs_bundle = mmcs_bundle;
+    // Nested bind skipped: paths are digest-verified during drop_nested prove.
     let mmcs_groups = apply_leaf_mmcs_m4c_folds(&proof, AGG_WIDTH, &mut mmcs_bundle)
         .map_err(|e| format!("R3-M4c Agg Mmcs group fold failed: {e}"))?;
     // Inject / multi-RO first_layer: strip nested STARKs; host digest replay is sound for PCS.

@@ -15,7 +15,8 @@ use super::fri_fold_bind::LEAF_FRI_PROVEN_QUERIES;
 use super::fri_fold_native::{challenge_to_limbs, fold_x_row};
 use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
 use super::fri_mmcs_path::{
-    generate_fri_mmcs_path_proof, verify_fri_mmcs_path_proof, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
+    generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
+    verify_fri_mmcs_path_proof, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
 };
 use super::fri_ro::{decode_input_proof, reconstruct_query_ro};
 use super::keccak256_air::{
@@ -105,13 +106,55 @@ pub struct AggFriMmcsBundle {
     pub chal: Vec<FriChalMmcsQueryProof>,
 }
 
+fn clear_keccak_stark(k: &mut Keccak256StarkProof) {
+    k.stark.clear();
+    k.stark.shrink_to_fit();
+}
+
 /// Prove binary multi-matrix Mmcs path matching Plonky3 MerkleTreeMmcs (N=2, cap=0).
 fn generate_chal_batch_path(
+    opened_vals: &[Vec<Mersenne31>],
+    dimensions: &[Dimensions],
+    index: usize,
+    siblings: &[[u8; 32]],
+    expected_root: &[u8; 32],
+) -> Result<FriChalBatchPathProof, String> {
+    generate_chal_batch_path_inner(
+        opened_vals,
+        dimensions,
+        index,
+        siblings,
+        expected_root,
+        false,
+    )
+}
+
+/// Like [`generate_chal_batch_path`], but drops nested uni-STARK bytes after each
+/// Keccak step is verified (peak RAM ≈ one sponge STARK).
+fn generate_chal_batch_path_drop_nested(
+    opened_vals: &[Vec<Mersenne31>],
+    dimensions: &[Dimensions],
+    index: usize,
+    siblings: &[[u8; 32]],
+    expected_root: &[u8; 32],
+) -> Result<FriChalBatchPathProof, String> {
+    generate_chal_batch_path_inner(
+        opened_vals,
+        dimensions,
+        index,
+        siblings,
+        expected_root,
+        true,
+    )
+}
+
+fn generate_chal_batch_path_inner(
     opened_vals: &[Vec<Mersenne31>],
     dimensions: &[Dimensions],
     mut index: usize,
     siblings: &[[u8; 32]],
     expected_root: &[u8; 32],
+    drop_nested: bool,
 ) -> Result<FriChalBatchPathProof, String> {
     if dimensions.len() != opened_vals.len() || dimensions.is_empty() {
         return Err("batch shape mismatch".into());
@@ -142,9 +185,15 @@ fn generate_chal_batch_path(
         if opened_vals[i].len() != dimensions[i].width {
             return Err("opened width mismatch".into());
         }
-        let k = prove_val_leaf(&opened_vals[i])?;
+        let mut k = prove_val_leaf(&opened_vals[i])?;
         if k.digest != hash_val_leaf(&opened_vals[i]) {
             return Err("batch leaf digest mismatch".into());
+        }
+        if drop_nested {
+            if !verify_val_leaf_digest(&opened_vals[i], &k.digest, &k) {
+                return Err("batch leaf keccak self-check failed".into());
+            }
+            clear_keccak_stark(&mut k);
         }
         leaf_rows.push(opened_vals[i].clone());
         leaf_digests.push(k.digest);
@@ -178,9 +227,15 @@ fn generate_chal_batch_path(
     if at_leaf.len() == 1 {
         digest = leaf_digests[digest_of[at_leaf[0]]];
     } else {
-        let k = prove_val_leaf(&concat)?;
+        let mut k = prove_val_leaf(&concat)?;
         if k.digest != digest {
             return Err("multi-leaf hash mismatch".into());
+        }
+        if drop_nested {
+            if !verify_val_leaf_digest(&concat, &k.digest, &k) {
+                return Err("multi-leaf keccak self-check failed".into());
+            }
+            clear_keccak_stark(&mut k);
         }
         // Track as extra leaf (append).
         leaf_rows.push(concat);
@@ -208,9 +263,15 @@ fn generate_chal_batch_path(
         } else {
             (sib, digest)
         };
-        let c = prove_compress(left, right)?;
+        let mut c = prove_compress(left, right)?;
         if c.digest != keccak256_compress(left, right) {
             return Err("sib compress mismatch".into());
+        }
+        if drop_nested {
+            if !verify_compress_digest(left, right, &c.digest, &c) {
+                return Err("sib compress keccak self-check failed".into());
+            }
+            clear_keccak_stark(&mut c);
         }
         digest = c.digest;
         sib_layer_digests.push(digest);
@@ -233,18 +294,30 @@ fn generate_chal_batch_path(
             let inj_digest = if inject_idxs.len() == 1 {
                 leaf_digests[digest_of[inject_idxs[0]]]
             } else {
-                let k = prove_val_leaf(&inj_concat)?;
+                let mut k = prove_val_leaf(&inj_concat)?;
                 if k.digest != hash_val_leaf(&inj_concat) {
                     return Err("inject leaf mismatch".into());
+                }
+                if drop_nested {
+                    if !verify_val_leaf_digest(&inj_concat, &k.digest, &k) {
+                        return Err("inject leaf keccak self-check failed".into());
+                    }
+                    clear_keccak_stark(&mut k);
                 }
                 leaf_rows.push(inj_concat);
                 leaf_digests.push(k.digest);
                 leaf_keccs.push(k);
                 leaf_digests[leaf_digests.len() - 1]
             };
-            let c = prove_compress(digest, inj_digest)?;
+            let mut c = prove_compress(digest, inj_digest)?;
             if c.digest != keccak256_compress(digest, inj_digest) {
                 return Err("inject compress mismatch".into());
+            }
+            if drop_nested {
+                if !verify_compress_digest(digest, inj_digest, &c.digest, &c) {
+                    return Err("inject compress keccak self-check failed".into());
+                }
+                clear_keccak_stark(&mut c);
             }
             digest = c.digest;
             inject_digests.push(digest);
@@ -560,6 +633,34 @@ pub fn fri_val_mmcs_bundle_from_proof(
     proof: &Proof<WqcStarkConfig>,
     trace_width: usize,
 ) -> Result<Vec<FriValMmcsQueryProof>, String> {
+    fri_val_mmcs_bundle_from_proof_inner(proof, trace_width, false)
+}
+
+/// Prove ValMmcs openings while dropping nested Keccak STARKs after each path
+/// self-check. Peak RAM stays near one path instead of 40×depth×STARKs.
+/// Intended for PCS builds that immediately apply M4c group folds.
+pub fn fri_val_mmcs_bundle_from_proof_drop_nested(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+) -> Result<Vec<FriValMmcsQueryProof>, String> {
+    fri_val_mmcs_bundle_from_proof_inner(proof, trace_width, true)
+}
+
+fn fri_val_mmcs_bundle_from_proof_inner(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+    drop_nested: bool,
+) -> Result<Vec<FriValMmcsQueryProof>, String> {
+    let gen_path = if drop_nested {
+        generate_fri_mmcs_path_proof_drop_nested
+    } else {
+        generate_fri_mmcs_path_proof
+    };
+    let gen_batch = if drop_nested {
+        generate_chal_batch_path_drop_nested
+    } else {
+        generate_chal_batch_path
+    };
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let config = devnet_circle_config();
@@ -604,9 +705,8 @@ pub fn fri_val_mmcs_bundle_from_proof(
             return Err(format!("q{q}: quot matrix count"));
         }
         let t_idx = query_index >> (log_global_max_height - trace_log_height);
-        let trace_path =
-            generate_fri_mmcs_path_proof(trace_row, &trace_open.opening_proof, t_idx, &trace_root)
-                .map_err(|e| format!("q{q} trace path: {e}"))?;
+        let trace_path = gen_path(trace_row, &trace_open.opening_proof, t_idx, &trace_root)
+            .map_err(|e| format!("q{q} trace path: {e}"))?;
 
         let (quot_index, quot_path, quot_batch) = if num_quot == 1 {
             let quot_h = quot_chunk_domains[0].size() << log_blowup;
@@ -616,9 +716,8 @@ pub fn fri_val_mmcs_bundle_from_proof(
                 return Err(format!("q{q}: quot width"));
             }
             let q_idx = query_index >> (log_global_max_height - quot_log_height);
-            let path =
-                generate_fri_mmcs_path_proof(quot_row, &quot_open.opening_proof, q_idx, &quot_root)
-                    .map_err(|e| format!("q{q} quot path: {e}"))?;
+            let path = gen_path(quot_row, &quot_open.opening_proof, q_idx, &quot_root)
+                .map_err(|e| format!("q{q} quot path: {e}"))?;
             (q_idx as u32, path, None)
         } else {
             let mut max_log = 0usize;
@@ -634,7 +733,7 @@ pub fn fri_val_mmcs_bundle_from_proof(
                 })
                 .collect();
             let q_idx = query_index >> (log_global_max_height - max_log);
-            let batch = generate_chal_batch_path(
+            let batch = gen_batch(
                 &quot_open.opened_values,
                 &fl_dims,
                 q_idx,
@@ -647,7 +746,7 @@ pub fn fri_val_mmcs_bundle_from_proof(
             let leaf = hash_val_leaf(row0);
             let sib = [0u8; 32];
             let synth_root = keccak256_compress(leaf, sib);
-            let path = generate_fri_mmcs_path_proof(row0, &[sib], 0, &synth_root)
+            let path = gen_path(row0, &[sib], 0, &synth_root)
                 .map_err(|e| format!("q{q} quot stub path: {e}"))?;
             (q_idx as u32, path, Some(batch))
         };
@@ -790,6 +889,33 @@ pub fn fri_chal_mmcs_bundle_from_proof(
     proof: &Proof<WqcStarkConfig>,
     trace_width: usize,
 ) -> Result<Vec<FriChalMmcsQueryProof>, String> {
+    fri_chal_mmcs_bundle_from_proof_inner(proof, trace_width, false)
+}
+
+/// Prove ChallengeMmcs openings while dropping nested Keccak STARKs after each
+/// self-check (see [`fri_val_mmcs_bundle_from_proof_drop_nested`]).
+pub fn fri_chal_mmcs_bundle_from_proof_drop_nested(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+) -> Result<Vec<FriChalMmcsQueryProof>, String> {
+    fri_chal_mmcs_bundle_from_proof_inner(proof, trace_width, true)
+}
+
+fn fri_chal_mmcs_bundle_from_proof_inner(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+    drop_nested: bool,
+) -> Result<Vec<FriChalMmcsQueryProof>, String> {
+    let gen_path = if drop_nested {
+        generate_fri_mmcs_path_proof_drop_nested
+    } else {
+        generate_fri_mmcs_path_proof
+    };
+    let gen_batch = if drop_nested {
+        generate_chal_batch_path_drop_nested
+    } else {
+        generate_chal_batch_path
+    };
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
     let config = devnet_circle_config();
@@ -818,7 +944,7 @@ pub fn fri_chal_mmcs_bundle_from_proof(
                 height: 1 << w.log_folded_height,
             })
             .collect();
-        let first_layer = generate_chal_batch_path(
+        let first_layer = gen_batch(
             &fl_opened,
             &fl_dims_flat,
             query_index >> 1,
@@ -855,7 +981,7 @@ pub fn fri_chal_mmcs_bundle_from_proof(
             index >>= 1;
             let row = flatten_challenge_row(&evals);
             let root = commitment_root_chal(&commits[round])?;
-            let path = generate_fri_mmcs_path_proof(&row, &opening.opening_proof, index, &root)
+            let path = gen_path(&row, &opening.opening_proof, index, &root)
                 .map_err(|e| format!("q{q} commit {round}: {e}"))?;
             commit_indices.push(index as u32);
             commit_siblings.push(opening.opening_proof.clone());
@@ -991,10 +1117,29 @@ pub fn fri_mmcs_bundle_from_proof(
     })
 }
 
+/// Query-streaming Mmcs prove: drop nested Keccak STARKs after each path
+/// self-check. Use with `apply_leaf_mmcs_m4c_folds` + group bind (skip full
+/// nested `bind_fri_mmcs_bundle_to_proof_width` beforehand).
+pub fn fri_mmcs_bundle_from_proof_drop_nested(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+) -> Result<AggFriMmcsBundle, String> {
+    Ok(AggFriMmcsBundle {
+        val: fri_val_mmcs_bundle_from_proof_drop_nested(proof, trace_width)?,
+        chal: fri_chal_mmcs_bundle_from_proof_drop_nested(proof, trace_width)?,
+    })
+}
+
 pub fn fri_mmcs_bundle_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
 ) -> Result<AggFriMmcsBundle, String> {
     fri_mmcs_bundle_from_proof(proof, AGG_WIDTH)
+}
+
+pub fn fri_mmcs_bundle_from_agg_proof_drop_nested(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<AggFriMmcsBundle, String> {
+    fri_mmcs_bundle_from_proof_drop_nested(proof, AGG_WIDTH)
 }
 
 pub fn bind_fri_mmcs_bundle_to_proof_width(

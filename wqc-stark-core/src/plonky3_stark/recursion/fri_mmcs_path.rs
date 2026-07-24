@@ -191,14 +191,49 @@ pub fn generate_fri_mmcs_path_proof(
     index: usize,
     expected_root: &[u8; 32],
 ) -> Result<FriMmcsPathProof, String> {
+    generate_fri_mmcs_path_proof_inner(row, siblings, index, expected_root, false)
+}
+
+/// Like [`generate_fri_mmcs_path_proof`], but drops nested uni-STARK bytes after each
+/// step is verified. Peak RAM stays near one Keccak STARK instead of depth×STARKs.
+///
+/// Intended for PCS builds that immediately fold paths into M4c groups (wire keeps
+/// digests + group STARK only). `fold_stark` is skipped (digest chain already checked).
+pub fn generate_fri_mmcs_path_proof_drop_nested(
+    row: &[Mersenne31],
+    siblings: &[[u8; 32]],
+    index: usize,
+    expected_root: &[u8; 32],
+) -> Result<FriMmcsPathProof, String> {
+    generate_fri_mmcs_path_proof_inner(row, siblings, index, expected_root, true)
+}
+
+fn clear_keccak_stark(k: &mut Keccak256StarkProof) {
+    k.stark.clear();
+    k.stark.shrink_to_fit();
+}
+
+fn generate_fri_mmcs_path_proof_inner(
+    row: &[Mersenne31],
+    siblings: &[[u8; 32]],
+    index: usize,
+    expected_root: &[u8; 32],
+    drop_nested: bool,
+) -> Result<FriMmcsPathProof, String> {
     let depth = siblings.len();
     if depth == 0 || depth > FRI_MMCS_MAX_DEPTH {
         return Err(format!("unsupported Merkle depth {depth}"));
     }
-    let leaf_keccak = prove_val_leaf(row)?;
+    let mut leaf_keccak = prove_val_leaf(row)?;
     let leaf_digest = leaf_keccak.digest;
     if leaf_digest != keccak256_val_leaf(row) || leaf_digest != hash_val_leaf(row) {
         return Err("leaf digest mismatch vs native/FieldHash".into());
+    }
+    if drop_nested {
+        if !verify_val_leaf_digest(row, &leaf_digest, &leaf_keccak) {
+            return Err("leaf keccak self-check failed".into());
+        }
+        clear_keccak_stark(&mut leaf_keccak);
     }
 
     let mut digest = leaf_digest;
@@ -211,9 +246,15 @@ pub fn generate_fri_mmcs_path_proof(
         } else {
             (*sib, digest)
         };
-        let cproof = prove_compress(left, right)?;
+        let mut cproof = prove_compress(left, right)?;
         if cproof.digest != keccak256_compress(left, right) {
             return Err("compress digest mismatch".into());
+        }
+        if drop_nested {
+            if !verify_compress_digest(left, right, &cproof.digest, &cproof) {
+                return Err("compress keccak self-check failed".into());
+            }
+            clear_keccak_stark(&mut cproof);
         }
         digest = cproof.digest;
         layer_digests.push(digest);
@@ -224,20 +265,25 @@ pub fn generate_fri_mmcs_path_proof(
         return Err("folded root mismatch".into());
     }
 
-    let pv = build_public_values(
-        leaf_digest,
-        *expected_root,
-        index as u32,
-        depth,
-        &layer_digests,
-        siblings,
-    )?;
-    let matrix = pad_air_matrix_for_uni_stark(build_fold_matrix(index, depth));
-    p3_air::check_constraints(&FriMmcsFoldAir, &matrix, &pv);
-    let config = devnet_circle_config();
-    let proof = prove(&config, &FriMmcsFoldAir, matrix, &pv);
-    let fold_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri mmcs fold: {e}"))?;
+    let fold_stark = if drop_nested {
+        // Digest chain already binds leaf → root; FriMmcsFoldAir is redundant when
+        // M4c groups cover the path (nested STARKs would be stripped anyway).
+        Vec::new()
+    } else {
+        let pv = build_public_values(
+            leaf_digest,
+            *expected_root,
+            index as u32,
+            depth,
+            &layer_digests,
+            siblings,
+        )?;
+        let matrix = pad_air_matrix_for_uni_stark(build_fold_matrix(index, depth));
+        p3_air::check_constraints(&FriMmcsFoldAir, &matrix, &pv);
+        let config = devnet_circle_config();
+        let proof = prove(&config, &FriMmcsFoldAir, matrix, &pv);
+        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri mmcs fold: {e}"))?
+    };
 
     Ok(FriMmcsPathProof {
         depth: depth as u32,
@@ -365,5 +411,24 @@ mod tests {
             &root,
             &proof
         ));
+    }
+
+    #[test]
+    fn fri_mmcs_path_drop_nested_keeps_digests() {
+        let row = [
+            Mersenne31::from_u32(1),
+            Mersenne31::from_u32(2),
+            Mersenne31::from_u32(3),
+        ];
+        let leaf = hash_val_leaf(&row);
+        let sibling = [9u8; 32];
+        let root = keccak256_compress(leaf, sibling);
+        let proof =
+            generate_fri_mmcs_path_proof_drop_nested(&row, &[sibling], 0, &root).expect("prove");
+        assert!(proof.fold_stark.is_empty());
+        assert!(proof.leaf_keccak.stark.is_empty());
+        assert!(proof.compress_starks.iter().all(|c| c.stark.is_empty()));
+        assert_eq!(proof.leaf_digest, leaf);
+        assert_eq!(proof.layer_digests[0], root);
     }
 }

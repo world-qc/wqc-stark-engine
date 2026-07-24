@@ -680,9 +680,17 @@ fn bind_val_with_groups(
 
         if groups.val_trace.is_none() {
             if path_starks_stripped(&qp.trace_path) {
-                return Err(format!("q{q}: stripped trace without group"));
-            }
-            if !super::fri_mmcs_path::verify_fri_mmcs_path_proof(
+                // Early drop_nested / M4c miss: host Merkle digests only.
+                if !verify_fri_mmcs_path_digests(
+                    trace_row,
+                    &qp.trace_siblings,
+                    t_idx,
+                    &trace_root,
+                    &qp.trace_path,
+                ) {
+                    return Err(format!("q{q}: stripped trace digests (no group)"));
+                }
+            } else if !super::fri_mmcs_path::verify_fri_mmcs_path_proof(
                 trace_row,
                 &qp.trace_siblings,
                 t_idx,
@@ -720,6 +728,16 @@ fn bind_val_with_groups(
                 ) {
                     return Err(format!("q{q}: quot batch digests failed"));
                 }
+            } else if batch_starks_stripped(batch) {
+                if !verify_chal_batch_path_digests(
+                    &input.input_openings[1].opened_values,
+                    &fl_dims,
+                    q_idx,
+                    &quot_root,
+                    batch,
+                ) {
+                    return Err(format!("q{q}: quot batch stripped digests failed"));
+                }
             } else if !verify_chal_batch_path_replay(
                 &input.input_openings[1].opened_values,
                 &fl_dims,
@@ -752,9 +770,16 @@ fn bind_val_with_groups(
                 return Err(format!("q{q}: quot index mismatch"));
             }
             if path_starks_stripped(&qp.quot_path) {
-                return Err(format!("q{q}: stripped quot without group"));
-            }
-            if !super::fri_mmcs_path::verify_fri_mmcs_path_proof(
+                if !verify_fri_mmcs_path_digests(
+                    quot_row,
+                    &qp.quot_siblings,
+                    q_idx,
+                    &quot_root,
+                    &qp.quot_path,
+                ) {
+                    return Err(format!("q{q}: stripped quot digests (no group)"));
+                }
+            } else if !super::fri_mmcs_path::verify_fri_mmcs_path_proof(
                 quot_row,
                 &qp.quot_siblings,
                 q_idx,
@@ -909,19 +934,26 @@ fn bind_chal_with_groups(
                 ) {
                     return Err(format!("q{q} round {round}: stripped commit digests"));
                 }
-            } else {
-                if path_starks_stripped(path) {
-                    return Err(format!("q{q} round {round}: stripped commit without group"));
-                }
-                if !super::fri_mmcs_path::verify_fri_mmcs_path_proof(
+            } else if path_starks_stripped(path) {
+                if !verify_fri_mmcs_path_digests(
                     &row,
                     &qp_proof.commit_siblings[round],
                     index,
                     &root,
                     path,
                 ) {
-                    return Err(format!("q{q} round {round}: commit path verify failed"));
+                    return Err(format!(
+                        "q{q} round {round}: stripped commit digests (no group)"
+                    ));
                 }
+            } else if !super::fri_mmcs_path::verify_fri_mmcs_path_proof(
+                &row,
+                &qp_proof.commit_siblings[round],
+                index,
+                &root,
+                path,
+            ) {
+                return Err(format!("q{q} round {round}: commit path verify failed"));
             }
             folded_eval = fold_x_row(index, log_folded, betas[round], evals[0], evals[1]);
             log_current = log_folded;

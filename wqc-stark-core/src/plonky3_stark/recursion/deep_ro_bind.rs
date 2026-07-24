@@ -495,14 +495,18 @@ pub fn deep_ro_bundle_from_agg_proof(
     let mut deep_ros = Vec::with_capacity(AGG_FRI_PROVEN_QUERIES);
     let mut deep_ro_traces = Vec::with_capacity(AGG_FRI_PROVEN_QUERIES);
     for q in 0..AGG_FRI_PROVEN_QUERIES {
-        deep_ros.push(
-            deep_ro_quot_from_agg_proof(proof, q)
-                .map_err(|e| format!("DeepRo quot query {q}: {e}"))?,
-        );
-        deep_ro_traces.push(
-            deep_ro_trace_from_agg_proof(proof, q)
-                .map_err(|e| format!("DeepRoTrace query {q}: {e}"))?,
-        );
+        let deep = deep_ro_quot_from_agg_proof(proof, q)
+            .map_err(|e| format!("DeepRo quot query {q}: {e}"))?;
+        if !verify_deep_ro_proof(&deep) {
+            return Err(format!("DeepRo self-check failed at query {q}"));
+        }
+        deep_ros.push(deep);
+        let deep_tr = deep_ro_trace_from_agg_proof(proof, q)
+            .map_err(|e| format!("DeepRoTrace query {q}: {e}"))?;
+        if !verify_deep_ro_trace_proof(&deep_tr) {
+            return Err(format!("DeepRoTrace self-check failed at query {q}"));
+        }
+        deep_ro_traces.push(deep_tr);
     }
     Ok(AggDeepRoBundle {
         deep_ros,
@@ -979,14 +983,18 @@ pub fn deep_ro_bundle_from_leaf_proof(
     let mut deep_ros = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
     let mut deep_ro_traces = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
     for q in 0..LEAF_FRI_PROVEN_QUERIES {
-        deep_ros.push(
-            deep_ro_quot_from_proof(proof, q, trace_width)
-                .map_err(|e| format!("DeepRo quot query {q}: {e}"))?,
-        );
-        deep_ro_traces.push(
-            deep_ro_leaf_trace_from_proof(proof, q, trace_width)
-                .map_err(|e| format!("DeepRoLeafTrace query {q}: {e}"))?,
-        );
+        let deep = deep_ro_quot_from_proof(proof, q, trace_width)
+            .map_err(|e| format!("DeepRo quot query {q}: {e}"))?;
+        if !verify_deep_ro_proof(&deep) {
+            return Err(format!("DeepRo self-check failed at query {q}"));
+        }
+        deep_ros.push(deep);
+        let deep_tr = deep_ro_leaf_trace_from_proof(proof, q, trace_width)
+            .map_err(|e| format!("DeepRoLeafTrace query {q}: {e}"))?;
+        if !verify_deep_ro_leaf_trace_proof(&deep_tr) {
+            return Err(format!("DeepRoLeafTrace self-check failed at query {q}"));
+        }
+        deep_ro_traces.push(deep_tr);
     }
     Ok(LeafDeepRoBundle {
         deep_ros,

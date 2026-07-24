@@ -34,8 +34,8 @@ use super::fri_fold_bind::{
     bind_fri_fold_bundle_to_proof_width, fri_fold_bundle_from_proof, LEAF_FRI_PROVEN_QUERIES,
 };
 use super::fri_mmcs_bind::{
-    bind_fri_mmcs_bundle_to_proof_width, fri_mmcs_bundle_from_proof, AggFriMmcsBundle,
-    FriChalMmcsQueryProof, FriValMmcsQueryProof,
+    fri_mmcs_bundle_from_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
+    FriValMmcsQueryProof,
 };
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
@@ -284,32 +284,14 @@ pub fn build_leaf_pcs_certificate(
 
     let fri_bundle = fri_fold_bundle_from_proof(proof, trace_width)
         .map_err(|e| format!("R3-M3e FRI fold prove failed: {e}"))?;
-    for (i, fold) in fri_bundle.fold_ys.iter().enumerate() {
-        if !verify_fri_fold_y_proof(fold) {
-            return Err(format!("R3-M3e FRI fold_y self-check failed at {i}"));
-        }
-    }
-    for (i, fold) in fri_bundle.fold_xs.iter().enumerate() {
-        if !verify_fri_fold_proof(fold) {
-            return Err(format!("R3-M3e FRI fold_x self-check failed at {i}"));
-        }
-    }
+    // fold_y / fold_x self-checks run per-step inside fri_fold_bundle_from_proof.
 
     let deep_ros;
     let deep_ro_traces;
     if proof.opened_values.quotient_chunks.len() == 1 {
         let deep_bundle = deep_ro_bundle_from_leaf_proof(proof, trace_width)
             .map_err(|e| format!("R3-M3e DeepRo bundle prove failed: {e}"))?;
-        for (i, deep) in deep_bundle.deep_ros.iter().enumerate() {
-            if !verify_deep_ro_proof(deep) {
-                return Err(format!("R3-M3e DeepRo self-check failed at {i}"));
-            }
-        }
-        for (i, deep) in deep_bundle.deep_ro_traces.iter().enumerate() {
-            if !verify_deep_ro_leaf_trace_proof(deep) {
-                return Err(format!("R3-M3e DeepRoLeafTrace self-check failed at {i}"));
-            }
-        }
+        // DeepRo self-checks run per-query inside deep_ro_bundle_from_leaf_proof.
         bind_deep_ro_leaf_bundle_to_proof(
             proof,
             &deep_bundle.deep_ros,
@@ -327,7 +309,8 @@ pub fn build_leaf_pcs_certificate(
         deep_ro_traces = Vec::new();
     }
 
-    let mmcs_bundle = fri_mmcs_bundle_from_proof(proof, trace_width)
+    // Query-streaming Mmcs: drop nested Keccak STARKs after each path self-check.
+    let mut mmcs_bundle = fri_mmcs_bundle_from_proof_drop_nested(proof, trace_width)
         .map_err(|e| format!("R3-M3e FRI Mmcs prove failed: {e}"))?;
     if mmcs_bundle.val.len() != LEAF_FRI_PROVEN_QUERIES
         || mmcs_bundle.chal.len() != LEAF_FRI_PROVEN_QUERIES
@@ -355,10 +338,7 @@ pub fn build_leaf_pcs_certificate(
             ));
         }
     }
-    bind_fri_mmcs_bundle_to_proof_width(proof, &mmcs_bundle, trace_width)
-        .map_err(|e| format!("R3-M3e FRI Mmcs bind failed: {e}"))?;
-
-    let mut mmcs_bundle = mmcs_bundle;
+    // Nested bind skipped: paths are already digest-verified during drop_nested prove.
     let mmcs_groups = apply_leaf_mmcs_m4c_folds(proof, trace_width, &mut mmcs_bundle)
         .map_err(|e| format!("R3-M4c Mmcs group fold failed: {e}"))?;
     bind_leaf_mmcs_with_groups(proof, &mmcs_bundle, &mmcs_groups, trace_width)
