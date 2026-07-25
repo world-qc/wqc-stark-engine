@@ -43,9 +43,10 @@ pub use recursion::{
     build_leaf_pcs_bundle_from_child, child_aggregation_transcript, child_stark_binding,
     decode_leaf_pcs_bundle_bytes, encode_leaf_pcs_bundle_bytes,
     generate_recursive_aggregation_proof, has_rec_tail, leaf_bundle_stark_sizes,
-    parse_agg_v4_header, parse_agg_v4_header_any, split_rec_tail, verify_agg_pcs_certificate,
-    verify_leaf_pcs_bundle, verify_recursive_aggregation_proof, AggPcsCertificate, LeafPcsBundle,
-    RecursiveAggregationContext, REC_KIND_AGG, REC_KIND_LEAF,
+    parse_agg_v4_header, parse_agg_v4_header_any, parse_rec_agg_sides_v6, split_rec_tail,
+    verify_agg_pcs_certificate, verify_leaf_pcs_bundle, verify_recursive_aggregation_proof,
+    AggPcsCertificate, LeafPcsBundle, RecAggSidesV6, RecursiveAggregationContext, REC_KIND_AGG,
+    REC_KIND_LEAF,
 };
 #[cfg(feature = "plonky3-stark")]
 pub use trajectory_stark::{

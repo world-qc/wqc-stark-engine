@@ -146,7 +146,8 @@ pub use prove::{
 pub use transcript_v5::{V5_REC_AGG_INNER_MARKER, V5_REC_TAIL_MARKER};
 pub use transcript_v6::{
     decode_leaf_bundle, decode_leaf_pcs_bundle_bytes, encode_leaf_bundle,
-    encode_leaf_pcs_bundle_bytes, V6_REC_AGG_INNER_MARKER, V6_REC_TAIL_MARKER,
+    encode_leaf_pcs_bundle_bytes, parse_rec_agg_sides_v6, RecAggSidesV6, V6_REC_AGG_INNER_MARKER,
+    V6_REC_TAIL_MARKER,
 };
 #[cfg(test)]
 pub use transcript_v6::{decode_rec_agg_proof_owned_v6, diagnose_decode_rec_agg_v6};

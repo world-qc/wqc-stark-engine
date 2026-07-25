@@ -19,7 +19,7 @@ use crate::distribution::{
 use crate::transcript::StarkContext;
 
 #[cfg(feature = "plonky3-stark")]
-use crate::aggregation::recursive_context_for_children;
+use crate::aggregation::recursive_context_for_children_with_proof;
 use crate::plonky3_stark::{
     append_born_stark_tail, has_born_stark_tail, segment_supports_born_zk, split_agg_tail,
     split_born_stark_tail, split_rec_tail, verify_aggregation_proof, verify_born_stark_proof,
@@ -334,7 +334,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
     #[cfg(feature = "plonky3-stark")]
     {
         if let Some((_, rec_bytes)) = split_rec_tail(proof) {
-            let rec_ctx = match recursive_context_for_children(
+            let rec_ctx = match recursive_context_for_children_with_proof(
                 context.sub_task_id,
                 UNITARY_BORN_COMPOSE_LABEL,
                 "",
@@ -342,6 +342,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
                 header.right_child_hash,
                 left_child,
                 right_child,
+                rec_bytes,
             ) {
                 Ok(ctx) => ctx,
                 Err(e) => {
@@ -453,7 +454,7 @@ mod tests {
         let (_, rec_bytes) = split_rec_tail(&composed).expect("rec tail");
         let v3 = compose_v3_body(&composed);
         let (header, left_child, right_child) = decode_compose_v3_slices(v3).expect("v3 slices");
-        let rec_ctx = recursive_context_for_children(
+        let rec_ctx = recursive_context_for_children_with_proof(
             ctx.sub_task_id,
             UNITARY_BORN_COMPOSE_LABEL,
             "",
@@ -461,6 +462,7 @@ mod tests {
             header.right_child_hash,
             left_child,
             right_child,
+            rec_bytes,
         )
         .expect("rec ctx");
         if decode_rec_agg_proof_owned_v6(rec_bytes, &rec_ctx).is_none() {

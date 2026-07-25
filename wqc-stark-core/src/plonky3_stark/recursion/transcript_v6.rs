@@ -1530,6 +1530,87 @@ pub fn encode_rec_agg_proof_v6(
     out
 }
 
+/// Parsed RecAgg V6 header + side PCS payloads (before matching an expected context).
+///
+/// Verify paths use this to reuse the leaf/agg PCS already encoded in the proof
+/// instead of re-proving them from the child STARKs.
+#[derive(Debug, Clone)]
+pub struct RecAggSidesV6 {
+    pub parent_task_id: String,
+    pub compose_label: String,
+    pub manifest_root_hash: String,
+    pub left_child_hash: [u8; CHILD_HASH_LEN],
+    pub right_child_hash: [u8; CHILD_HASH_LEN],
+    pub left_stark_digest: [u8; STARK_DIGEST_LEN],
+    pub right_stark_digest: [u8; STARK_DIGEST_LEN],
+    pub left_kind: u8,
+    pub right_kind: u8,
+    pub left_agg_cert: Option<AggPcsCertificate>,
+    pub right_agg_cert: Option<AggPcsCertificate>,
+    pub left_leaf_bundle: Option<LeafPcsBundle>,
+    pub right_leaf_bundle: Option<LeafPcsBundle>,
+}
+
+/// Decode RecAgg V6 sides without requiring a pre-built expected context.
+pub fn parse_rec_agg_sides_v6(proof: &[u8]) -> Option<RecAggSidesV6> {
+    let marker_pos = locate_inner_marker(proof)?;
+    let parent_end = marker_pos.saturating_sub(1);
+    let parent_task_id = std::str::from_utf8(&proof[..parent_end]).ok()?.to_string();
+
+    let cursor = marker_pos + V6_REC_AGG_INNER_MARKER.len();
+    let (compose_label, cursor) = read_cstr(proof, cursor)?;
+    let (manifest_root_hash, cursor) = read_cstr(proof, cursor)?;
+    let (left_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor)?;
+    let (right_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor)?;
+    let (left_stark, cursor) = read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor)?;
+    let (right_stark, cursor) = read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor)?;
+    let left_kind = *proof.get(cursor)?;
+    let right_kind = *proof.get(cursor + 1)?;
+    let cursor = cursor + 2;
+    let (left_cert, left_leaf, cursor) = decode_side(proof, cursor)?;
+    let (right_cert, right_leaf, cursor) = decode_side(proof, cursor)?;
+
+    // Ensure the trailing Plonky3 payload is well-formed even though callers may
+    // ignore it (they re-decode via [`decode_rec_agg_proof_owned_v6`]).
+    let (len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + len as usize;
+    let _ = proof.get(cursor..end)?;
+    if end != proof.len() {
+        return None;
+    }
+    if left_kind > REC_KIND_AGG || right_kind > REC_KIND_AGG {
+        return None;
+    }
+    if left_kind == REC_KIND_LEAF && left_cert.is_some() {
+        return None;
+    }
+    if right_kind == REC_KIND_LEAF && right_cert.is_some() {
+        return None;
+    }
+    if left_kind == REC_KIND_AGG && (left_cert.is_none() || left_leaf.is_some()) {
+        return None;
+    }
+    if right_kind == REC_KIND_AGG && (right_cert.is_none() || right_leaf.is_some()) {
+        return None;
+    }
+
+    Some(RecAggSidesV6 {
+        parent_task_id,
+        compose_label: compose_label.to_string(),
+        manifest_root_hash: manifest_root_hash.to_string(),
+        left_child_hash: left_hash,
+        right_child_hash: right_hash,
+        left_stark_digest: left_stark,
+        right_stark_digest: right_stark,
+        left_kind,
+        right_kind,
+        left_agg_cert: left_cert,
+        right_agg_cert: right_cert,
+        left_leaf_bundle: left_leaf,
+        right_leaf_bundle: right_leaf,
+    })
+}
+
 pub fn decode_rec_agg_proof_owned_v6(
     proof: &[u8],
     expected: &RecursiveAggregationContext<'_>,
@@ -1746,6 +1827,36 @@ mod tests {
     use crate::plonky3_stark::recursion::build_leaf_pcs_bundle_from_child;
     use crate::trace_spec::idle_qubit0_trace;
     use crate::transcript::StarkContext;
+
+    #[test]
+    fn parse_rec_agg_sides_v6_roundtrip_none_sides() {
+        let ctx = RecursiveAggregationContext {
+            parent_task_id: "parent-parse",
+            compose_label: "root",
+            manifest_root_hash: "manifest",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            left_stark_digest: [3u8; STARK_DIGEST_LEN],
+            right_stark_digest: [4u8; STARK_DIGEST_LEN],
+            left_kind: REC_KIND_LEAF,
+            right_kind: REC_KIND_LEAF,
+            left_agg_cert: None,
+            right_agg_cert: None,
+            left_leaf_bundle: None,
+            right_leaf_bundle: None,
+        };
+        let encoded = encode_rec_agg_proof_v6(&ctx, b"plonky3-bytes");
+        let sides = parse_rec_agg_sides_v6(&encoded).expect("parse sides");
+        assert_eq!(sides.parent_task_id, "parent-parse");
+        assert_eq!(sides.compose_label, "root");
+        assert_eq!(sides.manifest_root_hash, "manifest");
+        assert_eq!(sides.left_child_hash, [1u8; CHILD_HASH_LEN]);
+        assert_eq!(sides.right_child_hash, [2u8; CHILD_HASH_LEN]);
+        assert_eq!(sides.left_kind, REC_KIND_LEAF);
+        assert_eq!(sides.right_kind, REC_KIND_LEAF);
+        assert!(sides.left_leaf_bundle.is_none());
+        assert!(sides.right_leaf_bundle.is_none());
+    }
 
     #[test]
     fn rec_tail_v6_roundtrip() {
