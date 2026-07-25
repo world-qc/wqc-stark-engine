@@ -566,56 +566,52 @@ fn decode_keccak_group_fold(proof: &[u8], offset: usize) -> Option<(KeccakGroupF
     ))
 }
 
-fn encode_opt_group(out: &mut Vec<u8>, g: &Option<KeccakGroupFoldProof>) {
-    match g {
-        Some(g) => {
-            out.push(1);
-            encode_keccak_group_fold(out, g);
-        }
-        None => out.push(0),
-    }
-}
+/// Upper bound on chunked group STARKs per single-height category (v3).
+/// Each chunk has `path_count >= 1`, and a category folds at most
+/// `LEAF_FRI_PROVEN_QUERIES` paths (one per proven FRI query).
+const MAX_GROUPS_SINGLE: usize = LEAF_FRI_PROVEN_QUERIES;
+/// Upper bound for the depth-keyed commit category (up to one group set per depth).
+const MAX_GROUPS_COMMIT: usize = FRI_MMCS_MAX_DEPTH * LEAF_FRI_PROVEN_QUERIES;
 
-fn decode_opt_group(proof: &[u8], offset: usize) -> Option<(Option<KeccakGroupFoldProof>, usize)> {
-    let flag = *proof.get(offset)?;
-    let cursor = offset + 1;
-    match flag {
-        0 => Some((None, cursor)),
-        1 => {
-            let (g, cursor) = decode_keccak_group_fold(proof, cursor)?;
-            Some((Some(g), cursor))
-        }
-        _ => None,
-    }
-}
-
-fn encode_mmcs_groups(out: &mut Vec<u8>, groups: &LeafMmcsFoldGroups) {
-    encode_opt_group(out, &groups.val_trace);
-    encode_opt_group(out, &groups.val_quot);
-    encode_opt_group(out, &groups.val_quot_batch);
-    encode_opt_group(out, &groups.chal_first_layer);
-    out.extend_from_slice(&(groups.chal_commit.len() as u32).to_le_bytes());
-    for g in &groups.chal_commit {
+fn encode_group_vec(out: &mut Vec<u8>, groups: &[KeccakGroupFoldProof]) {
+    out.extend_from_slice(&(groups.len() as u32).to_le_bytes());
+    for g in groups {
         encode_keccak_group_fold(out, g);
     }
 }
 
-fn decode_mmcs_groups(proof: &[u8], offset: usize) -> Option<(LeafMmcsFoldGroups, usize)> {
-    let (val_trace, cursor) = decode_opt_group(proof, offset)?;
-    let (val_quot, cursor) = decode_opt_group(proof, cursor)?;
-    let (val_quot_batch, cursor) = decode_opt_group(proof, cursor)?;
-    let (chal_first_layer, cursor) = decode_opt_group(proof, cursor)?;
-    let (chal_len, cursor) = read_u32_le(proof, cursor)?;
-    if chal_len as usize > FRI_MMCS_MAX_DEPTH {
+fn decode_group_vec(
+    proof: &[u8],
+    offset: usize,
+    max_count: usize,
+) -> Option<(Vec<KeccakGroupFoldProof>, usize)> {
+    let (len, mut cursor) = read_u32_le(proof, offset)?;
+    if len as usize > max_count {
         return None;
     }
-    let mut chal_commit = Vec::with_capacity(chal_len as usize);
-    let mut cursor = cursor;
-    for _ in 0..chal_len {
+    let mut groups = Vec::with_capacity(len as usize);
+    for _ in 0..len {
         let (g, next) = decode_keccak_group_fold(proof, cursor)?;
-        chal_commit.push(g);
+        groups.push(g);
         cursor = next;
     }
+    Some((groups, cursor))
+}
+
+fn encode_mmcs_groups(out: &mut Vec<u8>, groups: &LeafMmcsFoldGroups) {
+    encode_group_vec(out, &groups.val_trace);
+    encode_group_vec(out, &groups.val_quot);
+    encode_group_vec(out, &groups.val_quot_batch);
+    encode_group_vec(out, &groups.chal_first_layer);
+    encode_group_vec(out, &groups.chal_commit);
+}
+
+fn decode_mmcs_groups(proof: &[u8], offset: usize) -> Option<(LeafMmcsFoldGroups, usize)> {
+    let (val_trace, cursor) = decode_group_vec(proof, offset, MAX_GROUPS_SINGLE)?;
+    let (val_quot, cursor) = decode_group_vec(proof, cursor, MAX_GROUPS_SINGLE)?;
+    let (val_quot_batch, cursor) = decode_group_vec(proof, cursor, MAX_GROUPS_SINGLE)?;
+    let (chal_first_layer, cursor) = decode_group_vec(proof, cursor, MAX_GROUPS_SINGLE)?;
+    let (chal_commit, cursor) = decode_group_vec(proof, cursor, MAX_GROUPS_COMMIT)?;
     Some((
         LeafMmcsFoldGroups {
             val_trace,
@@ -2070,10 +2066,10 @@ mod tests {
         ];
         let g = generate_keccak_group_fold_proof(&stmts).expect("group");
         let groups = LeafMmcsFoldGroups {
-            val_trace: Some(g),
-            val_quot: None,
-            val_quot_batch: None,
-            chal_first_layer: None,
+            val_trace: vec![g],
+            val_quot: vec![],
+            val_quot_batch: vec![],
+            chal_first_layer: vec![],
             chal_commit: vec![],
         };
         let mut out = Vec::new();

@@ -38,6 +38,7 @@ use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
     FriValMmcsQueryProof,
 };
+use super::fri_mmcs_group_m4b::KeccakGroupFoldProof;
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
 };
@@ -95,36 +96,13 @@ pub struct LeafPcsStarkSizes {
 
 /// Sums `group_stark` / `fold_stark` / `deep_stark` / `ood_stark` lengths (excludes meta / digests).
 pub fn leaf_pcs_stark_sizes(cert: &LeafPcsCertificate) -> LeafPcsStarkSizes {
-    let mmcs_groups = cert
-        .mmcs_groups
-        .val_trace
-        .as_ref()
-        .map(|g| g.group_stark.len())
-        .unwrap_or(0)
-        + cert
-            .mmcs_groups
-            .val_quot
-            .as_ref()
-            .map(|g| g.group_stark.len())
-            .unwrap_or(0)
-        + cert
-            .mmcs_groups
-            .val_quot_batch
-            .as_ref()
-            .map(|g| g.group_stark.len())
-            .unwrap_or(0)
-        + cert
-            .mmcs_groups
-            .chal_first_layer
-            .as_ref()
-            .map(|g| g.group_stark.len())
-            .unwrap_or(0)
-        + cert
-            .mmcs_groups
-            .chal_commit
-            .iter()
-            .map(|g| g.group_stark.len())
-            .sum::<usize>();
+    let group_bytes =
+        |gs: &[KeccakGroupFoldProof]| -> usize { gs.iter().map(|g| g.group_stark.len()).sum() };
+    let mmcs_groups = group_bytes(&cert.mmcs_groups.val_trace)
+        + group_bytes(&cert.mmcs_groups.val_quot)
+        + group_bytes(&cert.mmcs_groups.val_quot_batch)
+        + group_bytes(&cert.mmcs_groups.chal_first_layer)
+        + group_bytes(&cert.mmcs_groups.chal_commit);
     let fri_fold = cert
         .fri_fold_groups
         .fold_ys
@@ -759,15 +737,15 @@ mod tests {
         assert_eq!(cert.trace_width as usize, UNITARY_TRACE_WIDTH);
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
         assert!(
-            cert.mmcs_groups.val_trace.is_some(),
+            !cert.mmcs_groups.val_trace.is_empty(),
             "expected val_trace group"
         );
         assert!(
-            cert.mmcs_groups.val_quot_batch.is_some() || cert.mmcs_groups.val_quot.is_some(),
+            !cert.mmcs_groups.val_quot_batch.is_empty() || !cert.mmcs_groups.val_quot.is_empty(),
             "expected val quot or quot_batch group"
         );
         assert!(
-            cert.mmcs_groups.chal_first_layer.is_some(),
+            !cert.mmcs_groups.chal_first_layer.is_empty(),
             "expected chal_first_layer group"
         );
 
