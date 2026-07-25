@@ -22,10 +22,13 @@ use super::deep_ro_bind::{
     AGG_DEEP_RO_TRACE_MAX,
 };
 use super::deep_ro_trace_air::{verify_deep_ro_trace_proof, DeepRoTraceStepProof};
-use super::fri_fold_air::{verify_fri_fold_proof, verify_fri_fold_y_proof, FriFoldStepProof};
+use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{
-    bind_fri_fold_bundle_to_proof, covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof,
-    AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
+    covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof, AGG_FRI_MAX_FOLD_YS,
+    AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
+};
+use super::fri_fold_m4c::{
+    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups,
 };
 use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_agg_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
@@ -61,6 +64,8 @@ pub struct AggPcsCertificate {
     pub merkle_fold: FriMmcsPathProof,
     /// M4c group folds / stripped batch digests (`LEAF_MMCS_FOLD_V`).
     pub mmcs_groups: LeafMmcsFoldGroups,
+    /// B5 FriFold group folds (`LEAF_FRI_FOLD_V`); residual steps keep limbs only.
+    pub fri_fold_groups: LeafFriFoldGroups,
     /// R3-M3b3: first-layer Circle FRI `fold_y` steps (all proven queries).
     pub fri_fold_ys: Vec<FriFoldStepProof>,
     /// R3-M3b3: commit-phase Circle FRI `fold_x` steps (all proven queries × rounds) with FS β + RO.
@@ -141,8 +146,8 @@ pub fn build_agg_pcs_certificate(
         return Err("natural AggregationAir row fails constraints".to_string());
     }
 
-    let fri_bundle = fri_fold_bundle_from_agg_proof(&proof)
-        .map_err(|e| format!("R3-M3b4 FRI fold prove failed: {e}"))?;
+    let mut fri_bundle = fri_fold_bundle_from_agg_proof(&proof)
+        .map_err(|e| format!("R3-M3b4 FRI fold witness collect failed: {e}"))?;
     if fri_bundle.fold_ys.is_empty() || fri_bundle.fold_ys.len() > AGG_FRI_MAX_FOLD_YS {
         return Err(format!(
             "unexpected FRI fold_y count: {}",
@@ -157,7 +162,6 @@ pub fn build_agg_pcs_certificate(
             fri_bundle.fold_xs.len()
         ));
     }
-    // fold self-checks run per-step inside fri_fold_bundle_from_proof.
 
     let deep_bundle = deep_ro_bundle_from_agg_proof(&proof)
         .map_err(|e| format!("R3-M3c3 DeepRo bundle prove failed: {e}"))?;
@@ -169,6 +173,17 @@ pub fn build_agg_pcs_certificate(
         &fri_bundle.fold_ys,
     )
     .map_err(|e| format!("R3-M3c3 DeepRo bundle bind failed: {e}"))?;
+
+    let fri_fold_groups = apply_leaf_fri_fold_m4c_folds(&mut fri_bundle)
+        .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
+    bind_fri_fold_with_groups(
+        &proof,
+        &fri_bundle.fold_ys,
+        &fri_bundle.fold_xs,
+        &fri_fold_groups,
+        AGG_WIDTH,
+    )
+    .map_err(|e| format!("R3-B5 FriFold group bind failed: {e}"))?;
 
     let mut mmcs_bundle = fri_mmcs_bundle_from_agg_proof_drop_nested(&proof)
         .map_err(|e| format!("R3-M3d FRI Mmcs prove failed: {e}"))?;
@@ -214,6 +229,7 @@ pub fn build_agg_pcs_certificate(
         siblings: Vec::new(),
         merkle_fold,
         mmcs_groups,
+        fri_fold_groups,
         fri_fold_ys: fri_bundle.fold_ys,
         fri_folds: fri_bundle.fold_xs,
         deep_ros: deep_bundle.deep_ros,
@@ -260,18 +276,6 @@ pub fn verify_agg_pcs_certificate(
     if !verify_ood_proof(&cert.ood) {
         eprintln!("[AggPcsCertificate] Failed: OOD STARK");
         return false;
-    }
-    for (i, fold) in cert.fri_fold_ys.iter().enumerate() {
-        if !verify_fri_fold_y_proof(fold) {
-            eprintln!("[AggPcsCertificate] Failed: FRI fold_y STARK at {i}");
-            return false;
-        }
-    }
-    for (i, fold) in cert.fri_folds.iter().enumerate() {
-        if !verify_fri_fold_proof(fold) {
-            eprintln!("[AggPcsCertificate] Failed: FRI fold STARK at {i}");
-            return false;
-        }
     }
     if cert.deep_ros.len() != AGG_DEEP_RO_MAX {
         eprintln!(
@@ -337,6 +341,7 @@ pub fn verify_agg_pcs_certificate(
                     || rebuilt.siblings != cert.siblings
                     || rebuilt.merkle_fold != cert.merkle_fold
                     || rebuilt.mmcs_groups != cert.mmcs_groups
+                    || rebuilt.fri_fold_groups != cert.fri_fold_groups
                     || rebuilt.fri_fold_ys != cert.fri_fold_ys
                     || rebuilt.fri_folds != cert.fri_folds
                     || rebuilt.deep_ros != cert.deep_ros
@@ -401,8 +406,14 @@ fn verify_agg_pcs_certificate_fri_bound(
         return false;
     }
 
-    if let Err(e) = bind_fri_fold_bundle_to_proof(&proof, &cert.fri_fold_ys, &cert.fri_folds) {
-        eprintln!("[AggPcsCertificate] Failed: FRI fold bind: {e}");
+    if let Err(e) = bind_fri_fold_with_groups(
+        &proof,
+        &cert.fri_fold_ys,
+        &cert.fri_folds,
+        &cert.fri_fold_groups,
+        AGG_WIDTH,
+    ) {
+        eprintln!("[AggPcsCertificate] Failed: FRI fold bind/groups: {e}");
         return false;
     }
     if let Err(e) = bind_deep_ro_bundle_to_proof(

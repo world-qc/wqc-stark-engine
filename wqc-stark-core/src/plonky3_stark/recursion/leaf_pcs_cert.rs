@@ -1,10 +1,10 @@
-//! Leaf uni-STARK PCS opening certificates (R3-M3e / M4c).
+//! Leaf uni-STARK PCS opening certificates (R3-M3e / M4c / FriFold B5).
 //!
-//! Mirrors AggregationAir M3d flow on a leaf `Proof`: host OOD, FriFold, DeepRo
-//! (quot + leaf-trace), and in-circuit Val/Challenge Mmcs. Skips natural-row LDE
+//! Mirrors AggregationAir M3d flow on a leaf `Proof`: host OOD, FriFold group fold,
+//! DeepRo (quot + leaf-trace), and in-circuit Val/Challenge Mmcs. Skips natural-row LDE
 //! rebuild (no prover_data); `merkle_fold` reuses query-0 ValMmcs trace path.
 //! M4c folds eligible single-matrix paths into `LeafMmcsFoldGroups` and strips
-//! nested Keccak STARKs from the wire.
+//! nested Keccak STARKs from the wire. B5 folds FriFold steps into `LeafFriFoldGroups`.
 
 use p3_commit::Mmcs;
 use p3_mersenne_31::Mersenne31;
@@ -29,9 +29,10 @@ use crate::trajectory::base_proof_without_aux_tails;
 use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
 use super::deep_ro_bind::{bind_deep_ro_leaf_bundle_to_proof, deep_ro_bundle_from_leaf_proof};
 use super::deep_ro_leaf_trace_air::{verify_deep_ro_leaf_trace_proof, DeepRoLeafTraceStepProof};
-use super::fri_fold_air::{verify_fri_fold_proof, verify_fri_fold_y_proof, FriFoldStepProof};
-use super::fri_fold_bind::{
-    bind_fri_fold_bundle_to_proof_width, fri_fold_bundle_from_proof, LEAF_FRI_PROVEN_QUERIES,
+use super::fri_fold_air::FriFoldStepProof;
+use super::fri_fold_bind::{fri_fold_bundle_from_proof, LEAF_FRI_PROVEN_QUERIES};
+use super::fri_fold_m4c::{
+    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups,
 };
 use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
@@ -65,6 +66,8 @@ pub struct LeafPcsCertificate {
     pub merkle_fold: FriMmcsPathProof,
     /// M4c group folds for eligible single-matrix Val/Chal paths (`LEAF_MMCS_FOLD_V`).
     pub mmcs_groups: LeafMmcsFoldGroups,
+    /// B5 FriFold group folds (`LEAF_FRI_FOLD_V`); residual steps keep limbs only.
+    pub fri_fold_groups: LeafFriFoldGroups,
     pub fri_fold_ys: Vec<FriFoldStepProof>,
     pub fri_folds: Vec<FriFoldStepProof>,
     pub deep_ros: Vec<DeepRoStepProof>,
@@ -123,10 +126,22 @@ pub fn leaf_pcs_stark_sizes(cert: &LeafPcsCertificate) -> LeafPcsStarkSizes {
             .map(|g| g.group_stark.len())
             .sum::<usize>();
     let fri_fold = cert
-        .fri_fold_ys
-        .iter()
-        .map(|f| f.fold_stark.len())
-        .sum::<usize>()
+        .fri_fold_groups
+        .fold_ys
+        .as_ref()
+        .map(|g| g.group_stark.len())
+        .unwrap_or(0)
+        + cert
+            .fri_fold_groups
+            .fold_xs_by_log_h
+            .iter()
+            .map(|g| g.group_stark.len())
+            .sum::<usize>()
+        + cert
+            .fri_fold_ys
+            .iter()
+            .map(|f| f.fold_stark.len())
+            .sum::<usize>()
         + cert
             .fri_folds
             .iter()
@@ -282,9 +297,9 @@ pub fn build_leaf_pcs_certificate(
         return Err("R3-M3e leaf OOD self-check failed".into());
     }
 
-    let fri_bundle = fri_fold_bundle_from_proof(proof, trace_width)
-        .map_err(|e| format!("R3-M3e FRI fold prove failed: {e}"))?;
-    // fold_y / fold_x self-checks run per-step inside fri_fold_bundle_from_proof.
+    let mut fri_bundle = fri_fold_bundle_from_proof(proof, trace_width)
+        .map_err(|e| format!("R3-M3e FRI fold witness collect failed: {e}"))?;
+    // DeepRo binds against fold_y limbs before group-fold strips (limbs retained).
 
     let deep_ros;
     let deep_ro_traces;
@@ -308,6 +323,17 @@ pub fn build_leaf_pcs_certificate(
         deep_ros = Vec::new();
         deep_ro_traces = Vec::new();
     }
+
+    let fri_fold_groups = apply_leaf_fri_fold_m4c_folds(&mut fri_bundle)
+        .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
+    bind_fri_fold_with_groups(
+        proof,
+        &fri_bundle.fold_ys,
+        &fri_bundle.fold_xs,
+        &fri_fold_groups,
+        trace_width,
+    )
+    .map_err(|e| format!("R3-B5 FriFold group bind failed: {e}"))?;
 
     // Query-streaming Mmcs: drop nested Keccak STARKs after each path self-check.
     let mut mmcs_bundle = fri_mmcs_bundle_from_proof_drop_nested(proof, trace_width)
@@ -358,6 +384,7 @@ pub fn build_leaf_pcs_certificate(
         siblings: Vec::new(),
         merkle_fold,
         mmcs_groups,
+        fri_fold_groups,
         fri_fold_ys: fri_bundle.fold_ys,
         fri_folds: fri_bundle.fold_xs,
         deep_ros,
@@ -414,17 +441,15 @@ pub fn verify_leaf_pcs_certificate(
         return false;
     }
 
-    for (i, fold) in cert.fri_fold_ys.iter().enumerate() {
-        if !verify_fri_fold_y_proof(fold) {
-            eprintln!("[LeafPcsCertificate] Failed: FRI fold_y at {i}");
-            return false;
-        }
-    }
-    for (i, fold) in cert.fri_folds.iter().enumerate() {
-        if !verify_fri_fold_proof(fold) {
-            eprintln!("[LeafPcsCertificate] Failed: FRI fold_x at {i}");
-            return false;
-        }
+    if let Err(e) = bind_fri_fold_with_groups(
+        proof,
+        &cert.fri_fold_ys,
+        &cert.fri_folds,
+        &cert.fri_fold_groups,
+        trace_width,
+    ) {
+        eprintln!("[LeafPcsCertificate] Failed: FRI fold bind/groups: {e}");
+        return false;
     }
     if cert.deep_ros.len() != LEAF_FRI_PROVEN_QUERIES
         || cert.deep_ro_traces.len() != LEAF_FRI_PROVEN_QUERIES
@@ -476,12 +501,6 @@ pub fn verify_leaf_pcs_certificate(
         return false;
     }
 
-    if let Err(e) =
-        bind_fri_fold_bundle_to_proof_width(proof, &cert.fri_fold_ys, &cert.fri_folds, trace_width)
-    {
-        eprintln!("[LeafPcsCertificate] Failed: FRI fold bind: {e}");
-        return false;
-    }
     if !cert.deep_ros.is_empty() {
         if let Err(e) = bind_deep_ro_leaf_bundle_to_proof(
             proof,
@@ -752,9 +771,26 @@ mod tests {
             "expected chal_first_layer group"
         );
 
+        assert!(
+            cert.fri_fold_groups.fold_ys.is_some(),
+            "expected FriFold Y group"
+        );
+        assert!(
+            !cert.fri_fold_groups.fold_xs_by_log_h.is_empty(),
+            "expected FriFold X groups"
+        );
+        assert!(
+            cert.fri_fold_ys.iter().all(|s| s.fold_stark.is_empty()),
+            "expected stripped fold_y STARKs"
+        );
+        assert!(
+            cert.fri_folds.iter().all(|s| s.fold_stark.is_empty()),
+            "expected stripped fold_x STARKs"
+        );
+
         let sizes = leaf_pcs_stark_sizes(&cert);
         eprintln!(
-            "[M4c size] unitary leaf PCS STARKs total={} bytes ({:.2} MiB); mmcs_groups={} fri_fold={} deep_ro={} ood={}",
+            "[B5 size] unitary leaf PCS STARKs total={} bytes ({:.2} MiB); mmcs_groups={} fri_fold={} deep_ro={} ood={}",
             sizes.total,
             sizes.total as f64 / (1024.0 * 1024.0),
             sizes.mmcs_groups,

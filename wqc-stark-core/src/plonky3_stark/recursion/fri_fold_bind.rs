@@ -8,10 +8,7 @@ use p3_uni_stark::Proof;
 
 use crate::plonky3_stark::config::{Challenge, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES};
 
-use super::fri_fold_air::{
-    generate_fri_fold_proof, generate_fri_fold_y_proof, verify_fri_fold_proof,
-    verify_fri_fold_y_proof, FriFoldStepProof,
-};
+use super::fri_fold_air::{fri_fold_step_limbs_x, fri_fold_step_limbs_y, FriFoldStepProof};
 use super::fri_fold_native::{challenge_to_limbs, fold_x_row, fold_y_row};
 use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
 use super::fri_ro::reconstruct_query_ro;
@@ -55,7 +52,10 @@ pub const fn covers_all_devnet_fri_queries() -> bool {
     AGG_FRI_PROVEN_QUERIES >= DEVNET_FRI_NUM_QUERIES
 }
 
-/// Builds in-circuit fold proofs for a uni-STARK FRI (all proven queries).
+/// Builds FriFold step **limbs** for a uni-STARK FRI (all proven queries).
+///
+/// Does **not** prove per-step STARKs — callers group-fold via
+/// [`super::fri_fold_m4c::apply_leaf_fri_fold_m4c_folds`].
 pub fn fri_fold_bundle_from_proof(
     proof: &Proof<WqcStarkConfig>,
     trace_width: usize,
@@ -95,10 +95,7 @@ pub fn fri_fold_bundle_from_proof(
             ));
         }
         for w in &y_wits {
-            let step = generate_fri_fold_y_proof(w.index, w.log_folded_height, w.beta, w.v0, w.v1)?;
-            if !verify_fri_fold_y_proof(&step) {
-                return Err(format!("fold_y self-check failed at query {q}"));
-            }
+            let step = fri_fold_step_limbs_y(w.index, w.log_folded_height, w.beta, w.v0, w.v1)?;
             fold_ys.push(step);
         }
         let x_wits = extract_query_fold_chain_forward(
@@ -112,10 +109,7 @@ pub fn fri_fold_bundle_from_proof(
             max_rounds,
         )?;
         for w in x_wits {
-            let step = generate_fri_fold_proof(w.index, w.log_folded_height, w.beta, w.v0, w.v1)?;
-            if !verify_fri_fold_proof(&step) {
-                return Err(format!("fold_x self-check failed at query {q}"));
-            }
+            let step = fri_fold_step_limbs_x(w.index, w.log_folded_height, w.beta, w.v0, w.v1)?;
             fold_xs.push(step);
         }
     }
@@ -345,8 +339,9 @@ mod tests {
     use crate::plonky3_stark::aggregation::AggregationContext;
     use crate::plonky3_stark::generate_aggregation_proof;
     use crate::plonky3_stark::recursion::fri_fold_air::{
-        verify_fri_fold_proof, verify_fri_fold_y_proof,
+        verify_fri_fold_x_native, verify_fri_fold_y_native,
     };
+    use crate::plonky3_stark::recursion::fri_fold_m4c::apply_leaf_fri_fold_m4c_folds;
     use crate::plonky3_stark::recursion::fri_fold_native::limbs_to_challenge;
     use crate::plonky3_stark::recursion::fri_fs_replay::replay_agg_fri_challenges;
     use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
@@ -365,20 +360,25 @@ mod tests {
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_agg_fri_challenges(&proof).expect("fs");
-        let bundle = fri_fold_bundle_from_agg_proof(&proof).expect("bundle");
+        let mut bundle = fri_fold_bundle_from_agg_proof(&proof).expect("bundle");
         assert_eq!(bundle.fold_ys.len(), 2 * AGG_FRI_PROVEN_QUERIES);
         assert_eq!(
             bundle.fold_xs.len(),
             chal.betas.len() * AGG_FRI_PROVEN_QUERIES
         );
         bind_fri_fold_bundle_to_proof(&proof, &bundle.fold_ys, &bundle.fold_xs).expect("bind");
-        // Spot-check first and last STARKs (full verify of 160 is covered by cert roundtrip).
-        assert!(verify_fri_fold_y_proof(&bundle.fold_ys[0]));
-        assert!(verify_fri_fold_y_proof(bundle.fold_ys.last().unwrap()));
-        assert!(verify_fri_fold_proof(&bundle.fold_xs[0]));
-        assert!(verify_fri_fold_proof(bundle.fold_xs.last().unwrap()));
+        assert!(verify_fri_fold_y_native(&bundle.fold_ys[0]));
+        assert!(verify_fri_fold_y_native(bundle.fold_ys.last().unwrap()));
+        assert!(verify_fri_fold_x_native(&bundle.fold_xs[0]));
+        assert!(verify_fri_fold_x_native(bundle.fold_xs.last().unwrap()));
         let last_out = limbs_to_challenge(bundle.fold_xs.last().unwrap().out_limbs);
         let view = decode_pcs_view(&proof).unwrap();
         assert_eq!(last_out, view.fri_proof.final_poly);
+
+        let groups = apply_leaf_fri_fold_m4c_folds(&mut bundle).expect("group fold");
+        assert!(groups.fold_ys.is_some());
+        assert!(!groups.fold_xs_by_log_h.is_empty());
+        assert!(bundle.fold_ys.iter().all(|s| s.fold_stark.is_empty()));
+        assert!(bundle.fold_xs.iter().all(|s| s.fold_stark.is_empty()));
     }
 }

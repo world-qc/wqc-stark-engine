@@ -15,6 +15,8 @@ mod deep_ro_trace_air;
 mod ef_limbs;
 mod fri_fold_air;
 mod fri_fold_bind;
+mod fri_fold_group;
+mod fri_fold_m4c;
 mod fri_fold_native;
 mod fri_fs_replay;
 mod fri_mmcs;
@@ -66,14 +68,22 @@ pub use deep_ro_trace_air::{
     generate_deep_ro_trace_proof, verify_deep_ro_trace_proof, DeepRoTraceAir, DeepRoTraceStepProof,
 };
 pub use fri_fold_air::{
-    generate_fri_fold_proof, generate_fri_fold_y_proof, verify_fri_fold_proof,
-    verify_fri_fold_y_proof, FriFoldAir, FriFoldStepProof,
+    fri_fold_step_limbs_x, fri_fold_step_limbs_y, generate_fri_fold_proof,
+    generate_fri_fold_y_proof, verify_fri_fold_proof, verify_fri_fold_x_native,
+    verify_fri_fold_y_native, verify_fri_fold_y_proof, FriFoldAir, FriFoldStepProof,
 };
 pub use fri_fold_bind::{
     bind_fri_fold_bundle_to_proof, bind_fri_fold_bundle_to_proof_width,
     covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof, fri_fold_bundle_from_proof,
     fri_fold_steps_from_agg_proof, AggFriFoldBundle, AGG_FRI_PROVEN_QUERIES,
     LEAF_FRI_PROVEN_QUERIES,
+};
+pub use fri_fold_group::{
+    generate_fri_fold_group_proof, verify_fri_fold_group_proof, FriFoldGroupAir, FriFoldGroupProof,
+    FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y,
+};
+pub use fri_fold_m4c::{
+    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups, LEAF_FRI_FOLD_V,
 };
 pub use fri_fs_replay::{replay_agg_fri_challenges, replay_fri_challenges, AggFriChallenges};
 pub use fri_mmcs::verify_agg_fri_openings;

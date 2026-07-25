@@ -18,6 +18,8 @@ use super::fri_fold_bind::{
     AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES, LEAF_FRI_MAX_ROUNDS,
     LEAF_FRI_PROVEN_QUERIES,
 };
+use super::fri_fold_group::{FriFoldGroupProof, FRI_FOLD_GROUP_MAX_STEPS};
+use super::fri_fold_m4c::{LeafFriFoldGroups, LEAF_FRI_FOLD_V};
 use super::fri_mmcs_bind::{FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof};
 use super::fri_mmcs_group_m4b::KeccakGroupFoldProof;
 use super::fri_mmcs_m4c::{LeafMmcsFoldGroups, LEAF_MMCS_FOLD_V};
@@ -626,6 +628,91 @@ fn decode_mmcs_groups(proof: &[u8], offset: usize) -> Option<(LeafMmcsFoldGroups
     ))
 }
 
+fn encode_fri_fold_group(out: &mut Vec<u8>, g: &FriFoldGroupProof) {
+    out.push(g.kind);
+    out.extend_from_slice(&g.step_count.to_le_bytes());
+    out.extend_from_slice(&g.log_folded_height.to_le_bytes());
+    out.extend_from_slice(&(g.group_stark.len() as u32).to_le_bytes());
+    out.extend_from_slice(&g.group_stark);
+}
+
+fn decode_fri_fold_group(proof: &[u8], offset: usize) -> Option<(FriFoldGroupProof, usize)> {
+    let kind = *proof.get(offset)?;
+    let (step_count, cursor) = read_u32_le(proof, offset + 1)?;
+    if step_count == 0 || step_count as usize > FRI_FOLD_GROUP_MAX_STEPS {
+        return None;
+    }
+    let (log_folded_height, cursor) = read_u32_le(proof, cursor)?;
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let group_stark = proof.get(cursor..end)?.to_vec();
+    Some((
+        FriFoldGroupProof {
+            kind,
+            step_count,
+            log_folded_height,
+            group_stark,
+        },
+        end,
+    ))
+}
+
+fn encode_opt_fri_fold_group(out: &mut Vec<u8>, g: &Option<FriFoldGroupProof>) {
+    match g {
+        Some(g) => {
+            out.push(1);
+            encode_fri_fold_group(out, g);
+        }
+        None => out.push(0),
+    }
+}
+
+fn decode_opt_fri_fold_group(
+    proof: &[u8],
+    offset: usize,
+) -> Option<(Option<FriFoldGroupProof>, usize)> {
+    let flag = *proof.get(offset)?;
+    let cursor = offset + 1;
+    match flag {
+        0 => Some((None, cursor)),
+        1 => {
+            let (g, cursor) = decode_fri_fold_group(proof, cursor)?;
+            Some((Some(g), cursor))
+        }
+        _ => None,
+    }
+}
+
+fn encode_fri_fold_groups(out: &mut Vec<u8>, groups: &LeafFriFoldGroups) {
+    encode_opt_fri_fold_group(out, &groups.fold_ys);
+    out.extend_from_slice(&(groups.fold_xs_by_log_h.len() as u32).to_le_bytes());
+    for g in &groups.fold_xs_by_log_h {
+        encode_fri_fold_group(out, g);
+    }
+}
+
+fn decode_fri_fold_groups(proof: &[u8], offset: usize) -> Option<(LeafFriFoldGroups, usize)> {
+    let (fold_ys, cursor) = decode_opt_fri_fold_group(proof, offset)?;
+    let (xs_len, cursor) = read_u32_le(proof, cursor)?;
+    if xs_len as usize > LEAF_FRI_MAX_ROUNDS {
+        return None;
+    }
+    let mut fold_xs_by_log_h = Vec::with_capacity(xs_len as usize);
+    let mut cursor = cursor;
+    for _ in 0..xs_len {
+        let (g, next) = decode_fri_fold_group(proof, cursor)?;
+        fold_xs_by_log_h.push(g);
+        cursor = next;
+    }
+    Some((
+        LeafFriFoldGroups {
+            fold_ys,
+            fold_xs_by_log_h,
+        },
+        cursor,
+    ))
+}
+
 fn decode_fri_mmcs_path(proof: &[u8], offset: usize) -> Option<(FriMmcsPathProof, usize)> {
     let (depth, cursor) = read_u32_le(proof, offset)?;
     let (leaf_width, cursor) = read_u32_le(proof, cursor)?;
@@ -1138,6 +1225,8 @@ fn encode_leaf_cert(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
     out.push(c.kind as u8);
     out.push(LEAF_MMCS_FOLD_V);
     encode_mmcs_groups(out, &c.mmcs_groups);
+    out.push(LEAF_FRI_FOLD_V);
+    encode_fri_fold_groups(out, &c.fri_fold_groups);
     out.extend_from_slice(&c.trace_width.to_le_bytes());
     out.extend_from_slice(&c.degree_bits.to_le_bytes());
     out.extend_from_slice(&c.stmt_digest);
@@ -1167,6 +1256,12 @@ fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, 
     }
     let cursor = offset + 2;
     let (mmcs_groups, cursor) = decode_mmcs_groups(proof, cursor)?;
+    let fri_fold_v = *proof.get(cursor)?;
+    if fri_fold_v != LEAF_FRI_FOLD_V {
+        return None;
+    }
+    let cursor = cursor + 1;
+    let (fri_fold_groups, cursor) = decode_fri_fold_groups(proof, cursor)?;
     let (trace_width, cursor) = read_u32_le(proof, cursor)?;
     let (degree_bits, cursor) = read_u32_le(proof, cursor)?;
     let (stmt_digest, cursor) = read_fixed::<32>(proof, cursor)?;
@@ -1207,6 +1302,7 @@ fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, 
             siblings,
             merkle_fold,
             mmcs_groups,
+            fri_fold_groups,
             fri_fold_ys,
             fri_folds,
             deep_ros,
@@ -1314,6 +1410,13 @@ fn diagnose_decode_leaf_cert(
     }
     let cursor = offset + 2;
     let (mmcs_groups, cursor) = decode_mmcs_groups(proof, cursor).ok_or("mmcs_groups")?;
+    let fri_fold_v = *proof.get(cursor).ok_or("fri_fold_v")?;
+    if fri_fold_v != LEAF_FRI_FOLD_V {
+        return Err(format!("unsupported fri_fold_v {fri_fold_v}"));
+    }
+    let cursor = cursor + 1;
+    let (fri_fold_groups, cursor) =
+        decode_fri_fold_groups(proof, cursor).ok_or("fri_fold_groups")?;
     let (trace_width, cursor) = read_u32_le(proof, cursor).ok_or("trace_width")?;
     let (degree_bits, cursor) = read_u32_le(proof, cursor).ok_or("degree_bits")?;
     let (stmt_digest, cursor) = read_fixed::<32>(proof, cursor).ok_or("stmt_digest")?;
@@ -1357,6 +1460,7 @@ fn diagnose_decode_leaf_cert(
             siblings,
             merkle_fold,
             mmcs_groups,
+            fri_fold_groups,
             fri_fold_ys,
             fri_folds,
             deep_ros,
@@ -1417,6 +1521,8 @@ fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
     }
     out.push(LEAF_MMCS_FOLD_V);
     encode_mmcs_groups(out, &c.mmcs_groups);
+    out.push(LEAF_FRI_FOLD_V);
+    encode_fri_fold_groups(out, &c.fri_fold_groups);
     encode_fri_mmcs_path(out, &c.merkle_fold);
     encode_fri_folds(out, &c.fri_fold_ys);
     encode_fri_folds(out, &c.fri_folds);
@@ -1458,6 +1564,12 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
     }
     let cursor = cursor + 1;
     let (mmcs_groups, cursor) = decode_mmcs_groups(proof, cursor)?;
+    let fri_fold_v = *proof.get(cursor)?;
+    if fri_fold_v != LEAF_FRI_FOLD_V {
+        return None;
+    }
+    let cursor = cursor + 1;
+    let (fri_fold_groups, cursor) = decode_fri_fold_groups(proof, cursor)?;
     let (merkle_fold, cursor) = decode_fri_mmcs_path(proof, cursor)?;
     let (fri_fold_ys, cursor) = decode_fri_folds(proof, cursor, AGG_FRI_MAX_FOLD_YS)?;
     let (fri_folds, cursor) =
@@ -1478,6 +1590,7 @@ fn decode_agg_cert(proof: &[u8], offset: usize) -> Option<(AggPcsCertificate, us
             siblings,
             merkle_fold,
             mmcs_groups,
+            fri_fold_groups,
             fri_fold_ys,
             fri_folds,
             deep_ros,

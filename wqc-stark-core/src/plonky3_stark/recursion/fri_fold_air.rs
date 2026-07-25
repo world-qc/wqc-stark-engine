@@ -130,62 +130,33 @@ pub fn generate_fri_fold_proof(
     v0: Challenge,
     v1: Challenge,
 ) -> Result<FriFoldStepProof, String> {
-    if log_folded_height == 0 || log_folded_height > 16 {
-        return Err("log_folded_height out of range".into());
-    }
-    if index >= (1 << log_folded_height) {
-        return Err("index out of range for log_folded_height".into());
-    }
-    let t_inv = fold_x_twiddle_inv(index, log_folded_height);
-    let out = fold_x_row(index, log_folded_height, beta, v0, v1);
+    let mut step = fri_fold_step_limbs_x(index, log_folded_height, beta, v0, v1)?;
     let pv = build_public_values(
-        index as u32,
-        log_folded_height as u32,
-        t_inv,
+        step.index,
+        step.log_folded_height,
+        step.t_inv,
         beta,
         v0,
         v1,
-        out,
+        limbs_to_challenge(step.out_limbs),
     );
     let matrix = pad_air_matrix_for_uni_stark(build_matrix());
     p3_air::check_constraints(&FriFoldAir, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &FriFoldAir, matrix, &pv);
-    let fold_stark =
+    step.fold_stark =
         postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri fold: {e}"))?;
-    Ok(FriFoldStepProof {
-        index: index as u32,
-        log_folded_height: log_folded_height as u32,
-        t_inv,
-        beta_limbs: challenge_to_limbs(beta),
-        v0_limbs: challenge_to_limbs(v0),
-        v1_limbs: challenge_to_limbs(v1),
-        out_limbs: challenge_to_limbs(out),
-        fold_stark,
-    })
+    Ok(step)
 }
 
 pub fn verify_fri_fold_proof(proof: &FriFoldStepProof) -> bool {
+    if !verify_fri_fold_x_native(proof) {
+        return false;
+    }
     let beta = limbs_to_challenge(proof.beta_limbs);
     let v0 = limbs_to_challenge(proof.v0_limbs);
     let v1 = limbs_to_challenge(proof.v1_limbs);
     let out = limbs_to_challenge(proof.out_limbs);
-    let expect_t = fold_x_twiddle_inv(proof.index as usize, proof.log_folded_height as usize);
-    if proof.t_inv != expect_t {
-        eprintln!("[FriFold] Failed: twiddle mismatch");
-        return false;
-    }
-    let expect_out = fold_x_row(
-        proof.index as usize,
-        proof.log_folded_height as usize,
-        beta,
-        v0,
-        v1,
-    );
-    if out != expect_out {
-        eprintln!("[FriFold] Failed: native fold mismatch");
-        return false;
-    }
     let pv = build_public_values(
         proof.index,
         proof.log_folded_height,
@@ -219,6 +190,33 @@ pub fn generate_fri_fold_y_proof(
     v0: Challenge,
     v1: Challenge,
 ) -> Result<FriFoldStepProof, String> {
+    let mut step = fri_fold_step_limbs_y(index, log_folded_height, beta, v0, v1)?;
+    let pv = build_public_values(
+        step.index,
+        step.log_folded_height,
+        step.t_inv,
+        beta,
+        v0,
+        v1,
+        limbs_to_challenge(step.out_limbs),
+    );
+    let matrix = pad_air_matrix_for_uni_stark(build_matrix());
+    p3_air::check_constraints(&FriFoldAir, &matrix, &pv);
+    let config = devnet_circle_config();
+    let proof = prove(&config, &FriFoldAir, matrix, &pv);
+    step.fold_stark =
+        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri fold_y: {e}"))?;
+    Ok(step)
+}
+
+/// Host-only fold_y step (empty `fold_stark`) for FriFold group fold prove paths.
+pub fn fri_fold_step_limbs_y(
+    index: usize,
+    log_folded_height: usize,
+    beta: Challenge,
+    v0: Challenge,
+    v1: Challenge,
+) -> Result<FriFoldStepProof, String> {
     if log_folded_height == 0 || log_folded_height > 16 {
         return Err("log_folded_height out of range".into());
     }
@@ -227,21 +225,6 @@ pub fn generate_fri_fold_y_proof(
     }
     let t_inv = fold_y_twiddle_inv(index, log_folded_height);
     let out = fold_y_row(index, log_folded_height, beta, v0, v1);
-    let pv = build_public_values(
-        index as u32,
-        log_folded_height as u32,
-        t_inv,
-        beta,
-        v0,
-        v1,
-        out,
-    );
-    let matrix = pad_air_matrix_for_uni_stark(build_matrix());
-    p3_air::check_constraints(&FriFoldAir, &matrix, &pv);
-    let config = devnet_circle_config();
-    let proof = prove(&config, &FriFoldAir, matrix, &pv);
-    let fold_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri fold_y: {e}"))?;
     Ok(FriFoldStepProof {
         index: index as u32,
         log_folded_height: log_folded_height as u32,
@@ -250,11 +233,65 @@ pub fn generate_fri_fold_y_proof(
         v0_limbs: challenge_to_limbs(v0),
         v1_limbs: challenge_to_limbs(v1),
         out_limbs: challenge_to_limbs(out),
-        fold_stark,
+        fold_stark: Vec::new(),
     })
 }
 
-pub fn verify_fri_fold_y_proof(proof: &FriFoldStepProof) -> bool {
+/// Host-only fold_x step (empty `fold_stark`) for FriFold group fold prove paths.
+pub fn fri_fold_step_limbs_x(
+    index: usize,
+    log_folded_height: usize,
+    beta: Challenge,
+    v0: Challenge,
+    v1: Challenge,
+) -> Result<FriFoldStepProof, String> {
+    if log_folded_height == 0 || log_folded_height > 16 {
+        return Err("log_folded_height out of range".into());
+    }
+    if index >= (1 << log_folded_height) {
+        return Err("index out of range for log_folded_height".into());
+    }
+    let t_inv = fold_x_twiddle_inv(index, log_folded_height);
+    let out = fold_x_row(index, log_folded_height, beta, v0, v1);
+    Ok(FriFoldStepProof {
+        index: index as u32,
+        log_folded_height: log_folded_height as u32,
+        t_inv,
+        beta_limbs: challenge_to_limbs(beta),
+        v0_limbs: challenge_to_limbs(v0),
+        v1_limbs: challenge_to_limbs(v1),
+        out_limbs: challenge_to_limbs(out),
+        fold_stark: Vec::new(),
+    })
+}
+
+/// Native twiddle + fold algebra for a fold_x step (ignores `fold_stark`).
+pub fn verify_fri_fold_x_native(proof: &FriFoldStepProof) -> bool {
+    let beta = limbs_to_challenge(proof.beta_limbs);
+    let v0 = limbs_to_challenge(proof.v0_limbs);
+    let v1 = limbs_to_challenge(proof.v1_limbs);
+    let out = limbs_to_challenge(proof.out_limbs);
+    let expect_t = fold_x_twiddle_inv(proof.index as usize, proof.log_folded_height as usize);
+    if proof.t_inv != expect_t {
+        eprintln!("[FriFold] Failed: twiddle mismatch");
+        return false;
+    }
+    let expect_out = fold_x_row(
+        proof.index as usize,
+        proof.log_folded_height as usize,
+        beta,
+        v0,
+        v1,
+    );
+    if out != expect_out {
+        eprintln!("[FriFold] Failed: native fold mismatch");
+        return false;
+    }
+    true
+}
+
+/// Native twiddle + fold algebra for a fold_y step (ignores `fold_stark`).
+pub fn verify_fri_fold_y_native(proof: &FriFoldStepProof) -> bool {
     let beta = limbs_to_challenge(proof.beta_limbs);
     let v0 = limbs_to_challenge(proof.v0_limbs);
     let v1 = limbs_to_challenge(proof.v1_limbs);
@@ -275,6 +312,17 @@ pub fn verify_fri_fold_y_proof(proof: &FriFoldStepProof) -> bool {
         eprintln!("[FriFoldY] Failed: native fold mismatch");
         return false;
     }
+    true
+}
+
+pub fn verify_fri_fold_y_proof(proof: &FriFoldStepProof) -> bool {
+    if !verify_fri_fold_y_native(proof) {
+        return false;
+    }
+    let beta = limbs_to_challenge(proof.beta_limbs);
+    let v0 = limbs_to_challenge(proof.v0_limbs);
+    let v1 = limbs_to_challenge(proof.v1_limbs);
+    let out = limbs_to_challenge(proof.out_limbs);
     let pv = build_public_values(
         proof.index,
         proof.log_folded_height,
