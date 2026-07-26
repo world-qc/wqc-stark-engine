@@ -368,8 +368,7 @@ pub fn generate_ood_proof(witness: &OodWitness) -> Result<OodStepProof, String> 
     p3_air::check_constraints(&air, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &air, matrix, &pv);
-    let ood_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode ood_stark: {e}"))?;
+    let ood_stark = super::prove_workspace::encode_stark_and_drop(proof, "ood_stark")?;
     Ok(OodStepProof::from_witness(witness, ood_stark))
 }
 

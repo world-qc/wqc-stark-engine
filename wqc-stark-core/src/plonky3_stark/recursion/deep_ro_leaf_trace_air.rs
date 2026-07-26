@@ -525,8 +525,7 @@ pub fn generate_deep_ro_leaf_trace_proof(
     p3_air::check_constraints(&DeepRoLeafTraceAir, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &DeepRoLeafTraceAir, matrix, &pv);
-    let deep_stark = postcard::to_allocvec(&proof)
-        .map_err(|e| format!("postcard encode deep_ro_leaf_trace: {e}"))?;
+    let deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro_leaf_trace")?;
     let pz_local_limbs: Vec<[Mersenne31; 3]> =
         pz_local.iter().map(|&c| challenge_to_limbs(c)).collect();
     let pz_next_limbs: Vec<[Mersenne31; 3]> =

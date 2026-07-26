@@ -508,6 +508,8 @@ pub fn deep_ro_bundle_from_agg_proof(
         }
         deep_ro_traces.push(deep_tr);
     }
+    deep_ros.shrink_to_fit();
+    deep_ro_traces.shrink_to_fit();
     Ok(AggDeepRoBundle {
         deep_ros,
         deep_ro_traces,
@@ -995,7 +997,11 @@ pub fn deep_ro_bundle_from_leaf_proof(
             return Err(format!("DeepRoLeafTrace self-check failed at query {q}"));
         }
         deep_ro_traces.push(deep_tr);
+        // Sequential per query: structured uni-STARKs already dropped inside
+        // generate_* via encode_stark_and_drop (C10′).
     }
+    deep_ros.shrink_to_fit();
+    deep_ro_traces.shrink_to_fit();
     Ok(LeafDeepRoBundle {
         deep_ros,
         deep_ro_traces,

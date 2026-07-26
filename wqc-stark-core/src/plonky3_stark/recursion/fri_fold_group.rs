@@ -194,8 +194,7 @@ pub fn generate_fri_fold_group_proof(
     p3_air::check_constraints(&air, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &air, matrix, &pv);
-    let group_stark = postcard::to_allocvec(&proof)
-        .map_err(|e| format!("postcard encode fri fold group: {e}"))?;
+    let group_stark = super::prove_workspace::encode_stark_and_drop(proof, "fri fold group")?;
 
     Ok(FriFoldGroupProof {
         kind,

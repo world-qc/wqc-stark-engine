@@ -41,6 +41,7 @@ mod ood_native;
 mod opening_cert;
 mod pcs_geom;
 mod prove;
+mod prove_workspace;
 mod transcript_v5;
 mod transcript_v6;
 

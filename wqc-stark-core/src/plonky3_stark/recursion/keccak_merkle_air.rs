@@ -203,8 +203,7 @@ pub fn generate_keccak_merkle_path_proof(
     p3_air::check_constraints(&MerkleFoldAir, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &MerkleFoldAir, matrix, &pv);
-    let fold_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode merkle fold: {e}"))?;
+    let fold_stark = super::prove_workspace::encode_stark_and_drop(proof, "merkle fold")?;
 
     Ok(KeccakMerklePathProof {
         leaf_digest,

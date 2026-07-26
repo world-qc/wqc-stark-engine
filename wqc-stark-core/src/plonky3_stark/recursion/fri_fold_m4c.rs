@@ -1,7 +1,5 @@
 //! B5 FriFold M4c-style apply: group-fold Y/X steps and strip nested `fold_stark` bytes.
 
-use std::collections::BTreeMap;
-
 use p3_uni_stark::Proof;
 
 use crate::plonky3_stark::config::WqcStarkConfig;
@@ -34,25 +32,30 @@ fn strip_fold_starks(steps: &mut [FriFoldStepProof]) {
     }
 }
 
+/// Prove one FriFold-X group per distinct height, sequentially (C10′: do not
+/// clone every height's steps into a map at once).
 fn group_fold_xs_by_log_h(fold_xs: &[FriFoldStepProof]) -> Result<Vec<FriFoldGroupProof>, String> {
-    let mut by_h: BTreeMap<u32, Vec<FriFoldStepProof>> = BTreeMap::new();
-    for s in fold_xs {
-        by_h.entry(s.log_folded_height).or_default().push(s.clone());
-    }
-    let mut out = Vec::with_capacity(by_h.len());
-    for (log_h, steps) in by_h {
+    let mut heights: Vec<u32> = fold_xs.iter().map(|s| s.log_folded_height).collect();
+    heights.sort_unstable();
+    heights.dedup();
+    let mut out = Vec::with_capacity(heights.len());
+    for log_h in heights {
+        let steps: Vec<FriFoldStepProof> = fold_xs
+            .iter()
+            .filter(|s| s.log_folded_height == log_h)
+            .cloned()
+            .collect();
         if steps.len() > FRI_FOLD_GROUP_MAX_STEPS {
             return Err(format!(
                 "fold_x group at log_h={log_h} too large: {}",
                 steps.len()
             ));
         }
-        out.push(generate_fri_fold_group_proof(
-            FRI_FOLD_KIND_X,
-            &steps,
-            Some(log_h),
-        )?);
+        let g = generate_fri_fold_group_proof(FRI_FOLD_KIND_X, &steps, Some(log_h))?;
+        drop(steps);
+        out.push(g);
     }
+    out.shrink_to_fit();
     Ok(out)
 }
 

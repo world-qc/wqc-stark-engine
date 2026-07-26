@@ -775,12 +775,17 @@ pub fn generate_keccak_group_fold_proof(
         depth,
         path_count,
     };
-    let matrix_paths: Vec<_> = leaf_msgs
-        .iter()
-        .zip(compress_per_path.iter())
-        .map(|(m, c)| (m.clone(), c.clone()))
-        .collect();
-    let matrix = build_group_matrix(&matrix_paths)?;
+    // Build the AIR matrix, then free compress witnesses before prove.
+    let matrix = {
+        let matrix_paths: Vec<_> = leaf_msgs
+            .iter()
+            .zip(compress_per_path.iter())
+            .map(|(m, c)| (m.clone(), c.clone()))
+            .collect();
+        build_group_matrix(&matrix_paths)?
+    };
+    drop(compress_per_path);
+
     let pv = build_public_values(
         leaf_msg_len,
         depth,
@@ -792,11 +797,16 @@ pub fn generate_keccak_group_fold_proof(
         &siblings,
         &layer_digests,
     )?;
+    // Wire result keeps digests only; free msg/index/sibling copies before prove.
+    drop(leaf_msgs);
+    drop(roots);
+    drop(indices);
+    drop(siblings);
+
     p3_air::check_constraints(&air, &matrix, &pv);
     let config = keccak_circle_config();
     let proof = prove(&config, &air, matrix, &pv);
-    let group_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode m4b group: {e}"))?;
+    let group_stark = super::prove_workspace::encode_stark_and_drop(proof, "m4b group")?;
 
     Ok(KeccakGroupFoldProof {
         path_count: path_count as u32,

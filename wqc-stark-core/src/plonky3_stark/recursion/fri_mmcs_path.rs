@@ -282,7 +282,7 @@ fn generate_fri_mmcs_path_proof_inner(
         p3_air::check_constraints(&FriMmcsFoldAir, &matrix, &pv);
         let config = devnet_circle_config();
         let proof = prove(&config, &FriMmcsFoldAir, matrix, &pv);
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri mmcs fold: {e}"))?
+        super::prove_workspace::encode_stark_and_drop(proof, "fri mmcs fold")?
     };
 
     Ok(FriMmcsPathProof {

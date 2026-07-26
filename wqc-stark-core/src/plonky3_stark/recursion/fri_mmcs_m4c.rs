@@ -343,7 +343,8 @@ fn group_eligible(stmts: &[MmcsPathStatement]) -> bool {
 }
 
 /// Fold eligible paths into one group STARK per `WQC_M4B_GROUP_CHUNK`-sized chunk.
-/// Returns an empty Vec when the set is ineligible (host falls back to nested/native).
+/// Chunks are proven **sequentially**; each `generate_*` encodes then drops its
+/// structured uni-STARK so peak RAM tracks one chunk workspace (C10′).
 fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<KeccakGroupFoldProof>, String> {
     if !group_eligible(stmts) {
         return Ok(Vec::new());
@@ -351,8 +352,10 @@ fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<KeccakGroupFoldP
     let chunk = m4b_group_chunk();
     let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
     for c in stmts.chunks(chunk) {
-        groups.push(generate_keccak_group_fold_proof(c)?);
+        let g = generate_keccak_group_fold_proof(c)?;
+        groups.push(g);
     }
+    groups.shrink_to_fit();
     Ok(groups)
 }
 

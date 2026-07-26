@@ -233,8 +233,7 @@ pub fn generate_deep_ro_proof(
     p3_air::check_constraints(&DeepRoAir, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &DeepRoAir, matrix, &pv);
-    let deep_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode deep_ro: {e}"))?;
+    let deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro")?;
     Ok(DeepRoStepProof {
         sx,
         sy,

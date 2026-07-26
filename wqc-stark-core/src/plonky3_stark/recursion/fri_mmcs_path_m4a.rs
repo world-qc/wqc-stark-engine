@@ -641,8 +641,7 @@ pub fn generate_fri_mmcs_batched_path_proof(
     p3_air::check_constraints(&air, &matrix, &pv);
     let config = keccak_circle_config();
     let proof = prove(&config, &air, matrix, &pv);
-    let path_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode m4a path: {e}"))?;
+    let path_stark = super::prove_workspace::encode_stark_and_drop(proof, "m4a path")?;
 
     Ok(FriMmcsBatchedPathProof {
         depth: depth as u32,

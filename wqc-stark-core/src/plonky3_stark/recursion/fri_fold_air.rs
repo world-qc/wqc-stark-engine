@@ -144,8 +144,7 @@ pub fn generate_fri_fold_proof(
     p3_air::check_constraints(&FriFoldAir, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &FriFoldAir, matrix, &pv);
-    step.fold_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri fold: {e}"))?;
+    step.fold_stark = super::prove_workspace::encode_stark_and_drop(proof, "fri fold")?;
     Ok(step)
 }
 
@@ -204,8 +203,7 @@ pub fn generate_fri_fold_y_proof(
     p3_air::check_constraints(&FriFoldAir, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &FriFoldAir, matrix, &pv);
-    step.fold_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode fri fold_y: {e}"))?;
+    step.fold_stark = super::prove_workspace::encode_stark_and_drop(proof, "fri fold_y")?;
     Ok(step)
 }
 

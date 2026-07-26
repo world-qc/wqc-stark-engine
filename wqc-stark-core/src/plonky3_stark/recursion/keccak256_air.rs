@@ -415,8 +415,7 @@ pub fn prove_keccak256(msg: &[u8]) -> Result<Keccak256StarkProof, String> {
     p3_air::check_constraints(&air, &matrix, &pv);
     let config = keccak_circle_config();
     let proof = prove(&config, &air, matrix, &pv);
-    let stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode keccak256: {e}"))?;
+    let stark = super::prove_workspace::encode_stark_and_drop(proof, "keccak256")?;
     Ok(Keccak256StarkProof {
         msg_len: msg.len() as u32,
         digest,

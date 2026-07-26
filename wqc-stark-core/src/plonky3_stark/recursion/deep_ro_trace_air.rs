@@ -473,8 +473,7 @@ pub fn generate_deep_ro_trace_proof(
     p3_air::check_constraints(&DeepRoTraceAir, &matrix, &pv);
     let config = devnet_circle_config();
     let proof = prove(&config, &DeepRoTraceAir, matrix, &pv);
-    let deep_stark =
-        postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode deep_ro_trace: {e}"))?;
+    let deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro_trace")?;
     let mut pz_local_limbs = [[Mersenne31::ZERO; 3]; W];
     let mut pz_next_limbs = [[Mersenne31::ZERO; 3]; W];
     for i in 0..W {
