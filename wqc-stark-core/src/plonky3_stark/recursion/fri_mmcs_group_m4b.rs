@@ -38,18 +38,22 @@ use super::merkle_keccak::hash_val_leaf;
 /// Enough for idle unitary Val-trace + Chal-commit (80) with headroom.
 pub const M4B_MAX_PATHS: usize = 128;
 
-/// Peak-RAM tunable: max paths proven in a single group STARK. Larger groups
-/// shrink wire (fewer outer STARKs) but raise the single-prove workspace peak;
-/// smaller chunks are proven sequentially, so peak RAM tracks one chunk.
-/// Override with `WQC_M4B_GROUP_CHUNK` (clamped to `1..=M4B_MAX_PATHS`); the
-/// default preserves prior behavior (one group per homogeneous category).
+/// Default paths per Mmcs group STARK (`WQC_M4B_GROUP_CHUNK` when unset).
+/// Chosen at the time/size knee (~5 MiB STARK payload, ~17 min unitary leaf PCS).
+pub const M4B_GROUP_CHUNK_DEFAULT: usize = 24;
+
+/// Peak-RAM / prove-time tunable: max paths proven in a single group STARK.
+/// Larger groups shrink wire (fewer outer STARKs) but raise the single-prove
+/// workspace; smaller chunks are proven sequentially (often faster wall-clock
+/// on blowup-16 Keccak matrices). Override with `WQC_M4B_GROUP_CHUNK`
+/// (clamped to `1..=M4B_MAX_PATHS`); default is [`M4B_GROUP_CHUNK_DEFAULT`].
 pub fn m4b_group_chunk() -> usize {
     std::env::var("WQC_M4B_GROUP_CHUNK")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n >= 1)
         .map(|n| n.min(M4B_MAX_PATHS))
-        .unwrap_or(M4B_MAX_PATHS)
+        .unwrap_or(M4B_GROUP_CHUNK_DEFAULT)
 }
 pub const M4B_PATH_IDX_BITS: usize = 7;
 pub const M4B_PATH_IDX_COL: usize = M4A_SEG_IDX_COL + M4A_SEG_IDX_BITS;
