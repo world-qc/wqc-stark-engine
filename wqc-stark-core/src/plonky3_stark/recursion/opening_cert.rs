@@ -41,6 +41,7 @@ use super::fri_mmcs_path::FriMmcsPathProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_agg_ood_step;
 use super::ood_native::generate_agg_ood_proof;
+use super::pcs_memory::{depth_hint_from_degree_bits, plan_pcs_memory};
 
 /// Max Merkle siblings retained for legacy V6 decode (LDE rebuild removed).
 pub const AGG_PCS_MAX_SIBLINGS: usize = 8;
@@ -135,6 +136,26 @@ pub fn build_agg_pcs_certificate(
         .ok_or_else(|| "malformed AggregationAir transcript".to_string())?;
     let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3_bytes)
         .map_err(|e| format!("postcard decode AggregationAir proof: {e}"))?;
+
+    // C13×C11: estimate peak; refuse or spill (lower Mmcs chunk) before heavy prove.
+    let mem_plan = plan_pcs_memory(
+        proof.degree_bits,
+        Some(depth_hint_from_degree_bits(proof.degree_bits)),
+    )?;
+    if let Some(budget) = mem_plan.budget_bytes {
+        eprintln!(
+            "[AggPcs] memory plan: est={:.2} GiB budget={:.2} GiB chunk={}{}",
+            mem_plan.estimate_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+            budget as f64 / (1024.0 * 1024.0 * 1024.0),
+            mem_plan.effective_chunk,
+            if mem_plan.spilled {
+                format!(" (spilled from {})", mem_plan.requested_chunk)
+            } else {
+                String::new()
+            },
+        );
+    }
+    let _chunk_guard = mem_plan.enter_chunk_override();
 
     let ood = generate_agg_ood_proof(&proof).map_err(|e| format!("R3 OOD prove failed: {e}"))?;
     if !verify_ood_proof(&ood) {

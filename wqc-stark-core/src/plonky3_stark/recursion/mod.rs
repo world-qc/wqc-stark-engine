@@ -40,6 +40,7 @@ mod ood_leaf_fold;
 mod ood_native;
 mod opening_cert;
 mod pcs_geom;
+mod pcs_memory;
 mod prove;
 mod prove_workspace;
 mod transcript_v5;
@@ -149,6 +150,10 @@ pub use pcs_geom::{
     validate_born_recursion_outcomes, validate_born_recursion_width, LeafKind, PcsGeom,
     BORN_RECURSION_MAX_OUTCOMES, BORN_RECURSION_MAX_TRACE_WIDTH, LEAF_DEEP_RO_MAX_WIDTH,
     SHOT_TRACE_WIDTH, TRAJ_MARGINAL_TRACE_WIDTH, UNITARY_TRACE_WIDTH,
+};
+pub use pcs_memory::{
+    budget_bytes_from_env, estimate_pcs_peak_bytes, plan_pcs_memory, PcsMemoryPlan,
+    PcsMemoryPolicy, PCS_MEMORY_ERR_PREFIX,
 };
 pub use prove::{
     append_rec_tail, generate_recursive_aggregation_proof, has_rec_tail, split_rec_tail,

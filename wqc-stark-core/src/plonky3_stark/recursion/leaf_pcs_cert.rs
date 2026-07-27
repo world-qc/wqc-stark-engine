@@ -50,6 +50,7 @@ use super::opening_cert::LEAF_PCS_MAX_SIBLINGS;
 use super::pcs_geom::{
     validate_born_recursion_width, LeafKind, LEAF_DEEP_RO_MAX_WIDTH, UNITARY_TRACE_WIDTH,
 };
+use super::pcs_memory::{depth_hint_from_degree_bits, plan_pcs_memory};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeafPcsCertificate {
@@ -263,6 +264,26 @@ pub fn build_leaf_pcs_certificate(
     }
     let trace_width = proof.opened_values.trace_local.len();
     validate_leaf_recursion_trace_width(kind, trace_width)?;
+
+    // C13×C11: estimate peak; refuse or spill (lower Mmcs chunk) before heavy prove.
+    let mem_plan = plan_pcs_memory(
+        proof.degree_bits,
+        Some(depth_hint_from_degree_bits(proof.degree_bits)),
+    )?;
+    if let Some(budget) = mem_plan.budget_bytes {
+        eprintln!(
+            "[LeafPcs] memory plan: est={:.2} GiB budget={:.2} GiB chunk={}{}",
+            mem_plan.estimate_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+            budget as f64 / (1024.0 * 1024.0 * 1024.0),
+            mem_plan.effective_chunk,
+            if mem_plan.spilled {
+                format!(" (spilled from {})", mem_plan.requested_chunk)
+            } else {
+                String::new()
+            },
+        );
+    }
+    let _chunk_guard = mem_plan.enter_chunk_override();
 
     let ood_params = ood_params_for_kind(kind, proof)?;
     let num_outcomes = match ood_params {

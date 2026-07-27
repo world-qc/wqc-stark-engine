@@ -11,6 +11,8 @@
 
 #![allow(clippy::needless_range_loop)]
 
+use std::cell::Cell;
+
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
@@ -42,18 +44,47 @@ pub const M4B_MAX_PATHS: usize = 128;
 /// Chosen at the time/size knee (~5 MiB STARK payload, ~17 min unitary leaf PCS).
 pub const M4B_GROUP_CHUNK_DEFAULT: usize = 24;
 
-/// Peak-RAM / prove-time tunable: max paths proven in a single group STARK.
-/// Larger groups shrink wire (fewer outer STARKs) but raise the single-prove
-/// workspace; smaller chunks are proven sequentially (often faster wall-clock
-/// on blowup-16 Keccak matrices). Override with `WQC_M4B_GROUP_CHUNK`
-/// (clamped to `1..=M4B_MAX_PATHS`); default is [`M4B_GROUP_CHUNK_DEFAULT`].
-pub fn m4b_group_chunk() -> usize {
+thread_local! {
+    /// Session override for one PCS build (spill / gate). Nested guards restore.
+    static M4B_CHUNK_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// RAII guard that sets the thread-local Mmcs group chunk for a PCS build.
+pub struct M4bChunkGuard {
+    prev: Option<usize>,
+}
+
+impl M4bChunkGuard {
+    pub fn set(chunk: usize) -> Self {
+        let chunk = chunk.clamp(1, M4B_MAX_PATHS);
+        let prev = M4B_CHUNK_OVERRIDE.with(|c| c.replace(Some(chunk)));
+        Self { prev }
+    }
+}
+
+impl Drop for M4bChunkGuard {
+    fn drop(&mut self) {
+        M4B_CHUNK_OVERRIDE.with(|c| c.set(self.prev));
+    }
+}
+
+/// Env / default chunk only (ignores session override). Used by the memory gate.
+pub fn m4b_group_chunk_from_env() -> usize {
     std::env::var("WQC_M4B_GROUP_CHUNK")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n >= 1)
         .map(|n| n.min(M4B_MAX_PATHS))
         .unwrap_or(M4B_GROUP_CHUNK_DEFAULT)
+}
+
+/// Peak-RAM / prove-time tunable: max paths proven in a single group STARK.
+/// Session override (PCS memory spill) wins over `WQC_M4B_GROUP_CHUNK`.
+pub fn m4b_group_chunk() -> usize {
+    if let Some(o) = M4B_CHUNK_OVERRIDE.with(|c| c.get()) {
+        return o;
+    }
+    m4b_group_chunk_from_env()
 }
 pub const M4B_PATH_IDX_BITS: usize = 7;
 pub const M4B_PATH_IDX_COL: usize = M4A_SEG_IDX_COL + M4A_SEG_IDX_BITS;
