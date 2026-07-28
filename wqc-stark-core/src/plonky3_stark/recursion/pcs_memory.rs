@@ -206,7 +206,7 @@ pub fn plan_pcs_memory(
 
 #[cfg(test)]
 mod tests {
-    use super::super::fri_mmcs_group_m4b::M4B_GROUP_CHUNK_DEFAULT;
+    use super::super::fri_mmcs_group_m4b::{M4B_GROUP_CHUNK_DEFAULT, PCS_MMCS_GROUP_CHUNK_ENV};
     use super::*;
     use std::sync::Mutex;
 
@@ -218,7 +218,7 @@ mod tests {
         std::env::remove_var("WQC_MAX_MEMORY_GB");
         std::env::remove_var("WQC_PCS_MEMORY_POLICY");
         std::env::remove_var("WQC_PCS_MEMORY_ESTIMATE_SCALE");
-        std::env::remove_var("WQC_M4B_GROUP_CHUNK");
+        std::env::remove_var(PCS_MMCS_GROUP_CHUNK_ENV);
         f()
     }
 
@@ -249,7 +249,7 @@ mod tests {
     fn under_budget_keeps_requested_chunk() {
         with_clean_env(|| {
             std::env::set_var("WQC_MAX_MEMORY_GB", "64");
-            std::env::set_var("WQC_M4B_GROUP_CHUNK", "24");
+            std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             let plan = plan_pcs_memory(8, Some(8)).expect("plan");
             assert!(!plan.spilled);
             assert_eq!(plan.effective_chunk, 24);
@@ -260,7 +260,7 @@ mod tests {
     fn refuse_when_over_budget() {
         with_clean_env(|| {
             std::env::set_var("WQC_MAX_MEMORY_GB", "1");
-            std::env::set_var("WQC_M4B_GROUP_CHUNK", "24");
+            std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             // default policy = refuse
             let err = plan_pcs_memory(8, Some(8)).expect_err("refuse");
             assert!(err.starts_with(PCS_MEMORY_ERR_PREFIX));
@@ -273,7 +273,7 @@ mod tests {
         with_clean_env(|| {
             std::env::set_var("WQC_MAX_MEMORY_GB", "2");
             std::env::set_var("WQC_PCS_MEMORY_POLICY", "spill");
-            std::env::set_var("WQC_M4B_GROUP_CHUNK", "24");
+            std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             let plan = plan_pcs_memory(8, Some(8)).expect("spill");
             assert!(plan.spilled || plan.effective_chunk < 24);
             assert!(plan.effective_chunk <= 24);
@@ -286,7 +286,7 @@ mod tests {
         with_clean_env(|| {
             std::env::set_var("WQC_MAX_MEMORY_GB", "0.1");
             std::env::set_var("WQC_PCS_MEMORY_POLICY", "spill");
-            std::env::set_var("WQC_M4B_GROUP_CHUNK", "24");
+            std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             let err = plan_pcs_memory(8, Some(8)).expect_err("still refuse");
             assert!(err.contains("policy=spill"));
         });
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn chunk_override_guard_restores() {
         with_clean_env(|| {
-            std::env::set_var("WQC_M4B_GROUP_CHUNK", "24");
+            std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             assert_eq!(super::super::fri_mmcs_group_m4b::m4b_group_chunk(), 24);
             {
                 let _g = M4bChunkGuard::set(4);

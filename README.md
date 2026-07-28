@@ -73,7 +73,7 @@ cargo test -p wqc-stark-core --features plonky3-stark --release unitary_trajecto
 ```
 
 **Leaf PCS memory:** `build_leaf_pcs_certificate` / aggregation PCS use FriFold group proofs,
-DeepRo per query, and chunked Keccak Mmcs groups (`WQC_M4B_GROUP_CHUNK`, default **24**; see
+DeepRo per query, and chunked Keccak Mmcs groups (`WQC_PCS_MMCS_GROUP_CHUNK`, default **24**; see
 [zk-STARK.md §8.4](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md)). Nested
 uni-STARK workspaces are dropped after postcard encode between proves. **Memory gate:** when
 `WQC_MAX_MEMORY_GB` is set and the peak estimate exceeds budget, `WQC_PCS_MEMORY_POLICY` is
@@ -121,7 +121,7 @@ outcome dimension K≤21 (AIR width W≤68). Protocol details:
 ## Roadmap
 
 - **Proof size / PCS:** Keccak Mmcs and FriFold group proofs; idle 2-leaf compose ≈ **16 MiB**.
-  Mmcs chunk tunable via `WQC_M4B_GROUP_CHUNK` (default **24**). Optional: recursion-friendly
+  Mmcs chunk tunable via `WQC_PCS_MMCS_GROUP_CHUNK` (default **24**). Optional: recursion-friendly
   hash (e.g. Poseidon2) inside fold circuits.
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.

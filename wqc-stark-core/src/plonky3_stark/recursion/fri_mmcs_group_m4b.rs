@@ -40,9 +40,12 @@ use super::merkle_keccak::hash_val_leaf;
 /// Enough for idle unitary Val-trace + Chal-commit (80) with headroom.
 pub const M4B_MAX_PATHS: usize = 128;
 
-/// Default paths per Mmcs group STARK (`WQC_M4B_GROUP_CHUNK` when unset).
+/// Default paths per Mmcs group STARK (`WQC_PCS_MMCS_GROUP_CHUNK` when unset).
 /// Chosen at the time/size knee (~5 MiB STARK payload, ~17 min unitary leaf PCS).
 pub const M4B_GROUP_CHUNK_DEFAULT: usize = 24;
+
+/// User-facing env: max Merkle paths batched into one Mmcs group STARK during PCS prove.
+pub const PCS_MMCS_GROUP_CHUNK_ENV: &str = "WQC_PCS_MMCS_GROUP_CHUNK";
 
 thread_local! {
     /// Session override for one PCS build (spill / gate). Nested guards restore.
@@ -70,16 +73,19 @@ impl Drop for M4bChunkGuard {
 
 /// Env / default chunk only (ignores session override). Used by the memory gate.
 pub fn m4b_group_chunk_from_env() -> usize {
-    std::env::var("WQC_M4B_GROUP_CHUNK")
+    parse_group_chunk_env(PCS_MMCS_GROUP_CHUNK_ENV).unwrap_or(M4B_GROUP_CHUNK_DEFAULT)
+}
+
+fn parse_group_chunk_env(key: &str) -> Option<usize> {
+    std::env::var(key)
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n >= 1)
         .map(|n| n.min(M4B_MAX_PATHS))
-        .unwrap_or(M4B_GROUP_CHUNK_DEFAULT)
 }
 
 /// Peak-RAM / prove-time tunable: max paths proven in a single group STARK.
-/// Session override (PCS memory spill) wins over `WQC_M4B_GROUP_CHUNK`.
+/// Session override (PCS memory spill) wins over `WQC_PCS_MMCS_GROUP_CHUNK`.
 pub fn m4b_group_chunk() -> usize {
     if let Some(o) = M4B_CHUNK_OVERRIDE.with(|c| c.get()) {
         return o;

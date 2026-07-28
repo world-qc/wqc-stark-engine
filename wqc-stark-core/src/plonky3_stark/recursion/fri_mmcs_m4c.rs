@@ -26,7 +26,7 @@ use super::merkle_keccak::hash_val_leaf;
 /// Leaf PCS Mmcs wire version (after `kind` byte in V6 leaf cert).
 /// v2: adds `val_quot_batch` + `chal_first_layer` equal-height / single-matrix batch folds.
 /// v3: each homogeneous category holds a `Vec` of chunked group STARKs (peak-RAM
-///     tunable via `WQC_M4B_GROUP_CHUNK`) instead of a single optional group.
+///     tunable via `WQC_PCS_MMCS_GROUP_CHUNK`) instead of a single optional group.
 pub const LEAF_MMCS_FOLD_V: u8 = 3;
 
 const EF_DIM: usize = 3;
@@ -36,7 +36,7 @@ const CHAL_LEAF_WIDTH: usize = 6;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LeafMmcsFoldGroups {
     /// Chunked group STARKs per category (v3). Empty = category not folded;
-    /// multiple entries = paths split into `WQC_M4B_GROUP_CHUNK`-sized chunks
+    /// multiple entries = paths split into `WQC_PCS_MMCS_GROUP_CHUNK`-sized chunks
     /// proven sequentially. Chunk boundaries are recovered from each group's
     /// `path_count` on verify (env-independent).
     pub val_trace: Vec<KeccakGroupFoldProof>,
@@ -342,7 +342,7 @@ fn group_eligible(stmts: &[MmcsPathStatement]) -> bool {
         .all(|s| s.row.len() == width && s.siblings.len() == depth)
 }
 
-/// Fold eligible paths into one group STARK per `WQC_M4B_GROUP_CHUNK`-sized chunk.
+/// Fold eligible paths into one group STARK per `WQC_PCS_MMCS_GROUP_CHUNK`-sized chunk.
 /// Chunks are proven **sequentially**; each `generate_*` encodes then drops its
 /// structured uni-STARK so peak RAM tracks one chunk workspace (C10′).
 fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<KeccakGroupFoldProof>, String> {
