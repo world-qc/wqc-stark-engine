@@ -16,8 +16,8 @@ wqc-stark-engine/
 └── wqc-stark-ffi/      # CGO-compatible `libwqc_stark_verifier`
 ```
 
-* **`wqc-stark-core`**: Quantum execution AIR over Plonky3 Mersenne31 field types. Supports embedded trace verification, FRI STARKs via Plonky3 Circle PCS, distribution / trajectory segments, Born and shot-sampling AIRs, leaf compose proofs, and **R3 in-circuit recursion** (RecAgg V6, agg/leaf PCS certificates, in-circuit OOD / FriFold / DeepRo / Keccak Mmcs; Born K≤21, W≤68).
-* **`wqc-stark-ffi`**: Panic-safe C ABI for the Go orchestrator (leaf verify, compose, root verify, distribution/trajectory binding, scheme detection).
+* **`wqc-stark-core`**: Quantum execution AIR over Plonky3 Mersenne31 field types. Supports embedded trace verification, FRI STARKs via Plonky3 Circle PCS, distribution / trajectory segments, Born and shot-sampling AIRs, leaf compose proofs, and in-circuit recursive aggregation (`RecursiveAggregationAir` v6 with agg/leaf PCS certificates, in-circuit OOD / FriFold / DeepRo / Keccak Mmcs; Born K≤21, W≤68).
+* **`wqc-stark-ffi`**: Panic-safe C ABI for the Go orchestrator (leaf verify, compose with optional prebuilt leaf PCS, root verify, `wqc_build_leaf_pcs_bundle`, distribution/trajectory binding, scheme detection).
 
 ## Public inputs (`StarkContext`)
 
@@ -38,9 +38,9 @@ wqc-stark-engine/
 | v1 | `_M31_QUANTUM_AIR_V1_` | Legacy embedded-trace AIR (unitary only); **rejected** by current verifiers |
 | v2 | `_M31_PLONKY3_STARK_V2_` | Plonky3 Circle PCS uni-STARK (unitary); still the primary leaf proof |
 | v3 | `_WQC_COMPOSE_V3_` | Proof-tree compose — binds two child proofs by SHA3-256 hash (leaf or agg pairs) |
-| v4 | `_WQC_AGG_STARK_V4_` / `_WQC_AGG_TAIL_V4_` | AggregationAir Plonky3 STARK (R2); parent of two child digests |
-| v5 | `_WQC_REC_AGG_V5_` / `_WQC_REC_TAIL_V5_` | Recursive aggregation (R3-M1); wraps AggregationAir proof + child metadata |
-| v6 | `_WQC_REC_AGG_V6_` / `_WQC_REC_TAIL_V6_` | Recursive aggregation (R3-M2–M3e); agg/leaf PCS certificates with in-circuit OOD, FriFold, DeepRo, FRI Val/Challenge Mmcs STARKs |
+| v4 | `_WQC_AGG_STARK_V4_` / `_WQC_AGG_TAIL_V4_` | AggregationAir digest attestation |
+| v5 | `_WQC_REC_AGG_V5_` / `_WQC_REC_TAIL_V5_` | Recursive aggregation (legacy); wraps AggregationAir + child metadata |
+| v6 | `_WQC_REC_AGG_V6_` / `_WQC_REC_TAIL_V6_` | Recursive aggregation with agg/leaf PCS certificates, in-circuit OOD, FriFold, DeepRo, Val/Challenge Mmcs |
 
 **Layout** — v2/v4 carry a postcard-encoded Plonky3 proof after C-string public inputs. v3/v5/v6 embed compose headers (`parent_task_id`, `compose_label`, child hashes/digests/kinds) followed by the child proof bytes.
 
@@ -60,10 +60,25 @@ cargo test --release
 
 RecAgg V6 / leaf PCS roundtrips prove nested Keccak STARKs and can take **hours** even in release. They are marked `#[ignore]` and **not** run on GitHub Actions (timeout + Actions minute quota).
 
+Each ignored test can use **several GiB RAM** while proving. Uncapped parallelism (cargo default) often ends in **SIGKILL (signal 9)** from the OS OOM killer. Cap threads:
+
 ```bash
 # Optional local stress / regression (release strongly recommended)
-cargo test -p wqc-stark-core --features plonky3-stark --release -- --ignored
+# --test-threads=4: ~5.5 h wall on a 16 GiB+ machine (16/16 ok measured)
+# --test-threads=1: safer on low-RAM hosts
+cargo test -p wqc-stark-core --features plonky3-stark --release -- --ignored --test-threads=4
+
+# Single test (faster feedback; e.g. 2-leaf compose size ~85 min)
+cargo test -p wqc-stark-core --features plonky3-stark --release unitary_trajectory_compose_roundtrip -- --ignored --nocapture
 ```
+
+**Leaf PCS memory:** `build_leaf_pcs_certificate` / aggregation PCS use FriFold group proofs,
+DeepRo per query, and chunked Keccak Mmcs groups (`WQC_M4B_GROUP_CHUNK`, default **24**; see
+[zk-STARK.md §8.4](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md)). Nested
+uni-STARK workspaces are dropped after postcard encode between proves. **Memory gate:** when
+`WQC_MAX_MEMORY_GB` is set and the peak estimate exceeds budget, `WQC_PCS_MEMORY_POLICY` is
+`refuse` (default) or `spill` (auto-lower Mmcs chunk for that build). Cap `RAYON_NUM_THREADS`
+on low-RAM hosts; raise core `mem_limit` (8G+) or use `spill` if refuse/OOM persists.
 
 ### Docker
 
@@ -75,29 +90,44 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
        /output/
 ```
 
-## In-circuit recursion (R3)
+## In-circuit recursion
 
-**M3e landed** (`plonky3-stark` feature): leaf and agg PCS bundles through RecAgg V6 + compose; verify-time in-circuit OOD (agg + all leaf AIR kinds), FriFold, DeepRo, Val/Challenge Mmcs; Born trace width capped at W≤68 (K≤21). Protocol (soundness ladder, V6 side flags, residuals): [zk-STARK.md §8](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md).
+With the `plonky3-stark` feature, leaf and aggregation PCS certificates bind FRI openings inside
+`RecursiveAggregationAir` (v6) compose. Verify-time checks include in-circuit OOD (aggregation
+and all leaf AIR kinds), FriFold, DeepRo, and Val/Challenge Mmcs. Born recursion supports
+outcome dimension K≤21 (AIR width W≤68). Protocol details:
+[zk-STARK.md §8](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md).
 
-| Path under `wqc-stark-core/.../recursion/` | Role |
+| Module (`wqc-stark-core/.../recursion/`) | Role |
 |--------------------------------------------|------|
-| `ood_air.rs` | `OodCheckAir` STARK: ζ quotient + agg in-circuit fold |
+| `ood_air.rs` | `OodCheckAir` STARK: ζ quotient + aggregation in-circuit fold |
 | `ood_native.rs` | Prove-time OOD witness extraction (FS replay) |
 | `ood_bind.rs` | Bind OOD step to child openings at verify |
 | `ood_leaf_fold.rs` | In-circuit leaf constraint fold (Unitary / Distribution / Shot) |
 | `ood_fold.rs` | Native fold for prove-time witness sanity checks |
-| `leaf_pcs_cert.rs` | Leaf cert prove/verify + born/traj bundle decode |
-| `transcript_v6.rs` | V6 encode / decode (agg cert OR leaf bundle) |
+| `fri_mmcs_path.rs` | Per-step Keccak Mmcs path proofs (superseded by group fold on wire) |
+| `fri_mmcs_path_m4a.rs` | Single Merkle path → batched Keccak path STARK |
+| `fri_mmcs_group_m4b.rs` | Homogeneous Val/Chal paths → `KeccakGroupFoldProof` |
+| `fri_mmcs_m4c.rs` | Leaf + aggregation Mmcs groups (bind, strip nested proofs) |
+| `fri_fold_group.rs` | FriFold steps → `FriFoldGroupProof` (Y or X) |
+| `fri_fold_m4c.rs` | Apply / strip / bind FriFold groups |
+| `pcs_memory.rs` | PCS peak-RAM estimate, `refuse` / `spill` memory gate |
+| `leaf_pcs_cert.rs` | Leaf cert prove/verify + Born/trajectory bundle decode |
+| `transcript_v6.rs` | v6 encode / decode (agg cert or leaf bundle) |
 | `prove.rs` | RecAgg matrix bind for leaf bundles |
-| `air.rs` | kind=leaf no longer zeroes PCS columns |
-| `../aggregation/mod.rs` | `pcs_for_child` → compose / verify context |
+| `air.rs` | Recursive aggregation AIR (leaf PCS columns) |
+| `../aggregation/mod.rs` | Compose / verify context; optional prebuilt leaf PCS |
 
 ## Roadmap
 
-- Reduce RecAgg V6 leaf PCS proof size / memory footprint (current all-query Plonky3 leaf PCS can push compose outputs into the GiB range because ValMmcs / ChallengeMmcs Keccak STARKs dominate)
-- Prove-time witness oracles in-circuit (verify-time OOD is done; proving still extracts OOD / DeepRo / FriFold witnesses via native Plonky3)
-- Multi-chunk quotient leaf DeepRo STARKs (deferred today)
-- Full-stack multislice RecAgg V6 compose on docs/devnet (orch CGO unit E2E: `TestRecAggV6ComposeE2E`)
+- **Proof size / PCS:** Keccak Mmcs and FriFold group proofs; idle 2-leaf compose ≈ **16 MiB**.
+  Mmcs chunk tunable via `WQC_M4B_GROUP_CHUNK` (default **24**). Optional: recursion-friendly
+  hash (e.g. Poseidon2) inside fold circuits.
+- **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
+  bundles with orchestrator fallback on refuse / timeout.
+- Prove-time witness oracles in-circuit
+- Multi-chunk quotient leaf DeepRo STARKs
+- Full-stack multislice recursive aggregation compose on devnet
 
 ## Contributing
 
