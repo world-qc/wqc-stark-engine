@@ -3,11 +3,12 @@ use std::os::raw::c_char;
 use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
-    build_encoded_leaf_pcs_bundle_from_child, compose_stark_proofs_with_pcs, generate_stark_proof,
-    is_unitary_born_leaf_compose, is_unitary_trajectory_leaf_compose,
-    proof_has_trajectory_unitary_link, proof_has_unitary_statevector_link, trajectory_proof_view,
-    verify_distribution_binding, verify_root_proof, verify_stark_proof_core,
-    verify_trajectory_binding, ComposeContext, RootVerifyContext, StarkContext,
+    build_encoded_leaf_pcs_bundle_from_child, compose_stark_proofs_with_pcs,
+    decode_leaf_pcs_bundle_bytes, generate_stark_proof, is_unitary_born_leaf_compose,
+    is_unitary_trajectory_leaf_compose, proof_has_trajectory_unitary_link,
+    proof_has_unitary_statevector_link, trajectory_proof_view, verify_distribution_binding,
+    verify_leaf_pcs_bundle, verify_root_proof, verify_stark_proof_core, verify_trajectory_binding,
+    ComposeContext, RootVerifyContext, StarkContext,
 };
 
 fn unwind_to_ffi_code(result: Result<i32, Box<dyn std::any::Any + Send>>) -> i32 {
@@ -251,6 +252,45 @@ pub unsafe extern "C" fn wqc_build_leaf_pcs_bundle(
         let out = slice::from_raw_parts_mut(out_buf, encoded.len());
         out.copy_from_slice(&encoded);
         encoded.len() as i32
+    });
+    unwind_to_ffi_code(result)
+}
+
+/// Verifies an encoded leaf PCS bundle against its leaf STARK proof.
+///
+/// Returns `1` on success, `0` on verification/decode failure, `-99` on panic.
+///
+/// # Safety
+///
+/// `proof` / `pcs_bundle` must reference at least `proof_len` / `pcs_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_verify_leaf_pcs_bundle(
+    proof: *const u8,
+    proof_len: u32,
+    pcs_bundle: *const u8,
+    pcs_len: u32,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof.is_null() || pcs_bundle.is_null() || proof_len == 0 || pcs_len == 0 {
+            eprintln!("[Rust FFI] verify_leaf_pcs: null/empty required pointer");
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof, proof_len as usize);
+        let pcs_slice = slice::from_raw_parts(pcs_bundle, pcs_len as usize);
+        let bundle = match decode_leaf_pcs_bundle_bytes(pcs_slice) {
+            Some(b) => b,
+            None => {
+                eprintln!("[Rust FFI] verify_leaf_pcs: decode failed");
+                return 0;
+            }
+        };
+        match verify_leaf_pcs_bundle(proof_slice, &bundle) {
+            Ok(()) => 1,
+            Err(err) => {
+                eprintln!("[Rust FFI] verify_leaf_pcs failed: {err}");
+                0
+            }
+        }
     });
     unwind_to_ffi_code(result)
 }
