@@ -253,6 +253,7 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
                 sub_task_id: context.sub_task_id,
                 probability_digest: &segment.probability_digest,
                 terminal_statevector_digest: sv_digest,
+                security_level: context.security_level,
             };
             if !verify_born_stark_proof(&born_ctx, &segment, born_bytes) {
                 eprintln!("[STARK Core] Failed: Born zk STARK verification failed");
@@ -282,7 +283,12 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
                 eprintln!("[STARK Core] Failed: trajectory zk STARK tail missing");
                 return false;
             };
-            if !verify_trajectory_stark_bundle(context.sub_task_id, &segment, bundle) {
+            if !verify_trajectory_stark_bundle(
+                context.sub_task_id,
+                &segment,
+                bundle,
+                context.security_level,
+            ) {
                 eprintln!("[STARK Core] Failed: trajectory zk STARK verification failed");
                 return false;
             }
@@ -418,6 +424,7 @@ mod tests {
                 sub_task_id: ctx.sub_task_id,
                 probability_digest: &segment.probability_digest,
                 terminal_statevector_digest: sv_digest,
+                security_level: "",
             };
             let born = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
             proof = append_born_stark_tail(proof, &born);
@@ -453,6 +460,7 @@ mod tests {
             sub_task_id: ctx.sub_task_id,
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: sv_digest,
+            security_level: "",
         };
         let born = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
         proof = append_born_stark_tail(proof, &born);

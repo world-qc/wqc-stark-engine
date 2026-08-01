@@ -2,10 +2,13 @@
 
 use p3_uni_stark::{Proof, StarkGenericConfig};
 
-use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    devnet_circle_config_with_queries, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES,
+};
 use crate::plonky3_stark::shot_sampling_air::SHOT_SAMPLING_AIR_WIDTH;
 use crate::trace_spec::AIR_WIDTH;
 
+use super::fri_fs_replay::fri_queries_from_proof;
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
 
 pub use crate::plonky3_stark::distribution_air::{
@@ -37,9 +40,9 @@ pub struct PcsGeom {
 
 impl PcsGeom {
     pub fn from_proof(proof: &Proof<WqcStarkConfig>, trace_width: usize) -> Self {
-        let config = devnet_circle_config();
+        let num_queries = fri_queries_from_proof(proof).unwrap_or(DEVNET_FRI_NUM_QUERIES);
+        let config = devnet_circle_config_with_queries(num_queries);
         let log_blowup = config.pcs().fri_params.log_blowup;
-        let num_queries = config.pcs().fri_params.num_queries;
         // LDE height = 2^(degree_bits + log_blowup); Merkle depth ≤ that log.
         let max_mmcs_depth = (proof.degree_bits + log_blowup).min(FRI_MMCS_MAX_DEPTH);
         // Commit-phase rounds ≈ fri height − blowup; cap generously.

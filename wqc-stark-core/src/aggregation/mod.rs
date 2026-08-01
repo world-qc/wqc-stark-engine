@@ -55,12 +55,16 @@ pub struct ComposeContext<'a> {
     pub parent_task_id: &'a str,
     pub compose_label: &'a str,
     pub manifest_root_hash: &'a str,
+    /// Orchestrator security tier; empty → FRI default (40).
+    pub security_level: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RootVerifyContext<'a> {
     pub parent_task_id: &'a str,
     pub manifest_root_hash: &'a str,
+    /// Orchestrator security tier; empty → FRI default (40).
+    pub security_level: &'a str,
 }
 
 /// Verifies a single child proof (leaf or nested compose) before composition.
@@ -72,12 +76,13 @@ pub fn verify_child_proof(
     if child.is_empty() {
         return Err("child proof is empty".to_string());
     }
+    let security_level = leaf_ctx.map(|c| c.security_level).unwrap_or("");
     if is_trajectory_leaf_proof(child) {
-        return verify_trajectory_leaf(parent_task_id, child)
+        return verify_trajectory_leaf(parent_task_id, child, security_level)
             .map_err(|e| format!("trajectory leaf verification failed: {e}"));
     }
     if is_born_leaf_proof(child) {
-        return verify_born_leaf(parent_task_id, child)
+        return verify_born_leaf(parent_task_id, child, security_level)
             .map_err(|e| format!("Born leaf verification failed: {e}"));
     }
 
@@ -101,6 +106,7 @@ pub fn verify_child_proof(
                 parent_task_id: embedded_parent.as_deref().unwrap_or(parent_task_id),
                 compose_label: "",
                 manifest_root_hash: "",
+                security_level,
             },
             child,
         );
@@ -181,6 +187,7 @@ pub fn compose_stark_proofs_with_pcs(
             manifest_root_hash: context.manifest_root_hash,
             left_child_hash: left_hash,
             right_child_hash: right_hash,
+            security_level: context.security_level,
         };
         let agg_proof = generate_aggregation_proof(&agg_ctx)
             .map_err(|e| format!("aggregation STARK prove failed: {e}"))?;
@@ -207,6 +214,7 @@ pub fn compose_stark_proofs_with_pcs(
             right_agg_cert: right_pcs.agg_cert,
             left_leaf_bundle: left_pcs.leaf_bundle,
             right_leaf_bundle: right_pcs.leaf_bundle,
+            security_level: context.security_level,
         };
         let rec_proof = generate_recursive_aggregation_proof(&rec_ctx)
             .map_err(|e| format!("R3-M2 recursive aggregation STARK prove failed: {e}"))?;
@@ -336,6 +344,7 @@ fn cert_for_child_agg(agg: &[u8]) -> Result<crate::plonky3_stark::AggPcsCertific
         manifest_root_hash: header.manifest_root_hash.as_str(),
         left_child_hash: header.left_child_hash,
         right_child_hash: header.right_child_hash,
+        security_level: "",
     };
     let cert = build_agg_pcs_certificate(&agg_ctx, agg)
         .map_err(|e| format!("R3-M2 AggregationAir PCS certificate failed: {e}"))?;
@@ -410,6 +419,7 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
             &left_child,
             &right_child,
             Some(rec_bytes),
+            context.security_level,
         )?;
         if !verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
             return Err("R3-M2 recursive aggregation STARK verification failed".to_string());
@@ -421,6 +431,7 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
             manifest_root_hash: header.manifest_root_hash.as_str(),
             left_child_hash: header.left_child_hash,
             right_child_hash: header.right_child_hash,
+            security_level: context.security_level,
         };
         if !verify_aggregation_proof(&agg_ctx, agg_bytes) {
             return Err("aggregation STARK verification failed".to_string());
@@ -435,6 +446,7 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
 /// Prefer [`recursive_context_for_children_with_proof`] when a RecAgg V6 transcript is
 /// available so embedded leaf/agg PCS can be reused instead of re-proved.
 #[cfg(feature = "plonky3-stark")]
+#[allow(clippy::too_many_arguments)]
 pub fn recursive_context_for_children<'a>(
     parent_task_id: &'a str,
     compose_label: &'a str,
@@ -443,6 +455,7 @@ pub fn recursive_context_for_children<'a>(
     right_child_hash: [u8; CHILD_HASH_LEN],
     left_child: &'a [u8],
     right_child: &'a [u8],
+    security_level: &'a str,
 ) -> Result<RecursiveAggregationContext<'a>, String> {
     rebuild_rec_context(
         parent_task_id,
@@ -453,6 +466,7 @@ pub fn recursive_context_for_children<'a>(
         left_child,
         right_child,
         None,
+        security_level,
     )
 }
 
@@ -468,6 +482,7 @@ pub fn recursive_context_for_children_with_proof<'a>(
     left_child: &'a [u8],
     right_child: &'a [u8],
     rec_bytes: &[u8],
+    security_level: &'a str,
 ) -> Result<RecursiveAggregationContext<'a>, String> {
     rebuild_rec_context(
         parent_task_id,
@@ -478,6 +493,7 @@ pub fn recursive_context_for_children_with_proof<'a>(
         left_child,
         right_child,
         Some(rec_bytes),
+        security_level,
     )
 }
 
@@ -492,6 +508,7 @@ fn rebuild_rec_context<'a>(
     left_child: &'a [u8],
     right_child: &'a [u8],
     rec_bytes: Option<&[u8]>,
+    security_level: &'a str,
 ) -> Result<RecursiveAggregationContext<'a>, String> {
     let left_bind = child_stark_binding(left_child);
     let right_bind = child_stark_binding(right_child);
@@ -550,6 +567,7 @@ fn rebuild_rec_context<'a>(
                 right_agg_cert: right_pcs.agg_cert,
                 left_leaf_bundle: left_pcs.leaf_bundle,
                 right_leaf_bundle: right_pcs.leaf_bundle,
+                security_level,
             });
         }
     }
@@ -570,6 +588,7 @@ fn rebuild_rec_context<'a>(
         right_agg_cert: right_pcs.agg_cert,
         left_leaf_bundle: left_pcs.leaf_bundle,
         right_leaf_bundle: right_pcs.leaf_bundle,
+        security_level,
     })
 }
 
@@ -598,6 +617,7 @@ fn pcs_from_embedded_or_build(
                 manifest_root_hash: header.manifest_root_hash.as_str(),
                 left_child_hash: header.left_child_hash,
                 right_child_hash: header.right_child_hash,
+                security_level: "",
             };
             if !verify_agg_pcs_certificate(&agg_ctx, agg, &cert) {
                 return Err("embedded AggregationAir PCS certificate verify failed".to_string());
@@ -670,6 +690,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                         &left_child,
                         &right_child,
                         Some(rec_bytes),
+                        context.security_level,
                     ) {
                         Ok(rec_ctx) => {
                             if verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
@@ -701,6 +722,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                         manifest_root_hash: context.manifest_root_hash,
                         left_child_hash: header.left_child_hash,
                         right_child_hash: header.right_child_hash,
+                        security_level: "",
                     };
                     if !context.manifest_root_hash.is_empty()
                         && header.manifest_root_hash != context.manifest_root_hash
@@ -741,6 +763,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
         parent_task_id: context.parent_task_id,
         compose_label: "root",
         manifest_root_hash: context.manifest_root_hash,
+        security_level: context.security_level,
     };
 
     match verify_composed_proof(&compose_ctx, proof) {
@@ -781,6 +804,56 @@ mod integration_tests {
     }
 
     #[test]
+    #[ignore = "slow; local only — not run in CI"]
+    fn compose_two_leaves_low_security_and_verify_root() {
+        let left_ctx = StarkContext {
+            circuit_id: "c",
+            sub_task_id: "sub-a",
+            node_id: "n1",
+            slice_id: "000",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+            security_level: "low",
+        };
+        let right_ctx = StarkContext {
+            circuit_id: "c",
+            sub_task_id: "sub-b",
+            node_id: "n1",
+            slice_id: "001",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+            security_level: "low",
+        };
+        let left = crate::generate_stark_proof(&left_ctx, &sample_trace());
+        let right = crate::generate_stark_proof(&right_ctx, &sample_trace());
+
+        let root = compose_stark_proofs(
+            &ComposeContext {
+                parent_task_id: "parent-task",
+                compose_label: "root",
+                manifest_root_hash: "manifest-abc",
+                security_level: "low",
+            },
+            &left,
+            &right,
+            Some(&left_ctx),
+            Some(&right_ctx),
+        )
+        .expect("root compose");
+
+        assert!(verify_root_proof(
+            &RootVerifyContext {
+                parent_task_id: "parent-task",
+                manifest_root_hash: "manifest-abc",
+                security_level: "low",
+            },
+            &root,
+        ));
+    }
+
+    #[test]
     fn compose_two_v1_leaves_and_verify_root() {
         let left = crate::generate_stark_proof(&leaf_context("sub-a", "000"), &sample_trace());
         let right = crate::generate_stark_proof(&leaf_context("sub-b", "001"), &sample_trace());
@@ -790,6 +863,7 @@ mod integration_tests {
                 parent_task_id: "parent-task",
                 compose_label: "root",
                 manifest_root_hash: "manifest-abc",
+                security_level: "",
             },
             &left,
             &right,
@@ -802,6 +876,7 @@ mod integration_tests {
             &RootVerifyContext {
                 parent_task_id: "parent-task",
                 manifest_root_hash: "manifest-abc",
+                security_level: "",
             },
             &root,
         ));
@@ -826,6 +901,7 @@ mod integration_tests {
                 parent_task_id: "parent-task",
                 compose_label: "L1:0",
                 manifest_root_hash: "",
+                security_level: "",
             },
             &leaves[0],
             &leaves[1],
@@ -839,6 +915,7 @@ mod integration_tests {
                 parent_task_id: "parent-task",
                 compose_label: "L1:1",
                 manifest_root_hash: "",
+                security_level: "",
             },
             &leaves[2],
             &leaves[3],
@@ -852,6 +929,7 @@ mod integration_tests {
                 parent_task_id: "parent-task",
                 compose_label: "root",
                 manifest_root_hash: "manifest-xyz",
+                security_level: "",
             },
             &l1_0,
             &l1_1,
@@ -864,6 +942,7 @@ mod integration_tests {
             &RootVerifyContext {
                 parent_task_id: "parent-task",
                 manifest_root_hash: "manifest-xyz",
+                security_level: "",
             },
             &root,
         ));
@@ -881,6 +960,7 @@ mod integration_tests {
                 parent_task_id: "parent-task",
                 compose_label: "L1:0",
                 manifest_root_hash: "",
+                security_level: "",
             },
             &bad,
             &left,
@@ -910,6 +990,7 @@ mod integration_tests {
                 parent_task_id: "parent-prebuilt",
                 compose_label: "root",
                 manifest_root_hash: "manifest-prebuilt",
+                security_level: "",
             },
             &left,
             &right,
@@ -924,6 +1005,7 @@ mod integration_tests {
             &RootVerifyContext {
                 parent_task_id: "parent-prebuilt",
                 manifest_root_hash: "manifest-prebuilt",
+                security_level: "",
             },
             &root,
         ));

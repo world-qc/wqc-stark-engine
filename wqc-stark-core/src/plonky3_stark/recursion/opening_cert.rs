@@ -17,10 +17,7 @@ use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
 use super::agg_constraints::aggregation_air_constraints_hold;
 use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
-use super::deep_ro_bind::{
-    bind_deep_ro_bundle_to_proof, deep_ro_bundle_from_agg_proof, AGG_DEEP_RO_MAX,
-    AGG_DEEP_RO_TRACE_MAX,
-};
+use super::deep_ro_bind::{bind_deep_ro_bundle_to_proof, deep_ro_bundle_from_agg_proof};
 use super::deep_ro_trace_air::{verify_deep_ro_trace_proof, DeepRoTraceStepProof};
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{
@@ -30,6 +27,7 @@ use super::fri_fold_bind::{
 use super::fri_fold_m4c::{
     apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups,
 };
+use super::fri_fs_replay::fri_queries_from_proof;
 use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_agg_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
     FriValMmcsQueryProof,
@@ -141,6 +139,7 @@ pub fn build_agg_pcs_certificate(
     let mem_plan = plan_pcs_memory(
         proof.degree_bits,
         Some(depth_hint_from_degree_bits(proof.degree_bits)),
+        fri_queries_from_proof(&proof)?,
     )?;
     if let Some(budget) = mem_plan.budget_bytes {
         eprintln!(
@@ -208,11 +207,10 @@ pub fn build_agg_pcs_certificate(
 
     let mut mmcs_bundle = fri_mmcs_bundle_from_agg_proof_drop_nested(&proof)
         .map_err(|e| format!("R3-M3d FRI Mmcs prove failed: {e}"))?;
-    if mmcs_bundle.val.len() != AGG_FRI_PROVEN_QUERIES
-        || mmcs_bundle.chal.len() != AGG_FRI_PROVEN_QUERIES
-    {
+    let proven_queries = fri_queries_from_proof(&proof)?;
+    if mmcs_bundle.val.len() != proven_queries || mmcs_bundle.chal.len() != proven_queries {
         return Err(format!(
-            "unexpected FRI Mmcs counts: val={}, chal={}",
+            "unexpected FRI Mmcs counts: val={}, chal={}, want {proven_queries}",
             mmcs_bundle.val.len(),
             mmcs_bundle.chal.len()
         ));
@@ -298,10 +296,34 @@ pub fn verify_agg_pcs_certificate(
         eprintln!("[AggPcsCertificate] Failed: OOD STARK");
         return false;
     }
-    if cert.deep_ros.len() != AGG_DEEP_RO_MAX {
+    let proven_queries = {
+        let plonky3_bytes = match decode_agg_proof_owned(agg_transcript, context) {
+            Some(b) => b,
+            None => {
+                eprintln!("[AggPcsCertificate] Failed: malformed AggregationAir transcript");
+                return false;
+            }
+        };
+        let proof: Proof<WqcStarkConfig> = match postcard::from_bytes(&plonky3_bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[AggPcsCertificate] Failed: postcard decode: {e}");
+                return false;
+            }
+        };
+        match fri_queries_from_proof(&proof) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("[AggPcsCertificate] Failed: {e}");
+                return false;
+            }
+        }
+    };
+    if cert.deep_ros.len() != proven_queries || cert.deep_ro_traces.len() != proven_queries {
         eprintln!(
-            "[AggPcsCertificate] Failed: deep_ros len {}, want {AGG_DEEP_RO_MAX}",
-            cert.deep_ros.len()
+            "[AggPcsCertificate] Failed: deep_ro lens deep={}, traces={}, want {proven_queries}",
+            cert.deep_ros.len(),
+            cert.deep_ro_traces.len()
         );
         return false;
     }
@@ -311,29 +333,16 @@ pub fn verify_agg_pcs_certificate(
             return false;
         }
     }
-    if cert.deep_ro_traces.len() != AGG_DEEP_RO_TRACE_MAX {
-        eprintln!(
-            "[AggPcsCertificate] Failed: deep_ro_traces len {}, want {AGG_DEEP_RO_TRACE_MAX}",
-            cert.deep_ro_traces.len()
-        );
-        return false;
-    }
     for (i, deep) in cert.deep_ro_traces.iter().enumerate() {
         if !verify_deep_ro_trace_proof(deep) {
             eprintln!("[AggPcsCertificate] Failed: DeepRoTrace STARK at {i}");
             return false;
         }
     }
-    if cert.fri_val_mmcs.len() != AGG_FRI_PROVEN_QUERIES {
+    if cert.fri_val_mmcs.len() != proven_queries || cert.fri_chal_mmcs.len() != proven_queries {
         eprintln!(
-            "[AggPcsCertificate] Failed: fri_val_mmcs len {}, want {AGG_FRI_PROVEN_QUERIES}",
-            cert.fri_val_mmcs.len()
-        );
-        return false;
-    }
-    if cert.fri_chal_mmcs.len() != AGG_FRI_PROVEN_QUERIES {
-        eprintln!(
-            "[AggPcsCertificate] Failed: fri_chal_mmcs len {}, want {AGG_FRI_PROVEN_QUERIES}",
+            "[AggPcsCertificate] Failed: fri mmcs lens val={}, chal={}, want {proven_queries}",
+            cert.fri_val_mmcs.len(),
             cert.fri_chal_mmcs.len()
         );
         return false;
@@ -530,6 +539,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [3u8; CHILD_HASH_LEN],
             right_child_hash: [5u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let proof = generate_aggregation_proof(&ctx).expect("prove");
         let cert = build_agg_pcs_certificate(&ctx, &proof).expect("cert");

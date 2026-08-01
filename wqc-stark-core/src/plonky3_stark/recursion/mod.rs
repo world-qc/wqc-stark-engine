@@ -78,7 +78,7 @@ pub use fri_fold_bind::{
     bind_fri_fold_bundle_to_proof, bind_fri_fold_bundle_to_proof_width,
     covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof, fri_fold_bundle_from_proof,
     fri_fold_steps_from_agg_proof, AggFriFoldBundle, AGG_FRI_PROVEN_QUERIES,
-    LEAF_FRI_PROVEN_QUERIES,
+    LEAF_FRI_PROVEN_QUERIES, MAX_FRI_PROVEN_QUERIES,
 };
 pub use fri_fold_group::{
     generate_fri_fold_group_proof, verify_fri_fold_group_proof, FriFoldGroupAir, FriFoldGroupProof,
@@ -87,7 +87,10 @@ pub use fri_fold_group::{
 pub use fri_fold_m4c::{
     apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups, LEAF_FRI_FOLD_V,
 };
-pub use fri_fs_replay::{replay_agg_fri_challenges, replay_fri_challenges, AggFriChallenges};
+pub use fri_fs_replay::{
+    circle_config_matching_proof, fri_queries_from_proof, replay_agg_fri_challenges,
+    replay_fri_challenges, AggFriChallenges,
+};
 pub use fri_mmcs::verify_agg_fri_openings;
 pub use fri_mmcs_bind::{
     bind_fri_chal_mmcs_bundle, bind_fri_mmcs_bundle_to_proof, bind_fri_mmcs_bundle_to_proof_width,

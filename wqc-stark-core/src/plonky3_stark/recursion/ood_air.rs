@@ -500,6 +500,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [11u8; CHILD_HASH_LEN],
             right_child_hash: [13u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -539,6 +540,7 @@ mod tests {
             sub_task_id: "sub-born-ood",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: &link,
+            security_level: "",
         };
         let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
         let plonky3 = decode_born_stark_owned(&born_inner, &born_ctx).expect("decode born plonky3");

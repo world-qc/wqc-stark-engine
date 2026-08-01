@@ -11,7 +11,8 @@ use serde::Deserialize;
 
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
 use crate::plonky3_stark::config::{
-    devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
+    devnet_circle_config_with_queries, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
+    DEVNET_FRI_NUM_QUERIES,
 };
 use crate::plonky3_stark::recursion::merkle_keccak::{hash_val_leaf, merkle_root_from_path};
 
@@ -52,6 +53,27 @@ pub(crate) fn decode_pcs_view(proof: &Proof<WqcStarkConfig>) -> Result<CirclePcs
     let bytes = postcard::to_allocvec(&proof.opening_proof)
         .map_err(|e| format!("postcard encode opening_proof: {e}"))?;
     postcard::from_bytes(&bytes).map_err(|e| format!("postcard decode CirclePcsProof: {e}"))
+}
+
+/// Outer FRI query count embedded in a Circle uni-STARK proof (`1..=DEVNET_FRI_NUM_QUERIES`).
+pub fn fri_queries_from_proof(proof: &Proof<WqcStarkConfig>) -> Result<usize, String> {
+    let view = decode_pcs_view(proof)?;
+    let n = view.fri_proof.query_proofs.len();
+    if n == 0 || n > DEVNET_FRI_NUM_QUERIES {
+        return Err(format!(
+            "FRI query count {n} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
+        ));
+    }
+    Ok(n)
+}
+
+/// Circle config whose `num_queries` matches the proof's FRI query vector.
+pub fn circle_config_matching_proof(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<WqcStarkConfig, String> {
+    Ok(devnet_circle_config_with_queries(fri_queries_from_proof(
+        proof,
+    )?))
 }
 
 fn recover_same_height_query_index(
@@ -103,7 +125,7 @@ pub fn replay_fri_challenges(
         ));
     }
 
-    let config = devnet_circle_config();
+    let config = circle_config_matching_proof(proof)?;
     let log_blowup = config.pcs().fri_params.log_blowup;
     let degree_bits = proof.degree_bits;
     let base_degree_bits = degree_bits;
@@ -264,6 +286,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [1u8; CHILD_HASH_LEN],
             right_child_hash: [2u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -274,5 +297,23 @@ mod tests {
         assert_eq!(chal.log_blowup, 1);
         assert_eq!(chal.fri_log_max_height, 3);
         assert_eq!(chal.extra_query_index_bits, 1);
+    }
+
+    #[test]
+    fn replay_agg_fri_shape_low_security() {
+        let ctx = AggregationContext {
+            parent_task_id: "parent",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            security_level: "low",
+        };
+        let transcript = generate_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        assert_eq!(fri_queries_from_proof(&proof).expect("n"), 8);
+        let chal = replay_agg_fri_challenges(&proof).expect("replay");
+        assert_eq!(chal.query_indices.len(), 8);
     }
 }

@@ -13,7 +13,7 @@ use crate::air::shot_sampling::{
 };
 use crate::trajectory::TrajectorySegment;
 
-use super::config::{devnet_circle_config, WqcStarkConfig};
+use super::config::{circle_config_for_security_level, WqcStarkConfig};
 use super::shot_sampling_air::{
     ShotSamplingAir, SHOT_SAMPLING_AIR_WIDTH, SHOT_SAMPLING_COL_GAP, SHOT_SAMPLING_COL_GAP_BITS,
     SHOT_SAMPLING_COL_IS_PAD, SHOT_SAMPLING_COL_OUTCOME, SHOT_SAMPLING_COL_P0,
@@ -90,6 +90,7 @@ fn pad_rows_as_inactive(matrix: RowMajorMatrix<Mersenne31>) -> RowMajorMatrix<Me
 pub fn generate_shot_sampling_stark(
     context: &TrajectoryShotSamplingStarkContext<'_>,
     segment: &TrajectorySegment,
+    security_level: &str,
 ) -> Result<Vec<u8>, String> {
     if !segment_supports_shot_sampling_zk(segment) {
         return Err("segment does not support shot sampling zk".to_string());
@@ -109,7 +110,7 @@ pub fn generate_shot_sampling_stark(
 
     let matrix = build_shot_sampling_matrix(&events)?;
     let matrix = pad_rows_as_inactive(matrix);
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(security_level, 1);
     let air = ShotSamplingAir;
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
@@ -125,6 +126,7 @@ pub fn verify_shot_sampling_stark(
     context: &TrajectoryShotSamplingStarkContext<'_>,
     segment: &TrajectorySegment,
     proof: &[u8],
+    security_level: &str,
 ) -> bool {
     if !segment_supports_shot_sampling_zk(segment) {
         eprintln!("[ShotSamplingAir] Failed: segment does not support shot sampling zk");
@@ -170,7 +172,7 @@ pub fn verify_shot_sampling_stark(
         }
     };
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(security_level, 1);
     let air = ShotSamplingAir;
     match verify(&config, &air, &p3_proof, &[]) {
         Ok(()) => true,
@@ -284,7 +286,7 @@ mod tests {
             shots: segment.shots,
             event_count: events.len() as u32,
         };
-        let inner = generate_shot_sampling_stark(&ctx, &segment).expect("prove");
-        assert!(verify_shot_sampling_stark(&ctx, &segment, &inner));
+        let inner = generate_shot_sampling_stark(&ctx, &segment, "").expect("prove");
+        assert!(verify_shot_sampling_stark(&ctx, &segment, &inner, ""));
     }
 }

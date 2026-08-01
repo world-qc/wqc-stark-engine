@@ -104,18 +104,25 @@ pub fn depth_hint_from_degree_bits(degree_bits: usize) -> usize {
 const FRI_MMCS_MAX_DEPTH_HINT: usize = 24;
 
 /// Peak RAM estimate for one PCS build at the given Mmcs group chunk.
-pub fn estimate_pcs_peak_bytes(degree_bits: usize, chunk: usize, depth_hint: Option<usize>) -> u64 {
+///
+/// `num_queries` is the outer FRI query count for this proof (`1..=LEAF_FRI_PROVEN_QUERIES`).
+pub fn estimate_pcs_peak_bytes(
+    degree_bits: usize,
+    chunk: usize,
+    depth_hint: Option<usize>,
+    num_queries: usize,
+) -> u64 {
     let chunk = chunk.clamp(1, M4B_MAX_PATHS) as u64;
     let depth = depth_hint
         .unwrap_or_else(|| depth_hint_from_degree_bits(degree_bits))
         .max(1) as u64;
-    // Mild query-count factor: more proven queries ⇒ more sequential work retained
-    // (digests / residual limbs), not another concurrent prove workspace.
-    let query_factor = 1u64 + (LEAF_FRI_PROVEN_QUERIES as u64 / 40).saturating_sub(1);
+    // Outer query slots scale sequential residual work; normalize so ultra (40) ≈ prior estimate.
+    let n = num_queries.clamp(1, LEAF_FRI_PROVEN_QUERIES) as u64;
     let group = PER_PATH_DEPTH_BYTES
         .saturating_mul(chunk)
         .saturating_mul(depth)
-        .saturating_mul(query_factor);
+        .saturating_mul(n)
+        / (LEAF_FRI_PROVEN_QUERIES as u64).max(1);
     let raw = BASE_BYTES
         .saturating_add(FIXED_FRI_FOLD_OOD_BYTES)
         .saturating_add(group);
@@ -152,11 +159,12 @@ pub fn spill_chunk_candidates(requested: usize) -> Vec<usize> {
 pub fn plan_pcs_memory(
     degree_bits: usize,
     depth_hint: Option<usize>,
+    num_queries: usize,
 ) -> Result<PcsMemoryPlan, String> {
     let requested = m4b_group_chunk_from_env();
     let budget = budget_bytes_from_env();
     let Some(budget_bytes) = budget else {
-        let estimate = estimate_pcs_peak_bytes(degree_bits, requested, depth_hint);
+        let estimate = estimate_pcs_peak_bytes(degree_bits, requested, depth_hint, num_queries);
         return Ok(PcsMemoryPlan {
             effective_chunk: requested,
             requested_chunk: requested,
@@ -166,7 +174,7 @@ pub fn plan_pcs_memory(
         });
     };
 
-    let estimate_req = estimate_pcs_peak_bytes(degree_bits, requested, depth_hint);
+    let estimate_req = estimate_pcs_peak_bytes(degree_bits, requested, depth_hint, num_queries);
     if estimate_req <= budget_bytes {
         return Ok(PcsMemoryPlan {
             effective_chunk: requested,
@@ -182,7 +190,7 @@ pub fn plan_pcs_memory(
         PcsMemoryPolicy::Refuse => Err(refuse_err(estimate_req, budget_bytes, policy)),
         PcsMemoryPolicy::Spill => {
             for chunk in spill_chunk_candidates(requested) {
-                let est = estimate_pcs_peak_bytes(degree_bits, chunk, depth_hint);
+                let est = estimate_pcs_peak_bytes(degree_bits, chunk, depth_hint, num_queries);
                 if est <= budget_bytes {
                     eprintln!(
                         "{PCS_MEMORY_ERR_PREFIX} spill: chunk {requested} → {chunk} (est {} GiB ≤ budget {} GiB)",
@@ -198,7 +206,7 @@ pub fn plan_pcs_memory(
                     });
                 }
             }
-            let est1 = estimate_pcs_peak_bytes(degree_bits, 1, depth_hint);
+            let est1 = estimate_pcs_peak_bytes(degree_bits, 1, depth_hint, num_queries);
             Err(refuse_err(est1, budget_bytes, policy))
         }
     }
@@ -226,9 +234,9 @@ mod tests {
     fn estimate_monotonic_in_chunk() {
         with_clean_env(|| {
             let d = 8usize;
-            let e1 = estimate_pcs_peak_bytes(d, 1, Some(8));
-            let e8 = estimate_pcs_peak_bytes(d, 8, Some(8));
-            let e24 = estimate_pcs_peak_bytes(d, 24, Some(8));
+            let e1 = estimate_pcs_peak_bytes(d, 1, Some(8), 40);
+            let e8 = estimate_pcs_peak_bytes(d, 8, Some(8), 40);
+            let e24 = estimate_pcs_peak_bytes(d, 24, Some(8), 40);
             assert!(e1 < e8 && e8 < e24);
             // Unitary-scale chunk=24 should be multi-GiB.
             assert!(e24 > 2 * 1024 * 1024 * 1024);
@@ -238,7 +246,7 @@ mod tests {
     #[test]
     fn no_budget_skips_gate() {
         with_clean_env(|| {
-            let plan = plan_pcs_memory(8, Some(8)).expect("plan");
+            let plan = plan_pcs_memory(8, Some(8), 40).expect("plan");
             assert!(plan.budget_bytes.is_none());
             assert!(!plan.spilled);
             assert_eq!(plan.effective_chunk, M4B_GROUP_CHUNK_DEFAULT);
@@ -250,7 +258,7 @@ mod tests {
         with_clean_env(|| {
             std::env::set_var("WQC_MAX_MEMORY_GB", "64");
             std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
-            let plan = plan_pcs_memory(8, Some(8)).expect("plan");
+            let plan = plan_pcs_memory(8, Some(8), 40).expect("plan");
             assert!(!plan.spilled);
             assert_eq!(plan.effective_chunk, 24);
         });
@@ -262,7 +270,7 @@ mod tests {
             std::env::set_var("WQC_MAX_MEMORY_GB", "1");
             std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             // default policy = refuse
-            let err = plan_pcs_memory(8, Some(8)).expect_err("refuse");
+            let err = plan_pcs_memory(8, Some(8), 40).expect_err("refuse");
             assert!(err.starts_with(PCS_MEMORY_ERR_PREFIX));
             assert!(err.contains("policy=refuse"));
         });
@@ -274,7 +282,7 @@ mod tests {
             std::env::set_var("WQC_MAX_MEMORY_GB", "2");
             std::env::set_var("WQC_PCS_MEMORY_POLICY", "spill");
             std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
-            let plan = plan_pcs_memory(8, Some(8)).expect("spill");
+            let plan = plan_pcs_memory(8, Some(8), 40).expect("spill");
             assert!(plan.spilled || plan.effective_chunk < 24);
             assert!(plan.effective_chunk <= 24);
             assert!(plan.estimate_bytes <= plan.budget_bytes.unwrap());
@@ -287,7 +295,7 @@ mod tests {
             std::env::set_var("WQC_MAX_MEMORY_GB", "0.1");
             std::env::set_var("WQC_PCS_MEMORY_POLICY", "spill");
             std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
-            let err = plan_pcs_memory(8, Some(8)).expect_err("still refuse");
+            let err = plan_pcs_memory(8, Some(8), 40).expect_err("still refuse");
             assert!(err.contains("policy=spill"));
         });
     }

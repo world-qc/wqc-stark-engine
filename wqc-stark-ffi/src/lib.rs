@@ -126,6 +126,7 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
     parent_task_id: *const c_char,
     compose_label: *const c_char,
     manifest_root_hash: *const c_char,
+    security_level: *const c_char,
     left_circuit_id: *const c_char,
     left_sub_task_id: *const c_char,
     left_node_id: *const c_char,
@@ -183,6 +184,7 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
                 parent_task_id: cstr_or_empty(parent_task_id),
                 compose_label: cstr_or_empty(compose_label),
                 manifest_root_hash: cstr_or_empty(manifest_root_hash),
+                security_level: cstr_or_empty(security_level),
             },
             left_slice,
             right_slice,
@@ -379,6 +381,7 @@ pub unsafe extern "C" fn wqc_generate_demo_leaf_proof(
 pub unsafe extern "C" fn wqc_verify_root_proof(
     parent_task_id: *const c_char,
     manifest_root_hash: *const c_char,
+    security_level: *const c_char,
     proof_bytes: *const u8,
     proof_len: u32,
 ) -> i32 {
@@ -393,6 +396,7 @@ pub unsafe extern "C" fn wqc_verify_root_proof(
             &RootVerifyContext {
                 parent_task_id: cstr_or_empty(parent_task_id),
                 manifest_root_hash: cstr_or_empty(manifest_root_hash),
+                security_level: cstr_or_empty(security_level),
             },
             proof_slice,
         ) {

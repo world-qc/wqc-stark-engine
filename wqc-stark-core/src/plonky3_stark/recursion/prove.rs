@@ -8,7 +8,9 @@ use p3_uni_stark::{prove, verify};
 use crate::aggregation::CHILD_HASH_LEN;
 use crate::air::pad_air_matrix_for_uni_stark;
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
-use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    circle_config_for_security_level, fri_num_queries_for_security_level, WqcStarkConfig,
+};
 
 use super::air::{
     RecursiveAggregationAir, REC_AGG_WIDTH, REC_KIND_AGG, REC_KIND_LEAF, REC_LEFT_AGG_ROW_COL,
@@ -19,6 +21,7 @@ use super::air::{
 use super::air_m1::RecursiveAggregationAirM1;
 use super::child_binding::STARK_DIGEST_LEN;
 use super::context::RecursiveAggregationContext;
+use super::fri_fs_replay::{circle_config_matching_proof, fri_queries_from_proof};
 use super::leaf_pcs_cert::{leaf_bundle_stmt_digest, LeafPcsBundle};
 use super::opening_cert::AggPcsCertificate;
 use super::transcript_v5::{
@@ -206,7 +209,7 @@ pub fn generate_recursive_aggregation_proof(
     }
 
     let matrix = pad_air_matrix_for_uni_stark(build_rec_matrix(context)?);
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(context.security_level, 1);
     let air = RecursiveAggregationAir;
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
@@ -259,7 +262,24 @@ pub fn verify_recursive_aggregation_proof(
             return false;
         }
     };
-    let config = devnet_circle_config();
+    if let Ok(n) = fri_queries_from_proof(&p3_proof) {
+        if !context.security_level.is_empty()
+            && n != fri_num_queries_for_security_level(context.security_level)
+        {
+            eprintln!(
+                "[RecursiveAggregationAir] Failed: FRI query count {n} != security_level {}",
+                context.security_level
+            );
+            return false;
+        }
+    }
+    let config = match circle_config_matching_proof(&p3_proof) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[RecursiveAggregationAir] Failed: config from proof: {e}");
+            return false;
+        }
+    };
     let verified = if use_m1_air {
         verify(&config, &RecursiveAggregationAirM1, &p3_proof, &[]).is_ok()
     } else {
@@ -318,6 +338,31 @@ mod tests {
     use crate::plonky3_stark::AggregationContext;
 
     #[test]
+    fn recursive_agg_leaf_pair_low_security_roundtrip() {
+        let ctx = RecursiveAggregationContext {
+            parent_task_id: "parent",
+            compose_label: "root",
+            manifest_root_hash: "m",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            left_stark_digest: [3u8; STARK_DIGEST_LEN],
+            right_stark_digest: [4u8; STARK_DIGEST_LEN],
+            left_kind: REC_KIND_LEAF,
+            right_kind: REC_KIND_LEAF,
+            left_agg_cert: None,
+            right_agg_cert: None,
+            left_leaf_bundle: None,
+            right_leaf_bundle: None,
+            security_level: "low",
+        };
+        let proof = generate_recursive_aggregation_proof(&ctx).expect("prove");
+        assert!(verify_recursive_aggregation_proof(&ctx, &proof));
+        let mut ultra = ctx.clone();
+        ultra.security_level = "ultra";
+        assert!(!verify_recursive_aggregation_proof(&ultra, &proof));
+    }
+
+    #[test]
     #[ignore = "slow; local only — not run in CI"]
     fn recursive_agg_leaf_pair_roundtrip() {
         let ctx = RecursiveAggregationContext {
@@ -334,6 +379,7 @@ mod tests {
             right_agg_cert: None,
             left_leaf_bundle: None,
             right_leaf_bundle: None,
+            security_level: "",
         };
         let proof = generate_recursive_aggregation_proof(&ctx).expect("prove");
         assert!(verify_recursive_aggregation_proof(&ctx, &proof));
@@ -353,6 +399,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [7u8; CHILD_HASH_LEN],
             right_child_hash: [8u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let agg_proof = generate_aggregation_proof(&agg_ctx).expect("agg");
         let cert = build_agg_pcs_certificate(&agg_ctx, &agg_proof).expect("cert");
@@ -371,6 +418,7 @@ mod tests {
             right_agg_cert: Some(cert),
             left_leaf_bundle: None,
             right_leaf_bundle: None,
+            security_level: "",
         };
         let proof = generate_recursive_aggregation_proof(&ctx).expect("prove");
         assert!(verify_recursive_aggregation_proof(&ctx, &proof));

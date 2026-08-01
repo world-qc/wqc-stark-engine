@@ -258,6 +258,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [17u8; CHILD_HASH_LEN],
             right_child_hash: [19u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -273,6 +274,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [21u8; CHILD_HASH_LEN],
             right_child_hash: [23u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");

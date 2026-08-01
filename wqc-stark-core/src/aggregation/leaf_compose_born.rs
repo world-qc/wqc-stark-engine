@@ -100,7 +100,11 @@ pub fn is_born_leaf_proof(proof: &[u8]) -> bool {
 }
 
 /// Verifies a Born-only leaf child (DIST segment + optional Born zk).
-pub fn verify_born_leaf(sub_task_id: &str, proof: &[u8]) -> Result<(), String> {
+pub fn verify_born_leaf(
+    sub_task_id: &str,
+    proof: &[u8],
+    security_level: &str,
+) -> Result<(), String> {
     let (parsed_sub, tail_body) =
         parse_born_leaf_prefix(proof).ok_or_else(|| "malformed Born leaf prefix".to_string())?;
     if parsed_sub != sub_task_id {
@@ -129,6 +133,7 @@ pub fn verify_born_leaf(sub_task_id: &str, proof: &[u8]) -> Result<(), String> {
             sub_task_id,
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: sv,
+            security_level,
         };
         if !verify_born_stark_proof(&born_ctx, &segment, born_bytes) {
             return Err("Born zk verification failed".to_string());
@@ -209,13 +214,14 @@ pub fn compose_unitary_born_leaf(
     }
 
     let born_child = encode_born_leaf(context.sub_task_id, segment, Some(born_inner));
-    verify_born_leaf(context.sub_task_id, &born_child)?;
+    verify_born_leaf(context.sub_task_id, &born_child, context.security_level)?;
 
     compose_stark_proofs(
         &ComposeContext {
             parent_task_id: context.sub_task_id,
             compose_label: UNITARY_BORN_COMPOSE_LABEL,
             manifest_root_hash: "",
+            security_level: context.security_level,
         },
         unitary_v2_proof,
         &born_child,
@@ -285,7 +291,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
         return false;
     }
 
-    if let Err(err) = verify_born_leaf(context.sub_task_id, right_child) {
+    if let Err(err) = verify_born_leaf(context.sub_task_id, right_child, context.security_level) {
         eprintln!("[LeafCompose] Failed: Born child: {err}");
         return false;
     }
@@ -344,6 +350,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
                 left_child,
                 right_child,
                 rec_bytes,
+                context.security_level,
             ) {
                 Ok(ctx) => ctx,
                 Err(e) => {
@@ -366,6 +373,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
                 manifest_root_hash: "",
                 left_child_hash: header.left_child_hash,
                 right_child_hash: header.right_child_hash,
+                security_level: context.security_level,
             };
             if !verify_aggregation_proof(&agg_ctx, agg_bytes) {
                 eprintln!("[LeafCompose] Failed: aggregation STARK verification failed");
@@ -403,7 +411,7 @@ mod tests {
         let segment = bell_segment();
         let leaf = encode_born_leaf("sub-born", &segment, None);
         assert!(is_born_leaf_proof(&leaf));
-        verify_born_leaf("sub-born", &leaf).expect("verify leaf");
+        verify_born_leaf("sub-born", &leaf, "").expect("verify leaf");
     }
 
     #[cfg(feature = "plonky3-stark")]
@@ -437,6 +445,7 @@ mod tests {
             sub_task_id: "sub-born",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: link,
+            security_level: "",
         };
         let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born zk");
         let composed =
@@ -465,6 +474,7 @@ mod tests {
             left_child,
             right_child,
             rec_bytes,
+            ctx.security_level,
         )
         .expect("rec ctx");
         if decode_rec_agg_proof_owned_v6(rec_bytes, &rec_ctx).is_none() {
@@ -516,6 +526,7 @@ mod tests {
             sub_task_id: "sub-born",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: &link,
+            security_level: "",
         };
         let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born zk");
 

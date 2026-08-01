@@ -485,16 +485,15 @@ pub fn deep_ro_bundle_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
 ) -> Result<AggDeepRoBundle, String> {
     let chal = replay_agg_fri_challenges(proof)?;
-    if chal.query_indices.len() < AGG_FRI_PROVEN_QUERIES {
+    let proven_queries = chal.query_indices.len();
+    if proven_queries == 0 || proven_queries > AGG_FRI_PROVEN_QUERIES {
         return Err(format!(
-            "FS query count {} < proven {}",
-            chal.query_indices.len(),
-            AGG_FRI_PROVEN_QUERIES
+            "FS query count {proven_queries} out of range 1..={AGG_FRI_PROVEN_QUERIES}"
         ));
     }
-    let mut deep_ros = Vec::with_capacity(AGG_FRI_PROVEN_QUERIES);
-    let mut deep_ro_traces = Vec::with_capacity(AGG_FRI_PROVEN_QUERIES);
-    for q in 0..AGG_FRI_PROVEN_QUERIES {
+    let mut deep_ros = Vec::with_capacity(proven_queries);
+    let mut deep_ro_traces = Vec::with_capacity(proven_queries);
+    for q in 0..proven_queries {
         let deep = deep_ro_quot_from_agg_proof(proof, q)
             .map_err(|e| format!("DeepRo quot query {q}: {e}"))?;
         if !verify_deep_ro_proof(&deep) {
@@ -523,19 +522,19 @@ pub fn bind_deep_ro_bundle_to_proof(
     deep_ro_traces: &[DeepRoTraceStepProof],
     fold_ys: &[FriFoldStepProof],
 ) -> Result<(), String> {
-    if deep_ros.len() != AGG_DEEP_RO_MAX {
+    let proven_queries = deep_ros.len();
+    if proven_queries == 0 || proven_queries > AGG_DEEP_RO_MAX {
         return Err(format!(
-            "deep_ros len {}, want {AGG_DEEP_RO_MAX}",
-            deep_ros.len()
+            "deep_ros len {proven_queries} out of range 1..={AGG_DEEP_RO_MAX}"
         ));
     }
-    if deep_ro_traces.len() != AGG_DEEP_RO_TRACE_MAX {
+    if deep_ro_traces.len() != proven_queries {
         return Err(format!(
-            "deep_ro_traces len {}, want {AGG_DEEP_RO_TRACE_MAX}",
+            "deep_ro_traces len {}, want {proven_queries}",
             deep_ro_traces.len()
         ));
     }
-    for q in 0..AGG_FRI_PROVEN_QUERIES {
+    for q in 0..proven_queries {
         bind_deep_ro_to_fold_y(proof, &deep_ros[q], fold_ys, q)
             .map_err(|e| format!("DeepRo bind query {q}: {e}"))?;
         bind_deep_ro_trace_to_fold_y(proof, &deep_ro_traces[q], fold_ys, q)
@@ -975,16 +974,15 @@ pub fn deep_ro_bundle_from_leaf_proof(
     trace_width: usize,
 ) -> Result<LeafDeepRoBundle, String> {
     let chal = replay_fri_challenges(proof, trace_width)?;
-    if chal.query_indices.len() < LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = chal.query_indices.len();
+    if proven_queries == 0 || proven_queries > LEAF_FRI_PROVEN_QUERIES {
         return Err(format!(
-            "FS query count {} < proven {}",
-            chal.query_indices.len(),
-            LEAF_FRI_PROVEN_QUERIES
+            "FS query count {proven_queries} out of range 1..={LEAF_FRI_PROVEN_QUERIES}"
         ));
     }
-    let mut deep_ros = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
-    let mut deep_ro_traces = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
-    for q in 0..LEAF_FRI_PROVEN_QUERIES {
+    let mut deep_ros = Vec::with_capacity(proven_queries);
+    let mut deep_ro_traces = Vec::with_capacity(proven_queries);
+    for q in 0..proven_queries {
         let deep = deep_ro_quot_from_proof(proof, q, trace_width)
             .map_err(|e| format!("DeepRo quot query {q}: {e}"))?;
         if !verify_deep_ro_proof(&deep) {
@@ -1016,19 +1014,19 @@ pub fn bind_deep_ro_leaf_bundle_to_proof(
     fold_ys: &[FriFoldStepProof],
     trace_width: usize,
 ) -> Result<(), String> {
-    if deep_ros.len() != LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = deep_ros.len();
+    if proven_queries == 0 || proven_queries > LEAF_FRI_PROVEN_QUERIES {
         return Err(format!(
-            "deep_ros len {}, want {LEAF_FRI_PROVEN_QUERIES}",
-            deep_ros.len()
+            "deep_ros len {proven_queries} out of range 1..={LEAF_FRI_PROVEN_QUERIES}"
         ));
     }
-    if deep_ro_traces.len() != LEAF_FRI_PROVEN_QUERIES {
+    if deep_ro_traces.len() != proven_queries {
         return Err(format!(
-            "deep_ro_traces len {}, want {LEAF_FRI_PROVEN_QUERIES}",
+            "deep_ro_traces len {}, want {proven_queries}",
             deep_ro_traces.len()
         ));
     }
-    for q in 0..LEAF_FRI_PROVEN_QUERIES {
+    for q in 0..proven_queries {
         bind_deep_ro_leaf_quot_to_fold_y(proof, &deep_ros[q], fold_ys, q, trace_width)
             .map_err(|e| format!("DeepRo bind query {q}: {e}"))?;
         bind_deep_ro_leaf_trace_to_fold_y(proof, &deep_ro_traces[q], fold_ys, q, trace_width)
@@ -1054,6 +1052,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [31u8; CHILD_HASH_LEN],
             right_child_hash: [33u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -1072,6 +1071,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [41u8; CHILD_HASH_LEN],
             right_child_hash: [43u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -1090,6 +1090,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [51u8; CHILD_HASH_LEN],
             right_child_hash: [53u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");

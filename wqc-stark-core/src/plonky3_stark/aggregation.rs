@@ -10,7 +10,10 @@ use p3_uni_stark::{prove, verify};
 use crate::aggregation::CHILD_HASH_LEN;
 use crate::air::pad_air_matrix_for_uni_stark;
 
-use super::config::{devnet_circle_config, WqcStarkConfig};
+use super::config::{
+    circle_config_for_security_level, fri_num_queries_for_security_level, WqcStarkConfig,
+};
+use super::recursion::{circle_config_matching_proof, fri_queries_from_proof};
 use super::transcript_v4::{decode_agg_proof_owned, encode_agg_proof};
 
 /// Public binding for an aggregation STARK over a proof-tree pair.
@@ -21,6 +24,8 @@ pub struct AggregationContext<'a> {
     pub manifest_root_hash: &'a str,
     pub left_child_hash: [u8; CHILD_HASH_LEN],
     pub right_child_hash: [u8; CHILD_HASH_LEN],
+    /// Orchestrator security tier; empty → FRI default (40).
+    pub security_level: &'a str,
 }
 
 fn byte_to_m31(b: u8) -> Mersenne31 {
@@ -55,7 +60,7 @@ pub fn generate_aggregation_proof(context: &AggregationContext<'_>) -> Result<Ve
     let matrix = build_agg_matrix(context.left_child_hash, context.right_child_hash);
     let matrix = pad_air_matrix_for_uni_stark(matrix);
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(context.security_level, 1);
     let air = AggregationAir;
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
@@ -87,7 +92,24 @@ pub fn verify_aggregation_proof(context: &AggregationContext<'_>, proof: &[u8]) 
         }
     };
 
-    let config = devnet_circle_config();
+    if let Ok(n) = fri_queries_from_proof(&p3_proof) {
+        if !context.security_level.is_empty()
+            && n != fri_num_queries_for_security_level(context.security_level)
+        {
+            eprintln!(
+                "[AggregationAir] Failed: FRI query count {n} != security_level {}",
+                context.security_level
+            );
+            return false;
+        }
+    }
+    let config = match circle_config_matching_proof(&p3_proof) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[AggregationAir] Failed: config from proof: {e}");
+            return false;
+        }
+    };
     let air = AggregationAir;
     match verify(&config, &air, &p3_proof, &[]) {
         Ok(()) => {
@@ -115,7 +137,25 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [7u8; CHILD_HASH_LEN],
             right_child_hash: [9u8; CHILD_HASH_LEN],
+            security_level: "",
         }
+    }
+
+    #[test]
+    fn aggregation_stark_low_security_roundtrip() {
+        let ctx = AggregationContext {
+            parent_task_id: "parent-task",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [7u8; CHILD_HASH_LEN],
+            right_child_hash: [9u8; CHILD_HASH_LEN],
+            security_level: "low",
+        };
+        let proof = generate_aggregation_proof(&ctx).expect("prove");
+        assert!(verify_aggregation_proof(&ctx, &proof));
+        let mut ultra = ctx.clone();
+        ultra.security_level = "ultra";
+        assert!(!verify_aggregation_proof(&ultra, &proof));
     }
 
     #[test]

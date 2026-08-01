@@ -7,7 +7,7 @@ use p3_uni_stark::{prove, verify};
 use crate::air::distribution::{born_probabilities_from_statevector, BornMeasureSpec};
 use crate::distribution::DistributionSegment;
 
-use super::config::{devnet_circle_config, WqcStarkConfig};
+use super::config::{circle_config_for_security_level, WqcStarkConfig};
 use super::streaming_distribution::{build_streaming_distribution_matrix, streaming_zk_shape_ok};
 use super::transcript_born::{decode_born_stark_owned, encode_born_stark};
 
@@ -17,6 +17,8 @@ pub struct BornStarkContext<'a> {
     pub sub_task_id: &'a str,
     pub probability_digest: &'a str,
     pub terminal_statevector_digest: &'a str,
+    /// Orchestrator security tier; empty → FRI default (40).
+    pub security_level: &'a str,
 }
 
 /// Maps each computational basis to an outcome index in `outcome_keys` order.
@@ -177,7 +179,7 @@ pub fn generate_born_stark_proof(
         }
     }
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(context.security_level, 1);
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
         postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode failed: {e}"))?;
@@ -239,7 +241,7 @@ pub fn verify_born_stark_proof(
         }
     };
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(context.security_level, 1);
     match verify(&config, &air, &p3_proof, &[]) {
         Ok(()) => {
             eprintln!(
@@ -304,9 +306,33 @@ mod tests {
             sub_task_id: "sub-born",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: sv_digest,
+            security_level: "",
         };
         let proof = generate_born_stark_proof(&ctx, &segment).expect("prove");
         assert!(verify_born_stark_proof(&ctx, &segment, &proof));
+    }
+
+    #[test]
+    fn bell_born_stark_low_security_roundtrip() {
+        let segment = bell_segment();
+        let sv_digest = segment
+            .born_binding
+            .as_ref()
+            .map(|b| b.terminal_statevector_digest.as_str())
+            .unwrap_or("");
+        let ctx = BornStarkContext {
+            sub_task_id: "sub-born-low",
+            probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: sv_digest,
+            security_level: "low",
+        };
+        let proof = generate_born_stark_proof(&ctx, &segment).expect("prove");
+        assert!(verify_born_stark_proof(&ctx, &segment, &proof));
+        let ultra = BornStarkContext {
+            security_level: "ultra",
+            ..ctx.clone()
+        };
+        assert!(!verify_born_stark_proof(&ultra, &segment, &proof));
     }
 
     #[test]
@@ -321,12 +347,14 @@ mod tests {
             sub_task_id: "sub-born",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: sv_digest,
+            security_level: "",
         };
         let proof = generate_born_stark_proof(&ctx, &segment).expect("prove");
         let bad = BornStarkContext {
             sub_task_id: "sub-born",
             probability_digest: "deadbeef",
             terminal_statevector_digest: sv_digest,
+            security_level: "",
         };
         assert!(!verify_born_stark_proof(&bad, &segment, &proof));
     }
@@ -344,6 +372,7 @@ mod tests {
             sub_task_id: "sub-born-8q",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: sv_digest,
+            security_level: "",
         };
         let proof = generate_born_stark_proof(&ctx, &segment).expect("prove 8q");
         assert!(verify_born_stark_proof(&ctx, &segment, &proof));

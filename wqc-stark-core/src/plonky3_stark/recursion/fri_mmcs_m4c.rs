@@ -10,6 +10,7 @@ use crate::plonky3_stark::config::{Challenge, ChallengeMmcs, Val, ValMmcs, WqcSt
 
 use super::fri_fold_bind::LEAF_FRI_PROVEN_QUERIES;
 use super::fri_fold_native::{challenge_to_limbs, fold_x_row};
+use super::fri_fs_replay::fri_queries_from_proof;
 use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
 use super::fri_mmcs_bind::{
     AggFriMmcsBundle, FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof,
@@ -166,7 +167,7 @@ fn collect_val_trace_stmts(
 ) -> Result<Vec<MmcsPathStatement>, String> {
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
-    let config = crate::plonky3_stark::config::devnet_circle_config();
+    let config = super::fri_fs_replay::circle_config_matching_proof(proof)?;
     let pcs = config.pcs();
     let degree = 1usize << proof.degree_bits;
     let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
@@ -217,7 +218,7 @@ fn collect_val_quot_stmts(
     }
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
-    let config = crate::plonky3_stark::config::devnet_circle_config();
+    let config = super::fri_fs_replay::circle_config_matching_proof(proof)?;
     let pcs = config.pcs();
     let degree = 1usize << proof.degree_bits;
     let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
@@ -405,7 +406,7 @@ fn collect_val_quot_batch_stmts(
     }
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
-    let config = crate::plonky3_stark::config::devnet_circle_config();
+    let config = super::fri_fs_replay::circle_config_matching_proof(proof)?;
     let pcs = config.pcs();
     let degree = 1usize << proof.degree_bits;
     let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
@@ -650,15 +651,13 @@ fn bind_val_with_groups(
 ) -> Result<(), String> {
     use super::fri_mmcs_bind::{verify_chal_batch_path_digests, verify_chal_batch_path_replay};
 
-    if bundle.len() != LEAF_FRI_PROVEN_QUERIES {
-        return Err(format!(
-            "val mmcs len {}, want {LEAF_FRI_PROVEN_QUERIES}",
-            bundle.len()
-        ));
+    let n = fri_queries_from_proof(proof)?;
+    if bundle.len() != n {
+        return Err(format!("val mmcs len {}, want {n}", bundle.len()));
     }
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
-    let config = crate::plonky3_stark::config::devnet_circle_config();
+    let config = super::fri_fs_replay::circle_config_matching_proof(proof)?;
     let pcs = config.pcs();
     let degree = 1usize << proof.degree_bits;
     let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
@@ -847,11 +846,9 @@ fn bind_chal_with_groups(
     groups: &LeafMmcsFoldGroups,
     trace_width: usize,
 ) -> Result<(), String> {
-    if bundle.len() != LEAF_FRI_PROVEN_QUERIES {
-        return Err(format!(
-            "chal mmcs len {}, want {LEAF_FRI_PROVEN_QUERIES}",
-            bundle.len()
-        ));
+    let n = fri_queries_from_proof(proof)?;
+    if bundle.len() != n {
+        return Err(format!("chal mmcs len {}, want {n}", bundle.len()));
     }
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;

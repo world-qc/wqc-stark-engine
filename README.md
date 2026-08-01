@@ -64,10 +64,11 @@ API:
 - `fri_num_queries_for_security_level(level)`
 - `devnet_circle_config_with_queries(n)` / `circle_config_for_security_level(level, log_blowup)`
 
-Leaf unitary prove/verify (orch → node → core → FFI) selects queries from `security_level`
-on the signed SubTask dispatch wire (and optional `SEC1` public-input binding). Empty /
-unknown level still maps to **40**. Born / trajectory STARKs and leaf PCS / RecAgg certs
-still use the compile-time **40**-query ladder until variable-length certs land.
+Leaf unitary, Born, trajectory, AggregationAir, RecAgg, and leaf/agg PCS certificates
+select outer FRI query count from the same task-level `security_level` (PCS `n` comes from
+`proof.query_proofs.len()`, cross-checked with the level when present). Nested FriFold /
+DeepRo / Mmcs **internal** uni-STARKs keep the fixed 40-query Circle/Keccak configs; only
+the number of outer FRI query slots in the cert varies with `n ∈ {8,16,32,40}`.
 
 ## Build
 

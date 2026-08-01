@@ -114,7 +114,11 @@ pub fn is_trajectory_leaf_proof(proof: &[u8]) -> bool {
 }
 
 /// Verifies a trajectory-only leaf child (algebraic segment + optional marginal zk bundle).
-pub fn verify_trajectory_leaf(sub_task_id: &str, proof: &[u8]) -> Result<(), String> {
+pub fn verify_trajectory_leaf(
+    sub_task_id: &str,
+    proof: &[u8],
+    security_level: &str,
+) -> Result<(), String> {
     let (parsed_sub, tail_body) = parse_trajectory_leaf_prefix(proof)
         .ok_or_else(|| "malformed trajectory leaf prefix".to_string())?;
     if parsed_sub != sub_task_id {
@@ -134,7 +138,7 @@ pub fn verify_trajectory_leaf(sub_task_id: &str, proof: &[u8]) -> Result<(), Str
         }
         let bundle = split_trajectory_stark_tail(tail_body)
             .ok_or_else(|| "malformed trajectory zk tail".to_string())?;
-        if !verify_trajectory_stark_bundle(sub_task_id, &segment, bundle) {
+        if !verify_trajectory_stark_bundle(sub_task_id, &segment, bundle, security_level) {
             return Err("trajectory marginal zk verification failed".to_string());
         }
     }
@@ -207,13 +211,14 @@ pub fn compose_unitary_trajectory_leaf(
     }
 
     let traj_child = encode_trajectory_leaf(context.sub_task_id, segment, Some(traj_bundle));
-    verify_trajectory_leaf(context.sub_task_id, &traj_child)?;
+    verify_trajectory_leaf(context.sub_task_id, &traj_child, context.security_level)?;
 
     compose_stark_proofs(
         &ComposeContext {
             parent_task_id: context.sub_task_id,
             compose_label: UNITARY_TRAJ_COMPOSE_LABEL,
             manifest_root_hash: "",
+            security_level: context.security_level,
         },
         unitary_v2_proof,
         &traj_child,
@@ -283,7 +288,9 @@ pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof:
         return false;
     }
 
-    if let Err(err) = verify_trajectory_leaf(context.sub_task_id, right_child) {
+    if let Err(err) =
+        verify_trajectory_leaf(context.sub_task_id, right_child, context.security_level)
+    {
         eprintln!("[LeafCompose] Failed: trajectory child: {err}");
         return false;
     }
@@ -339,6 +346,7 @@ pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof:
                 left_child,
                 right_child,
                 rec_bytes,
+                context.security_level,
             ) {
                 Ok(ctx) => ctx,
                 Err(e) => {
@@ -362,6 +370,7 @@ pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof:
                 manifest_root_hash: "",
                 left_child_hash: header.left_child_hash,
                 right_child_hash: header.right_child_hash,
+                security_level: context.security_level,
             };
             if !verify_aggregation_proof(&agg_ctx, agg_bytes) {
                 eprintln!("[LeafCompose] Failed: aggregation STARK verification failed");
@@ -465,7 +474,7 @@ mod tests {
         let segment = sample_segment();
         let leaf = encode_trajectory_leaf("sub-traj", &segment, None);
         assert!(is_trajectory_leaf_proof(&leaf));
-        verify_trajectory_leaf("sub-traj", &leaf).expect("verify leaf");
+        verify_trajectory_leaf("sub-traj", &leaf, "").expect("verify leaf");
         assert!(trajectory_proof_view(&leaf)
             .windows(TRAJ_LEAF_MARKER.len())
             .any(|w| w == TRAJ_LEAF_MARKER));
@@ -491,7 +500,7 @@ mod tests {
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
-        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment).expect("traj zk");
+        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment, "").expect("traj zk");
         let composed =
             compose_unitary_trajectory_leaf(&ctx, &unitary, &segment, &bundle).expect("compose");
         (ctx, composed)
@@ -552,7 +561,7 @@ mod tests {
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
-        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment).expect("traj zk");
+        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment, "").expect("traj zk");
 
         let mut bad_segment = segment;
         bad_segment.unitary_link_digest = "00".repeat(32);

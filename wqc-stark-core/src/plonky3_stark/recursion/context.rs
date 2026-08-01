@@ -24,4 +24,6 @@ pub struct RecursiveAggregationContext<'a> {
     /// R3-M3e: leaf uni-STARK PCS bundles when `*_kind == LEAF` (mutually exclusive with agg cert).
     pub left_leaf_bundle: Option<LeafPcsBundle>,
     pub right_leaf_bundle: Option<LeafPcsBundle>,
+    /// Orchestrator security tier; empty → FRI default (40).
+    pub security_level: &'a str,
 }

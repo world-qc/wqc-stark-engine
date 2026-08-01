@@ -138,6 +138,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [11u8; CHILD_HASH_LEN],
             right_child_hash: [13u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");

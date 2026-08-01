@@ -9,7 +9,7 @@ use p3_uni_stark::{prove, verify};
 use crate::air::shot_sampling::{collect_shot_sampling_events, segment_supports_shot_sampling_zk};
 use crate::trajectory::{TrajectoryMarginalWitness, TrajectorySegment};
 
-use super::config::{devnet_circle_config, WqcStarkConfig};
+use super::config::{circle_config_for_security_level, WqcStarkConfig};
 use super::shot_sampling_stark::{
     append_shot_sampling_to_bundle, generate_shot_sampling_stark, split_shot_sampling_from_bundle,
     verify_shot_sampling_stark,
@@ -74,6 +74,7 @@ fn prove_one_marginal(
     context: &TrajectoryMarginalStarkContext<'_>,
     witness: &TrajectoryMarginalWitness,
     qubit_count: usize,
+    security_level: &str,
 ) -> Result<Vec<u8>, String> {
     if context.witness_digest != witness.pre_measure_statevector_digest {
         return Err("witness_digest mismatch".to_string());
@@ -84,7 +85,7 @@ fn prove_one_marginal(
     let matrix = build_marginal_matrix(&air, witness)
         .ok_or_else(|| "marginal constraints not satisfied on streaming trace".to_string())?;
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(security_level, 1);
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
         postcard::to_allocvec(&proof).map_err(|e| format!("postcard encode failed: {e}"))?;
@@ -95,6 +96,7 @@ fn prove_one_marginal(
 pub fn generate_trajectory_stark_bundle(
     sub_task_id: &str,
     segment: &TrajectorySegment,
+    security_level: &str,
 ) -> Result<Vec<u8>, String> {
     if sub_task_id.is_empty() || segment.trajectory_digest.is_empty() {
         return Err("sub_task_id and trajectory_digest are required".to_string());
@@ -121,7 +123,7 @@ pub fn generate_trajectory_stark_bundle(
             witness_digest: &witness.pre_measure_statevector_digest,
             unitary_link_digest: link,
         };
-        let inner = prove_one_marginal(&ctx, witness, qubit_count)?;
+        let inner = prove_one_marginal(&ctx, witness, qubit_count, security_level)?;
         bundle.extend_from_slice(&(inner.len() as u32).to_le_bytes());
         bundle.extend_from_slice(&inner);
     }
@@ -135,7 +137,7 @@ pub fn generate_trajectory_stark_bundle(
         shots: segment.shots,
         event_count: events.len() as u32,
     };
-    let shot_inner = generate_shot_sampling_stark(&shot_ctx, segment)?;
+    let shot_inner = generate_shot_sampling_stark(&shot_ctx, segment, security_level)?;
     Ok(append_shot_sampling_to_bundle(bundle, &shot_inner))
 }
 
@@ -144,6 +146,7 @@ fn verify_one_marginal(
     witness: &TrajectoryMarginalWitness,
     qubit_count: usize,
     proof: &[u8],
+    security_level: &str,
 ) -> bool {
     let air = match build_marginal_air(witness, qubit_count) {
         Some(air) => air,
@@ -169,7 +172,7 @@ fn verify_one_marginal(
         }
     };
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(security_level, 1);
     match verify(&config, &air, &p3_proof, &[]) {
         Ok(()) => true,
         Err(e) => {
@@ -184,6 +187,7 @@ pub fn verify_trajectory_stark_bundle(
     sub_task_id: &str,
     segment: &TrajectorySegment,
     bundle: &[u8],
+    security_level: &str,
 ) -> bool {
     if sub_task_id.is_empty() || segment.trajectory_digest.is_empty() {
         eprintln!("[TrajectoryAir] Failed: context fields empty");
@@ -244,7 +248,7 @@ pub fn verify_trajectory_stark_bundle(
             witness_digest: &witness.pre_measure_statevector_digest,
             unitary_link_digest: link,
         };
-        if !verify_one_marginal(&ctx, witness, qubit_count, inner) {
+        if !verify_one_marginal(&ctx, witness, qubit_count, inner, security_level) {
             return false;
         }
     }
@@ -265,7 +269,7 @@ pub fn verify_trajectory_stark_bundle(
         shots: segment.shots,
         event_count: events.len() as u32,
     };
-    if !verify_shot_sampling_stark(&shot_ctx, segment, shot_inner) {
+    if !verify_shot_sampling_stark(&shot_ctx, segment, shot_inner, security_level) {
         return false;
     }
 
@@ -378,10 +382,10 @@ mod tests {
     #[test]
     fn if_demo_trajectory_marginal_stark_roundtrip() {
         let segment = if_demo_segment();
-        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment).expect("prove");
+        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment, "").expect("prove");
         assert!(split_shot_sampling_from_bundle(&bundle).is_some());
         assert!(verify_trajectory_stark_bundle(
-            "sub-traj", &segment, &bundle
+            "sub-traj", &segment, &bundle, ""
         ));
     }
 
@@ -428,7 +432,9 @@ mod tests {
             marginal_witnesses: vec![witness],
         };
         assert!(segment_supports_trajectory_zk(&segment));
-        let bundle = generate_trajectory_stark_bundle("sub-8q", &segment).expect("prove 8q");
-        assert!(verify_trajectory_stark_bundle("sub-8q", &segment, &bundle));
+        let bundle = generate_trajectory_stark_bundle("sub-8q", &segment, "").expect("prove 8q");
+        assert!(verify_trajectory_stark_bundle(
+            "sub-8q", &segment, &bundle, ""
+        ));
     }
 }

@@ -831,12 +831,13 @@ fn encode_fri_val_mmcs(out: &mut Vec<u8>, qs: &[FriValMmcsQueryProof]) {
 
 fn decode_fri_val_mmcs(proof: &[u8], offset: usize) -> Option<(Vec<FriValMmcsQueryProof>, usize)> {
     let (len, cursor) = read_u32_le(proof, offset)?;
-    if len as usize != AGG_FRI_PROVEN_QUERIES {
+    let n = len as usize;
+    if n == 0 || n > AGG_FRI_PROVEN_QUERIES {
         return None;
     }
-    let mut qs = Vec::with_capacity(len as usize);
+    let mut qs = Vec::with_capacity(n);
     let mut cursor = cursor;
-    for _ in 0..len {
+    for _ in 0..n {
         let (q, next) = decode_fri_val_mmcs_query(proof, cursor)?;
         qs.push(q);
         cursor = next;
@@ -1071,12 +1072,13 @@ fn decode_fri_chal_mmcs(
     offset: usize,
 ) -> Option<(Vec<FriChalMmcsQueryProof>, usize)> {
     let (len, cursor) = read_u32_le(proof, offset)?;
-    if len as usize != AGG_FRI_PROVEN_QUERIES {
+    let n = len as usize;
+    if n == 0 || n > AGG_FRI_PROVEN_QUERIES {
         return None;
     }
-    let mut qs = Vec::with_capacity(len as usize);
+    let mut qs = Vec::with_capacity(n);
     let mut cursor = cursor;
-    for _ in 0..len {
+    for _ in 0..n {
         let (q, next) = decode_fri_chal_mmcs_query(proof, cursor)?;
         qs.push(q);
         cursor = next;
@@ -1286,6 +1288,14 @@ fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, 
     let (ood, cursor) = decode_ood(proof, cursor)?;
     let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor)?;
     let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor)?;
+    if fri_val_mmcs.len() != fri_chal_mmcs.len() {
+        return None;
+    }
+    if !deep_ros.is_empty()
+        && (deep_ros.len() != fri_val_mmcs.len() || deep_ro_traces.len() != fri_val_mmcs.len())
+    {
+        return None;
+    }
     Some((
         LeafPcsCertificate {
             kind,
@@ -1953,6 +1963,7 @@ mod tests {
             right_agg_cert: None,
             left_leaf_bundle: None,
             right_leaf_bundle: None,
+            security_level: "",
         };
         let encoded = encode_rec_agg_proof_v6(&ctx, b"plonky3-bytes");
         let sides = parse_rec_agg_sides_v6(&encoded).expect("parse sides");
@@ -1965,6 +1976,22 @@ mod tests {
         assert_eq!(sides.right_kind, REC_KIND_LEAF);
         assert!(sides.left_leaf_bundle.is_none());
         assert!(sides.right_leaf_bundle.is_none());
+    }
+
+    #[test]
+    fn decode_fri_val_mmcs_length_gate() {
+        assert!(decode_fri_val_mmcs(&0u32.to_le_bytes(), 0).is_none());
+        assert!(
+            decode_fri_val_mmcs(&(AGG_FRI_PROVEN_QUERIES as u32 + 1).to_le_bytes(), 0).is_none()
+        );
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&8u32.to_le_bytes());
+        // len=8 is in 1..=MAX; truncated body fails later (not a hard ==40 reject).
+        assert!(decode_fri_val_mmcs(&buf, 0).is_none());
+        let (len, cursor) = read_u32_le(&buf, 0).expect("prefix");
+        assert_eq!(len, 8);
+        assert_eq!(cursor, 4);
+        assert!((1..=AGG_FRI_PROVEN_QUERIES).contains(&(len as usize)));
     }
 
     #[test]
@@ -1991,6 +2018,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [9u8; CHILD_HASH_LEN],
             right_child_hash: [10u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let agg = generate_aggregation_proof(&ctx).expect("prove");
         let cert = build_agg_pcs_certificate(&ctx, &agg).expect("cert");

@@ -14,10 +14,14 @@ use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
 use super::fri_ro::reconstruct_query_ro;
 
 /// Number of FRI queries whose fold chains are STARK-proven in the cert (M3b3: all).
+/// Ceiling of the SecurityLevel ladder (`ultra` / default); runtime uses proof query count.
 pub const AGG_FRI_PROVEN_QUERIES: usize = DEVNET_FRI_NUM_QUERIES;
 
-/// Leaf certs use the same FRI query count as AggregationAir (devnet config).
+/// Leaf certs use the same FRI query **ceiling** as AggregationAir (devnet max).
 pub const LEAF_FRI_PROVEN_QUERIES: usize = DEVNET_FRI_NUM_QUERIES;
+
+/// Alias: max outer FRI queries in any leaf/agg PCS certificate.
+pub const MAX_FRI_PROVEN_QUERIES: usize = DEVNET_FRI_NUM_QUERIES;
 
 /// Max commit-phase rounds for AggregationAir-sized FRI.
 pub const AGG_FRI_MAX_ROUNDS: usize = 4;
@@ -47,7 +51,7 @@ pub struct AggFriFoldBundle {
     pub fold_xs: Vec<FriFoldStepProof>,
 }
 
-/// True when the cert proves every FRI query used by [`devnet_circle_config`].
+/// True when the cert can prove every FRI query used by the max (`ultra`) ladder.
 pub const fn covers_all_devnet_fri_queries() -> bool {
     AGG_FRI_PROVEN_QUERIES >= DEVNET_FRI_NUM_QUERIES
 }
@@ -66,11 +70,16 @@ pub fn fri_fold_bundle_from_proof(
     if chal.betas.len() != fri.commit_phase_commits.len() {
         return Err("beta count != commit-phase rounds".into());
     }
-    if chal.query_indices.len() < LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = fri.query_proofs.len();
+    if proven_queries == 0 || proven_queries > LEAF_FRI_PROVEN_QUERIES {
         return Err(format!(
-            "FS query count {} < proven {}",
+            "FRI query count {proven_queries} out of range 1..={LEAF_FRI_PROVEN_QUERIES}"
+        ));
+    }
+    if chal.query_indices.len() != proven_queries {
+        return Err(format!(
+            "FS query count {} != proven {proven_queries}",
             chal.query_indices.len(),
-            LEAF_FRI_PROVEN_QUERIES
         ));
     }
     let max_rounds = if trace_width == crate::plonky3_stark::aggregation_air::AGG_WIDTH {
@@ -81,7 +90,7 @@ pub fn fri_fold_bundle_from_proof(
 
     let mut fold_ys = Vec::new();
     let mut fold_xs = Vec::new();
-    for q in 0..LEAF_FRI_PROVEN_QUERIES {
+    for q in 0..proven_queries {
         let qp = fri
             .query_proofs
             .get(q)
@@ -147,7 +156,19 @@ pub fn bind_fri_fold_bundle_to_proof_width(
     };
     let mut y_off = 0usize;
     let mut x_off = 0usize;
-    for q in 0..LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = fri.query_proofs.len();
+    if proven_queries == 0 || proven_queries > LEAF_FRI_PROVEN_QUERIES {
+        return Err(format!(
+            "FRI query count {proven_queries} out of range 1..={LEAF_FRI_PROVEN_QUERIES}"
+        ));
+    }
+    if chal.query_indices.len() != proven_queries {
+        return Err(format!(
+            "FS query count {} != proven {proven_queries}",
+            chal.query_indices.len()
+        ));
+    }
+    for q in 0..proven_queries {
         let qp = fri
             .query_proofs
             .get(q)
@@ -355,6 +376,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [7u8; CHILD_HASH_LEN],
             right_child_hash: [9u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");

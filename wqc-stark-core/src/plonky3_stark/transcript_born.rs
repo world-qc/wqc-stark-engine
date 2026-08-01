@@ -103,6 +103,7 @@ mod tests {
             sub_task_id: "sub-1",
             probability_digest: "abc123digest",
             terminal_statevector_digest: "svdigest",
+            security_level: "",
         };
         let payload = b"plonky3-bytes";
         let encoded = encode_born_stark(&ctx, payload);
@@ -116,6 +117,7 @@ mod tests {
             sub_task_id: "sub-1",
             probability_digest: "abc123digest",
             terminal_statevector_digest: "svdigest",
+            security_level: "",
         };
         let inner = encode_born_stark(&ctx, b"plonky3");
         let wrapped = append_born_stark_tail(b"base-proof".to_vec(), &inner);

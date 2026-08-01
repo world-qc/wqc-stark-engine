@@ -30,10 +30,11 @@ use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
 use super::deep_ro_bind::{bind_deep_ro_leaf_bundle_to_proof, deep_ro_bundle_from_leaf_proof};
 use super::deep_ro_leaf_trace_air::{verify_deep_ro_leaf_trace_proof, DeepRoLeafTraceStepProof};
 use super::fri_fold_air::FriFoldStepProof;
-use super::fri_fold_bind::{fri_fold_bundle_from_proof, LEAF_FRI_PROVEN_QUERIES};
+use super::fri_fold_bind::fri_fold_bundle_from_proof;
 use super::fri_fold_m4c::{
     apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups,
 };
+use super::fri_fs_replay::fri_queries_from_proof;
 use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
     FriValMmcsQueryProof,
@@ -269,6 +270,7 @@ pub fn build_leaf_pcs_certificate(
     let mem_plan = plan_pcs_memory(
         proof.degree_bits,
         Some(depth_hint_from_degree_bits(proof.degree_bits)),
+        fri_queries_from_proof(proof)?,
     )?;
     if let Some(budget) = mem_plan.budget_bytes {
         eprintln!(
@@ -337,11 +339,10 @@ pub fn build_leaf_pcs_certificate(
     // Query-streaming Mmcs: drop nested Keccak STARKs after each path self-check.
     let mut mmcs_bundle = fri_mmcs_bundle_from_proof_drop_nested(proof, trace_width)
         .map_err(|e| format!("R3-M3e FRI Mmcs prove failed: {e}"))?;
-    if mmcs_bundle.val.len() != LEAF_FRI_PROVEN_QUERIES
-        || mmcs_bundle.chal.len() != LEAF_FRI_PROVEN_QUERIES
-    {
+    let proven_queries = fri_queries_from_proof(proof)?;
+    if mmcs_bundle.val.len() != proven_queries || mmcs_bundle.chal.len() != proven_queries {
         return Err(format!(
-            "unexpected FRI Mmcs counts: val={}, chal={}",
+            "unexpected FRI Mmcs counts: val={}, chal={}, want {proven_queries}",
             mmcs_bundle.val.len(),
             mmcs_bundle.chal.len()
         ));
@@ -450,9 +451,14 @@ pub fn verify_leaf_pcs_certificate(
         eprintln!("[LeafPcsCertificate] Failed: FRI fold bind/groups: {e}");
         return false;
     }
-    if cert.deep_ros.len() != LEAF_FRI_PROVEN_QUERIES
-        || cert.deep_ro_traces.len() != LEAF_FRI_PROVEN_QUERIES
-    {
+    let proven_queries = match fri_queries_from_proof(proof) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("[LeafPcsCertificate] Failed: fri queries: {e}");
+            return false;
+        }
+    };
+    if cert.deep_ros.len() != proven_queries || cert.deep_ro_traces.len() != proven_queries {
         // Allowed empty when multi-chunk leaf (DeepRo deferred).
         if !(cert.deep_ros.is_empty()
             && cert.deep_ro_traces.is_empty()
@@ -475,9 +481,7 @@ pub fn verify_leaf_pcs_certificate(
             }
         }
     }
-    if cert.fri_val_mmcs.len() != LEAF_FRI_PROVEN_QUERIES
-        || cert.fri_chal_mmcs.len() != LEAF_FRI_PROVEN_QUERIES
-    {
+    if cert.fri_val_mmcs.len() != proven_queries || cert.fri_chal_mmcs.len() != proven_queries {
         eprintln!("[LeafPcsCertificate] Failed: fri mmcs count");
         return false;
     }
@@ -738,6 +742,37 @@ mod tests {
 
     #[test]
     #[ignore = "slow; local only — not run in CI"]
+    fn unitary_leaf_pcs_certificate_low_security_roundtrip() {
+        let ctx = StarkContext {
+            circuit_id: "c-leaf",
+            sub_task_id: "sub-leaf-pcs-low",
+            node_id: "n1",
+            slice_id: "0",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+            security_level: "low",
+        };
+        let trace = crate::trace_spec::idle_qubit0_trace();
+        let transcript = generate_plonky3_proof(&ctx, &trace).expect("prove");
+        let plonky3 = decode_proof_v2_plonky3_bytes(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        assert_eq!(
+            fri_queries_from_proof(&proof).expect("n"),
+            8,
+            "low ladder must embed 8 FRI queries"
+        );
+        let kind = LeafKind::Unitary;
+        let stmt = leaf_stmt_digest(kind, &proof).expect("stmt");
+        let cert = build_leaf_pcs_certificate(&proof, kind, stmt).expect("cert");
+        assert_eq!(cert.fri_val_mmcs.len(), 8);
+        assert_eq!(cert.fri_chal_mmcs.len(), 8);
+        assert_eq!(cert.deep_ros.len(), 8);
+        assert!(verify_leaf_pcs_certificate(&proof, &cert));
+    }
+
+    #[test]
+    #[ignore = "slow; local only — not run in CI"]
     fn unitary_leaf_pcs_certificate_roundtrip() {
         let ctx = StarkContext {
             circuit_id: "c-leaf",
@@ -834,6 +869,7 @@ mod tests {
             sub_task_id: "sub-born-pcs",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: &link,
+            security_level: "",
         };
         let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born prove");
         let leaf =

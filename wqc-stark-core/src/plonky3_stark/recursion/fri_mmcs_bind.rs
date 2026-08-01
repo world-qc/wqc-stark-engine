@@ -7,13 +7,12 @@ use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{Proof, StarkGenericConfig};
 
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
-use crate::plonky3_stark::config::{
-    devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
-};
+use crate::plonky3_stark::config::{Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig};
 
-use super::fri_fold_bind::LEAF_FRI_PROVEN_QUERIES;
 use super::fri_fold_native::{challenge_to_limbs, fold_x_row};
-use super::fri_fs_replay::{decode_pcs_view, replay_fri_challenges};
+use super::fri_fs_replay::{
+    circle_config_matching_proof, decode_pcs_view, fri_queries_from_proof, replay_fri_challenges,
+};
 use super::fri_mmcs_path::{
     generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
     verify_fri_mmcs_path_proof, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
@@ -663,7 +662,7 @@ fn fri_val_mmcs_bundle_from_proof_inner(
     };
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
-    let config = devnet_circle_config();
+    let config = circle_config_matching_proof(proof)?;
     let pcs = config.pcs();
     let degree = 1usize << proof.degree_bits;
     let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
@@ -685,8 +684,9 @@ fn fri_val_mmcs_bundle_from_proof_inner(
         init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
     let quot_chunk_domains = quot_parent.split_domains(num_quot);
 
-    let mut out = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
-    for q in 0..LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = fri_queries_from_proof(proof)?;
+    let mut out = Vec::with_capacity(proven_queries);
+    for q in 0..proven_queries {
         let query_index = chal.query_indices[q];
         let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
         let trace_open = &input.input_openings[0];
@@ -776,15 +776,16 @@ pub fn bind_fri_val_mmcs_bundle_width(
     bundle: &[FriValMmcsQueryProof],
     trace_width: usize,
 ) -> Result<(), String> {
-    if bundle.len() != LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = fri_queries_from_proof(proof)?;
+    if bundle.len() != proven_queries {
         return Err(format!(
-            "val mmcs len {}, want {LEAF_FRI_PROVEN_QUERIES}",
+            "val mmcs len {}, want {proven_queries}",
             bundle.len()
         ));
     }
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
-    let config = devnet_circle_config();
+    let config = circle_config_matching_proof(proof)?;
     let pcs = config.pcs();
     let degree = 1usize << proof.degree_bits;
     let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
@@ -918,13 +919,14 @@ fn fri_chal_mmcs_bundle_from_proof_inner(
     };
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
-    let config = devnet_circle_config();
+    let config = circle_config_matching_proof(proof)?;
     let pcs = config.pcs();
     let fri_mmcs = &pcs.fri_params.mmcs;
     let fl_root = commitment_root_chal(&view.first_layer_commitment)?;
 
-    let mut out = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
-    for q in 0..LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = fri_queries_from_proof(proof)?;
+    let mut out = Vec::with_capacity(proven_queries);
+    for q in 0..proven_queries {
         let query_index = chal.query_indices[q];
         let qp = &view.fri_proof.query_proofs[q];
         let input = decode_input_proof(&qp.input_proof)?;
@@ -1014,9 +1016,10 @@ pub fn bind_fri_chal_mmcs_bundle_width(
     bundle: &[FriChalMmcsQueryProof],
     trace_width: usize,
 ) -> Result<(), String> {
-    if bundle.len() != LEAF_FRI_PROVEN_QUERIES {
+    let proven_queries = fri_queries_from_proof(proof)?;
+    if bundle.len() != proven_queries {
         return Err(format!(
-            "chal mmcs len {}, want {LEAF_FRI_PROVEN_QUERIES}",
+            "chal mmcs len {}, want {proven_queries}",
             bundle.len()
         ));
     }
@@ -1177,6 +1180,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [61u8; CHILD_HASH_LEN],
             right_child_hash: [63u8; CHILD_HASH_LEN],
+            security_level: "",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -1185,7 +1189,7 @@ mod tests {
         // Prove only query 0 by temporarily using full bundle APIs' internals.
         let chal = replay_agg_fri_challenges(&proof).expect("fs");
         let view = decode_pcs_view(&proof).expect("pcs");
-        let config = devnet_circle_config();
+        let config = circle_config_matching_proof(&proof).expect("config");
         let pcs = config.pcs();
         let degree = 1usize << proof.degree_bits;
         let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
