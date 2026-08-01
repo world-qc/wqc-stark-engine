@@ -175,6 +175,7 @@ pub fn compose_unitary_trajectory_leaf(
         output_hash: context.output_hash,
         terminal_statevector_digest: &segment.unitary_link_digest,
         measurement_spec_hash: context.measurement_spec_hash,
+        security_level: context.security_level,
     };
 
     if !verify_plonky3_proof(&unitary_ctx, unitary_v2_proof) {
@@ -486,6 +487,7 @@ mod tests {
             output_hash: "counts-hash",
             terminal_statevector_digest: link_digest,
             measurement_spec_hash: "",
+            security_level: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
@@ -546,6 +548,7 @@ mod tests {
             output_hash: "counts-hash",
             terminal_statevector_digest: &link_digest,
             measurement_spec_hash: "",
+            security_level: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
@@ -613,6 +616,7 @@ mod tests {
             output_hash: ctx.output_hash,
             terminal_statevector_digest: ctx.terminal_statevector_digest,
             measurement_spec_hash: "",
+            security_level: "",
         };
         assert!(!verify_unitary_trajectory_leaf_compose(
             &wrong_sub, &composed
@@ -626,6 +630,7 @@ mod tests {
             output_hash: "deadbeef",
             terminal_statevector_digest: ctx.terminal_statevector_digest,
             measurement_spec_hash: "",
+            security_level: "",
         };
         assert!(!verify_unitary_trajectory_leaf_compose(
             &wrong_output,

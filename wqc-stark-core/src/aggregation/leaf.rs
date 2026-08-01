@@ -1,6 +1,8 @@
 //! Leaf proof parsing helpers (v1 / v2 transcripts).
 
-use crate::transcript::{MEASUREMENT_SPEC_HASH_PI_PREFIX, V1_MARKER, V2_MARKER};
+use crate::transcript::{
+    MEASUREMENT_SPEC_HASH_PI_PREFIX, SECURITY_LEVEL_PI_PREFIX, V1_MARKER, V2_MARKER,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedLeafBinding {
@@ -13,6 +15,8 @@ pub struct ParsedLeafBinding {
     pub terminal_statevector_digest: String,
     /// Optional C2c measurement-spec digest bound into the transcript (empty when unbound).
     pub measurement_spec_hash: String,
+    /// Optional security tier bound into the transcript (empty → FRI default).
+    pub security_level: String,
 }
 
 fn read_cstr(proof: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -51,6 +55,20 @@ fn try_read_measurement_spec_hash(proof: &[u8], offset: usize) -> Option<(String
     }
 }
 
+fn try_read_security_level(proof: &[u8], offset: usize) -> Option<(String, usize)> {
+    let tail = proof.get(offset..)?;
+    let prefix = SECURITY_LEVEL_PI_PREFIX.as_bytes();
+    if !tail.starts_with(prefix) {
+        return None;
+    }
+    let (field, next) = read_cstr(proof, offset)?;
+    let level = field.strip_prefix(SECURITY_LEVEL_PI_PREFIX)?;
+    if level.is_empty() {
+        return None;
+    }
+    Some((level.to_string(), next))
+}
+
 fn locate_leaf_marker(proof: &[u8]) -> Option<(usize, &'static [u8])> {
     for marker in [V1_MARKER, V2_MARKER] {
         if let Some(pos) = proof.windows(marker.len()).position(|w| w == marker) {
@@ -69,18 +87,23 @@ pub fn parse_leaf_binding(proof: &[u8]) -> Option<ParsedLeafBinding> {
     let (node_id, cursor) = read_cstr(proof, cursor)?;
     let (slice_id, cursor) = read_cstr(proof, cursor)?;
     let (output_hash, cursor) = read_cstr(proof, cursor)?;
-    let (terminal_statevector_digest, measurement_spec_hash) = if marker == V2_MARKER {
-        let (terminal, cursor) = match try_read_hex_digest(proof, cursor) {
-            Some((digest, next)) => (digest, next),
-            None => (String::new(), cursor),
+    let (terminal_statevector_digest, measurement_spec_hash, security_level) =
+        if marker == V2_MARKER {
+            let (terminal, cursor) = match try_read_hex_digest(proof, cursor) {
+                Some((digest, next)) => (digest, next),
+                None => (String::new(), cursor),
+            };
+            let (measurement, cursor) = match try_read_measurement_spec_hash(proof, cursor) {
+                Some((hash, next)) => (hash, next),
+                None => (String::new(), cursor),
+            };
+            let security = try_read_security_level(proof, cursor)
+                .map(|(level, _)| level)
+                .unwrap_or_default();
+            (terminal, measurement, security)
+        } else {
+            (String::new(), String::new(), String::new())
         };
-        let measurement = try_read_measurement_spec_hash(proof, cursor)
-            .map(|(hash, _)| hash)
-            .unwrap_or_default();
-        (terminal, measurement)
-    } else {
-        (String::new(), String::new())
-    };
     Some(ParsedLeafBinding {
         sub_task_id,
         circuit_id,
@@ -89,6 +112,7 @@ pub fn parse_leaf_binding(proof: &[u8]) -> Option<ParsedLeafBinding> {
         output_hash,
         terminal_statevector_digest,
         measurement_spec_hash,
+        security_level,
     })
 }
 
@@ -103,6 +127,7 @@ pub fn parsed_to_stark_context<'a>(
         output_hash: &binding.output_hash,
         terminal_statevector_digest: &binding.terminal_statevector_digest,
         measurement_spec_hash: &binding.measurement_spec_hash,
+        security_level: &binding.security_level,
     }
 }
 
@@ -121,6 +146,7 @@ mod tests {
             output_hash: "hash-out",
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         };
         let trace = crate::trace_spec::idle_qubit0_trace();
         let proof = generate_stark_proof(&ctx, &trace);
@@ -143,6 +169,7 @@ mod tests {
             output_hash: "hash-out",
             terminal_statevector_digest: "",
             measurement_spec_hash: &msh,
+            security_level: "",
         };
         let trace = crate::trace_spec::idle_qubit0_trace();
         let proof = crate::generate_plonky3_stark_proof(&ctx, &trace).expect("prove");

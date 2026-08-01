@@ -59,12 +59,15 @@ Orchestrator `security_level` maps to FRI `num_queries` (operational ladder, **n
 | `high` | 32 |
 | `ultra` | 40 (current default / [`DEVNET_FRI_NUM_QUERIES`]) |
 
-API (opt-in; existing prove/verify still use `devnet_circle_config()` → 40):
+API:
 
 - `fri_num_queries_for_security_level(level)`
 - `devnet_circle_config_with_queries(n)` / `circle_config_for_security_level(level, log_blowup)`
 
-Prove and verify must use the **same** query count. Wiring `security_level` through orch → node → prove/verify, and variable-length PCS/RecAgg certs, are follow-on work.
+Leaf unitary prove/verify (orch → node → core → FFI) selects queries from `security_level`
+on the signed SubTask dispatch wire (and optional `SEC1` public-input binding). Empty /
+unknown level still maps to **40**. Born / trajectory STARKs and leaf PCS / RecAgg certs
+still use the compile-time **40**-query ladder until variable-length certs land.
 
 ## Build
 

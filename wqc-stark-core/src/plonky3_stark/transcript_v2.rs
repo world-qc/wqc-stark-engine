@@ -21,6 +21,11 @@ fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) 
         proof.extend_from_slice(context.measurement_spec_hash.as_bytes());
         proof.push(0);
     }
+    if !context.security_level.is_empty() {
+        proof.extend_from_slice(crate::transcript::SECURITY_LEVEL_PI_PREFIX.as_bytes());
+        proof.extend_from_slice(context.security_level.as_bytes());
+        proof.push(0);
+    }
 }
 
 fn read_u32_le(proof: &[u8], offset: usize) -> Option<(u32, usize)> {

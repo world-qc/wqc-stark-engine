@@ -747,6 +747,7 @@ mod tests {
             output_hash: "out",
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         };
         let trace = crate::trace_spec::idle_qubit0_trace();
         let transcript = generate_plonky3_proof(&ctx, &trace).expect("prove");

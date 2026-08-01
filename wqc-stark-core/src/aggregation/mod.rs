@@ -772,6 +772,7 @@ mod integration_tests {
             output_hash: "out-hash",
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         }
     }
 

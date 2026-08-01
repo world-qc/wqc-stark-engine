@@ -45,6 +45,7 @@ fn optional_leaf_context<'a>(
         output_hash: cstr_or_empty(output_hash),
         terminal_statevector_digest: "",
         measurement_spec_hash: "",
+        security_level: "",
     })
 }
 
@@ -63,12 +64,13 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
     node_id: *const c_char,
     slice_id: *const c_char,
     output_hash: *const c_char,
+    security_level: *const c_char,
     proof_bytes: *const u8,
     proof_len: u32,
 ) -> i32 {
     eprintln!(
-        "[Rust FFI] verify: circuit={:?}, sub_task={:?}, slice={:?}, proof_len={}",
-        circuit_id, sub_task_id, slice_id, proof_len
+        "[Rust FFI] verify: circuit={:?}, sub_task={:?}, slice={:?}, security={:?}, proof_len={}",
+        circuit_id, sub_task_id, slice_id, security_level, proof_len
     );
 
     let result = catch_unwind(|| {
@@ -91,6 +93,7 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
             output_hash: cstr_or_empty(output_hash),
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: cstr_or_empty(security_level),
         };
 
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
@@ -343,6 +346,7 @@ pub unsafe extern "C" fn wqc_generate_demo_leaf_proof(
             output_hash: cstr_or_empty(output_hash),
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         };
         let proof =
             generate_stark_proof(&context, &wqc_stark_core::trace_spec::idle_qubit0_trace());

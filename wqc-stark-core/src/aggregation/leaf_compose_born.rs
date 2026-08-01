@@ -176,6 +176,7 @@ pub fn compose_unitary_born_leaf(
         output_hash: context.output_hash,
         terminal_statevector_digest: link,
         measurement_spec_hash: context.measurement_spec_hash,
+        security_level: context.security_level,
     };
 
     if !verify_plonky3_proof(&unitary_ctx, unitary_v2_proof) {
@@ -428,6 +429,7 @@ mod tests {
             output_hash: "counts-hash",
             terminal_statevector_digest: link,
             measurement_spec_hash: "",
+            security_level: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
@@ -506,6 +508,7 @@ mod tests {
             output_hash: "counts-hash",
             terminal_statevector_digest: &link,
             measurement_spec_hash: "",
+            security_level: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");

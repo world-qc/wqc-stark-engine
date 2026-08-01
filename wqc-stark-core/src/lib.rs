@@ -42,7 +42,7 @@ pub use trajectory::{
 };
 pub use transcript::{
     air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
-    LEGACY_MARKER, MEASUREMENT_SPEC_HASH_PI_PREFIX, V1_MARKER, V2_MARKER,
+    LEGACY_MARKER, MEASUREMENT_SPEC_HASH_PI_PREFIX, SECURITY_LEVEL_PI_PREFIX, V1_MARKER, V2_MARKER,
 };
 
 use transcript::verify_public_input_binding;
@@ -261,6 +261,7 @@ mod integration_tests {
             output_hash: "out-hash",
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         }
     }
 

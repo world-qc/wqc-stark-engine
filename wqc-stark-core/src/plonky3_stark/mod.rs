@@ -98,7 +98,7 @@ pub fn generate_plonky3_proof(
 
     let matrix = pad_air_matrix_for_uni_stark(matrix);
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(context.security_level, 1);
     let air = QuantumExecutionAir;
     let proof = prove(&config, &air, matrix, &[]);
     let plonky3_bytes =
@@ -140,8 +140,10 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
     // Prefer the transcript-bound hash (via leaf parse) so legacy proofs without PI promotion
     // are not forced to expect a measurement_spec_hash that only exists on the segment.
     let base_for_parse = crate::distribution::base_proof_without_distribution_tail(proof);
-    let expected_msh = crate::aggregation::parse_leaf_binding(base_for_parse)
-        .map(|p| p.measurement_spec_hash)
+    let parsed_binding = crate::aggregation::parse_leaf_binding(base_for_parse);
+    let expected_msh = parsed_binding
+        .as_ref()
+        .map(|p| p.measurement_spec_hash.clone())
         .filter(|s| !s.is_empty())
         .or_else(|| {
             if context.measurement_spec_hash.is_empty() {
@@ -150,6 +152,28 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
                 Some(context.measurement_spec_hash.to_string())
             }
         });
+    let parsed_sec = parsed_binding
+        .as_ref()
+        .map(|p| p.security_level.as_str())
+        .unwrap_or("");
+    if !context.security_level.is_empty()
+        && !parsed_sec.is_empty()
+        && context.security_level != parsed_sec
+    {
+        eprintln!(
+            "[STARK Core] Failed: security_level mismatch (context '{}', proof '{}')",
+            context.security_level, parsed_sec
+        );
+        return false;
+    }
+    // Prefer orchestrator/SubTask level when provided; otherwise restore from PI binding.
+    let expected_sec = if !context.security_level.is_empty() {
+        Some(context.security_level.to_string())
+    } else if !parsed_sec.is_empty() {
+        Some(parsed_sec.to_string())
+    } else {
+        None
+    };
 
     let verify_ctx = StarkContext {
         circuit_id: context.circuit_id,
@@ -159,6 +183,7 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         output_hash: context.output_hash,
         terminal_statevector_digest: expected_sv_digest.as_deref().unwrap_or(""),
         measurement_spec_hash: expected_msh.as_deref().unwrap_or(""),
+        security_level: expected_sec.as_deref().unwrap_or(""),
     };
 
     let base = crate::distribution::base_proof_without_distribution_tail(proof);
@@ -179,7 +204,7 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
             }
         };
 
-    let config = devnet_circle_config();
+    let config = circle_config_for_security_level(verify_ctx.security_level, 1);
     let air = QuantumExecutionAir;
     if let Err(e) = verify(&config, &air, &p3_proof, &[]) {
         eprintln!("[STARK Core] Failed: Plonky3 verify error: {e:?}");
@@ -312,6 +337,7 @@ mod tests {
             output_hash: "out-hash",
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         }
     }
 
@@ -321,6 +347,34 @@ mod tests {
         let trace = crate::trace_spec::idle_qubit0_trace();
         let proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
         assert!(verify_plonky3_proof(&ctx, &proof));
+    }
+
+    #[test]
+    fn security_level_low_selects_fewer_fri_queries() {
+        let ctx = StarkContext {
+            security_level: "low",
+            ..context()
+        };
+        assert_eq!(fri_num_queries_for_security_level(ctx.security_level), 8);
+        let trace = crate::trace_spec::idle_qubit0_trace();
+        let proof = generate_plonky3_proof(&ctx, &trace).expect("prove");
+        assert!(verify_plonky3_proof(&ctx, &proof));
+        // Orch-style verify with matching level from SubTask.
+        assert!(verify_plonky3_proof(
+            &StarkContext {
+                security_level: "low",
+                ..context()
+            },
+            &proof
+        ));
+        // Wrong ladder must fail.
+        assert!(!verify_plonky3_proof(
+            &StarkContext {
+                security_level: "ultra",
+                ..context()
+            },
+            &proof
+        ));
     }
 
     #[test]

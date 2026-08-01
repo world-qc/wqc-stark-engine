@@ -18,6 +18,10 @@ pub const LEGACY_MARKER: &[u8] = b"_M31_QUANTUM_AIR_STARK_";
 /// Distinguishes the field from `terminal_statevector_digest` (raw 64-hex cstr).
 pub const MEASUREMENT_SPEC_HASH_PI_PREFIX: &str = "MSH1";
 
+/// Prefix for optional orchestrator `security_level` in the public-input binding.
+/// Used so prove/verify (and compose leaf parse) share the same FRI query ladder.
+pub const SECURITY_LEVEL_PI_PREFIX: &str = "SEC1";
+
 pub struct StarkContext<'a> {
     pub circuit_id: &'a str,
     pub sub_task_id: &'a str,
@@ -28,6 +32,8 @@ pub struct StarkContext<'a> {
     pub terminal_statevector_digest: &'a str,
     /// SHA3-256 hex of canonical measurement spec JSON (C2c STARK PI); empty when unbound.
     pub measurement_spec_hash: &'a str,
+    /// Orchestrator security tier (`low|normal|high|ultra`); empty → FRI default (40).
+    pub security_level: &'a str,
 }
 
 fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) {
@@ -47,6 +53,11 @@ fn append_public_input_binding(proof: &mut Vec<u8>, context: &StarkContext<'_>) 
     if !context.measurement_spec_hash.is_empty() {
         proof.extend_from_slice(MEASUREMENT_SPEC_HASH_PI_PREFIX.as_bytes());
         proof.extend_from_slice(context.measurement_spec_hash.as_bytes());
+        proof.push(0);
+    }
+    if !context.security_level.is_empty() {
+        proof.extend_from_slice(SECURITY_LEVEL_PI_PREFIX.as_bytes());
+        proof.extend_from_slice(context.security_level.as_bytes());
         proof.push(0);
     }
 }
@@ -101,6 +112,18 @@ pub(crate) fn verify_public_input_binding(
         if parsed != expected {
             eprintln!(
                 "[STARK Core] Failed: measurement_spec_hash mismatch (expected '{}', got '{}')",
+                expected, parsed
+            );
+            return None;
+        }
+        cursor = next;
+    }
+    if !context.security_level.is_empty() {
+        let (parsed, next) = read_cstr_field(proof, cursor)?;
+        let expected = format!("{}{}", SECURITY_LEVEL_PI_PREFIX, context.security_level);
+        if parsed != expected {
+            eprintln!(
+                "[STARK Core] Failed: security_level mismatch (expected '{}', got '{}')",
                 expected, parsed
             );
             return None;
@@ -231,6 +254,7 @@ mod tests {
             output_hash: "hash-abc",
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         }
     }
 
@@ -266,6 +290,7 @@ mod tests {
             output_hash: context.output_hash,
             terminal_statevector_digest: "",
             measurement_spec_hash: "",
+            security_level: "",
         };
 
         let decoded = decode_proof_v1_owned(&proof, &bad_context);
@@ -300,6 +325,7 @@ mod tests {
             output_hash: "hash-abc",
             terminal_statevector_digest: "",
             measurement_spec_hash: &msh,
+            security_level: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let (air_sum, boundary) = air_digest_from_trace(&trace).expect("digest");
@@ -308,6 +334,7 @@ mod tests {
         let wrong = "c".repeat(64);
         let bad_context = StarkContext {
             measurement_spec_hash: &wrong,
+            security_level: "",
             ..context
         };
         assert!(decode_proof_v1_owned(&proof, &bad_context).is_none());
