@@ -48,6 +48,24 @@ wqc-stark-engine/
 
 All transcript details (field layout, verification steps, binding rules) are defined in the [STARK proof specification](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md).
 
+## FRI queries and SecurityLevel
+
+Orchestrator `security_level` maps to FRI `num_queries` (operational ladder, **not** calibrated soundness bits):
+
+| `security_level` | `num_queries` |
+|------------------|---------------|
+| `low` | 8 |
+| `normal` | 16 |
+| `high` | 32 |
+| `ultra` | 40 (current default / [`DEVNET_FRI_NUM_QUERIES`]) |
+
+API (opt-in; existing prove/verify still use `devnet_circle_config()` → 40):
+
+- `fri_num_queries_for_security_level(level)`
+- `devnet_circle_config_with_queries(n)` / `circle_config_for_security_level(level, log_blowup)`
+
+Prove and verify must use the **same** query count. Wiring `security_level` through orch → node → prove/verify, and variable-length PCS/RecAgg certs, are follow-on work.
+
 ## Build
 
 ```bash

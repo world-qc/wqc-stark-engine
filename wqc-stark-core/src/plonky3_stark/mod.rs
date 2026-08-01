@@ -31,6 +31,12 @@ mod transcript_v4;
 #[cfg(feature = "plonky3-stark")]
 pub use aggregation::{generate_aggregation_proof, verify_aggregation_proof, AggregationContext};
 pub use config::devnet_circle_config;
+pub use config::{
+    circle_config_for_security_level, devnet_circle_config_with_queries,
+    fri_num_queries_for_security_level, keccak_circle_config, keccak_circle_config_with_queries,
+    DEVNET_FRI_NUM_QUERIES, FRI_NUM_QUERIES_HIGH, FRI_NUM_QUERIES_LOW, FRI_NUM_QUERIES_NORMAL,
+    FRI_NUM_QUERIES_ULTRA,
+};
 #[cfg(feature = "plonky3-stark")]
 pub use distribution_stark::{
     generate_born_stark_proof, segment_supports_born_recursion_zk, segment_supports_born_zk,
