@@ -68,7 +68,9 @@ Leaf unitary, Born, trajectory, AggregationAir, RecAgg, and leaf/agg PCS certifi
 select outer FRI query count from the same task-level `security_level` (PCS `n` comes from
 `proof.query_proofs.len()`, cross-checked with the level when present). Nested FriFold /
 DeepRo / Mmcs **internal** uni-STARKs keep the fixed 40-query Circle/Keccak configs; only
-the number of outer FRI query slots in the cert varies with `n ∈ {8,16,32,40}`.
+the number of outer FRI query slots in the cert varies with `n ∈ {8,16,32,40}`. See
+[zk-STARK.md §5.1](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md#51-securitylevel--fri-query-ladder)
+for why nested configs stay fixed and for the soundness risk of fewer outer queries.
 
 ## Build
 
