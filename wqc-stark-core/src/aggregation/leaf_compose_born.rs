@@ -203,10 +203,7 @@ pub fn compose_unitary_born_leaf(
             "measurement_spec_hash mismatch between unitary child and StarkContext".to_string(),
         );
     }
-    if !parsed.measurement_spec_hash.is_empty()
-        && !segment.measurement_spec_hash.is_empty()
-        && parsed.measurement_spec_hash != segment.measurement_spec_hash
-    {
+    if parsed.measurement_spec_hash != segment.measurement_spec_hash {
         return Err(
             "measurement_spec_hash mismatch between unitary child and distribution segment"
                 .to_string(),
@@ -330,10 +327,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
         eprintln!("[LeafCompose] Failed: unitary↔Born link digest mismatch");
         return false;
     }
-    if !parsed.measurement_spec_hash.is_empty()
-        && !segment.measurement_spec_hash.is_empty()
-        && parsed.measurement_spec_hash != segment.measurement_spec_hash
-    {
+    if parsed.measurement_spec_hash != segment.measurement_spec_hash {
         eprintln!("[LeafCompose] Failed: measurement_spec_hash mismatch vs distribution segment");
         return false;
     }
@@ -436,7 +430,7 @@ mod tests {
             slice_id: "0",
             output_hash: "counts-hash",
             terminal_statevector_digest: link,
-            measurement_spec_hash: "",
+            measurement_spec_hash: "spec",
             security_level: "",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();

@@ -200,25 +200,33 @@ pub fn compose_stark_proofs_with_pcs(
         log_child_pcs_sizes("left", &left_pcs);
         log_child_pcs_sizes("right", &right_pcs);
 
-        let rec_ctx = RecursiveAggregationContext {
-            parent_task_id: context.parent_task_id,
-            compose_label: context.compose_label,
-            manifest_root_hash: context.manifest_root_hash,
-            left_child_hash: left_hash,
-            right_child_hash: right_hash,
-            left_stark_digest: left_bind.stark_digest,
-            right_stark_digest: right_bind.stark_digest,
-            left_kind: left_pcs.kind,
-            right_kind: right_pcs.kind,
-            left_agg_cert: left_pcs.agg_cert,
-            right_agg_cert: right_pcs.agg_cert,
-            left_leaf_bundle: left_pcs.leaf_bundle,
-            right_leaf_bundle: right_pcs.leaf_bundle,
-            security_level: context.security_level,
-        };
-        let rec_proof = generate_recursive_aggregation_proof(&rec_ctx)
-            .map_err(|e| format!("R3-M2 recursive aggregation STARK prove failed: {e}"))?;
-        out = append_rec_tail(out, &rec_proof);
+        // RecAgg AIR asserts pcs_ok=1; only attach V6 when both sides carry verified PCS.
+        // Otherwise keep R2 AggregationAir and rely on the audit walk for child validity.
+        if pcs_side_complete(&left_pcs) && pcs_side_complete(&right_pcs) {
+            let rec_ctx = RecursiveAggregationContext {
+                parent_task_id: context.parent_task_id,
+                compose_label: context.compose_label,
+                manifest_root_hash: context.manifest_root_hash,
+                left_child_hash: left_hash,
+                right_child_hash: right_hash,
+                left_stark_digest: left_bind.stark_digest,
+                right_stark_digest: right_bind.stark_digest,
+                left_kind: left_pcs.kind,
+                right_kind: right_pcs.kind,
+                left_agg_cert: left_pcs.agg_cert,
+                right_agg_cert: right_pcs.agg_cert,
+                left_leaf_bundle: left_pcs.leaf_bundle,
+                right_leaf_bundle: right_pcs.leaf_bundle,
+                security_level: context.security_level,
+            };
+            let rec_proof = generate_recursive_aggregation_proof(&rec_ctx)
+                .map_err(|e| format!("R3-M2 recursive aggregation STARK prove failed: {e}"))?;
+            out = append_rec_tail(out, &rec_proof);
+        } else {
+            eprintln!(
+                "[Aggregation] skipping RecAgg V6: leaf/agg PCS incomplete on one or both children"
+            );
+        }
     }
 
     Ok(out)
@@ -249,8 +257,32 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
     } else if pcs.agg_cert.is_some() {
         eprintln!("[M4c size] compose {side} agg PCS present (nested)");
     } else {
-        eprintln!("[M4c size] compose {side} PCS absent (deferred)");
+        eprintln!("[M4c size] compose {side} PCS absent (RecAgg skipped)");
     }
+}
+
+#[cfg(feature = "plonky3-stark")]
+fn pcs_side_complete(pcs: &ChildPcs) -> bool {
+    match pcs.kind {
+        k if k == REC_KIND_AGG => pcs.agg_cert.is_some(),
+        k if k == REC_KIND_LEAF => pcs.leaf_bundle.is_some(),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "plonky3-stark")]
+fn rec_context_pcs_complete(ctx: &RecursiveAggregationContext<'_>) -> bool {
+    let left_ok = if ctx.left_kind == REC_KIND_AGG {
+        ctx.left_agg_cert.is_some()
+    } else {
+        ctx.left_leaf_bundle.is_some()
+    };
+    let right_ok = if ctx.right_kind == REC_KIND_AGG {
+        ctx.right_agg_cert.is_some()
+    } else {
+        ctx.right_leaf_bundle.is_some()
+    };
+    left_ok && right_ok
 }
 
 #[cfg(feature = "plonky3-stark")]
@@ -287,30 +319,22 @@ fn pcs_for_child(
     }
 
     if child_supports_leaf_pcs(child) {
-        match build_leaf_pcs_bundle_from_child(child) {
-            Ok(bundle) => match verify_leaf_pcs_bundle(child, &bundle) {
-                Ok(()) => {
-                    eprintln!(
-                        "[Aggregation] built leaf PCS bundle fallback (certs={})",
-                        bundle.certs.len()
-                    );
-                    return Ok(ChildPcs {
-                        kind: REC_KIND_LEAF,
-                        agg_cert: None,
-                        leaf_bundle: Some(bundle),
-                    });
-                }
-                Err(e) => {
-                    // Legacy compose without bundle when cert verify fails (e.g. DistributionAir FRI).
-                    eprintln!("[Aggregation] leaf PCS bundle deferred (verify): {e}");
-                }
-            },
-            Err(e) => {
-                eprintln!("[Aggregation] leaf PCS bundle deferred (build): {e}");
-            }
-        }
+        let bundle = build_leaf_pcs_bundle_from_child(child)
+            .map_err(|e| format!("leaf PCS bundle build failed: {e}"))?;
+        verify_leaf_pcs_bundle(child, &bundle)
+            .map_err(|e| format!("leaf PCS bundle verify failed: {e}"))?;
+        eprintln!(
+            "[Aggregation] built leaf PCS bundle fallback (certs={})",
+            bundle.certs.len()
+        );
+        return Ok(ChildPcs {
+            kind: REC_KIND_LEAF,
+            agg_cert: None,
+            leaf_bundle: Some(bundle),
+        });
     }
 
+    // Leaf types without a PCS builder (e.g. legacy v1 AIR) — RecAgg must not claim pcs_ok.
     Ok(ChildPcs {
         kind: REC_KIND_LEAF,
         agg_cert: None,
@@ -329,7 +353,9 @@ fn child_supports_leaf_pcs(child: &[u8]) -> bool {
     let base = crate::trajectory::base_proof_without_aux_tails(
         crate::distribution::base_proof_without_distribution_tail(child),
     );
-    parse_leaf_binding(base).is_some()
+    // Only Plonky3 v2 unitary leaves can build leaf PCS; v1 AIR has no Circle PCS payload.
+    base.windows(crate::V2_MARKER.len())
+        .any(|w| w == crate::V2_MARKER)
 }
 
 #[cfg(feature = "plonky3-stark")]
@@ -660,8 +686,10 @@ fn pcs_from_embedded_or_build(
 
 /// Verifies a task root proof tree.
 ///
-/// With `plonky3-stark`, tries the R3-M1 recursive aggregation STARK fast path first,
-/// then the legacy R2 aggregation STARK, then falls back to the v3 audit walk.
+/// With `plonky3-stark`, tries the R3 recursive aggregation STARK fast path first
+/// when both child PCS payloads are present and verified, then falls through to the
+/// v3 audit walk (which always re-checks embedded children). R2 AggregationAir alone
+/// never short-circuits past the audit walk.
 pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool {
     if context.parent_task_id.is_empty() {
         eprintln!("[Aggregation] Failed: parent_task_id is empty");
@@ -693,16 +721,21 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                         context.security_level,
                     ) {
                         Ok(rec_ctx) => {
-                            if verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
+                            if !rec_context_pcs_complete(&rec_ctx) {
+                                eprintln!(
+                                    "[Aggregation] Root R3 PCS incomplete; falling back to audit walk"
+                                );
+                            } else if verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
                                 eprintln!(
                                     "[Aggregation] Root proof verified (R3-M2 fast path) for task {}",
                                     context.parent_task_id
                                 );
                                 return true;
+                            } else {
+                                eprintln!(
+                                    "[Aggregation] Root R3-M2 STARK failed; falling back to audit walk"
+                                );
                             }
-                            eprintln!(
-                                "[Aggregation] Root R3-M2 STARK failed; falling back to audit walk"
-                            );
                         }
                         Err(e) => {
                             eprintln!("[Aggregation] Root R3-M2 context rebuild failed: {e}");
@@ -712,7 +745,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
             }
         }
 
-        // Legacy R2 fast path.
+        // Legacy R2 AggregationAir: digest attestation only — never skip the child audit walk.
         if let Some((v3_part, agg_bytes)) = split_agg_tail(proof) {
             if let Some((header, _, _)) = decode_compose_v3(v3_part) {
                 if header.compose_label == "root" {
@@ -722,7 +755,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                         manifest_root_hash: context.manifest_root_hash,
                         left_child_hash: header.left_child_hash,
                         right_child_hash: header.right_child_hash,
-                        security_level: "",
+                        security_level: context.security_level,
                     };
                     if !context.manifest_root_hash.is_empty()
                         && header.manifest_root_hash != context.manifest_root_hash
@@ -730,16 +763,15 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                         eprintln!("[Aggregation] Failed: manifest_root_hash mismatch");
                         return false;
                     }
-                    if verify_aggregation_proof(&agg_ctx, agg_bytes) {
+                    if !verify_aggregation_proof(&agg_ctx, agg_bytes) {
                         eprintln!(
-                            "[Aggregation] Root proof verified (R2 fast path) for task {}",
-                            context.parent_task_id
+                            "[Aggregation] Root aggregation STARK failed; continuing to audit walk"
                         );
-                        return true;
+                    } else {
+                        eprintln!(
+                            "[Aggregation] Root R2 AggregationAir ok; continuing to audit walk for child proofs"
+                        );
                     }
-                    eprintln!(
-                        "[Aggregation] Root aggregation STARK failed; falling back to audit walk"
-                    );
                 }
             }
         }
