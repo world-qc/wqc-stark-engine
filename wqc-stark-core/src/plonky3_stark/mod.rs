@@ -141,17 +141,28 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
     // are not forced to expect a measurement_spec_hash that only exists on the segment.
     let base_for_parse = crate::distribution::base_proof_without_distribution_tail(proof);
     let parsed_binding = crate::aggregation::parse_leaf_binding(base_for_parse);
-    let expected_msh = parsed_binding
+    let parsed_msh = parsed_binding
         .as_ref()
-        .map(|p| p.measurement_spec_hash.clone())
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if context.measurement_spec_hash.is_empty() {
-                None
-            } else {
-                Some(context.measurement_spec_hash.to_string())
-            }
-        });
+        .map(|p| p.measurement_spec_hash.as_str())
+        .unwrap_or("");
+    if !context.measurement_spec_hash.is_empty()
+        && !parsed_msh.is_empty()
+        && context.measurement_spec_hash != parsed_msh
+    {
+        eprintln!(
+            "[STARK Core] Failed: measurement_spec_hash mismatch (context '{}', proof '{}')",
+            context.measurement_spec_hash, parsed_msh
+        );
+        return false;
+    }
+    // Prefer orchestrator expectation when provided; otherwise restore from PI binding.
+    let expected_msh = if !context.measurement_spec_hash.is_empty() {
+        Some(context.measurement_spec_hash.to_string())
+    } else if !parsed_msh.is_empty() {
+        Some(parsed_msh.to_string())
+    } else {
+        None
+    };
     let parsed_sec = parsed_binding
         .as_ref()
         .map(|p| p.security_level.as_str())

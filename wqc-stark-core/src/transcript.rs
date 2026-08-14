@@ -22,6 +22,50 @@ pub const MEASUREMENT_SPEC_HASH_PI_PREFIX: &str = "MSH1";
 /// Used so prove/verify (and compose leaf parse) share the same FRI query ladder.
 pub const SECURITY_LEVEL_PI_PREFIX: &str = "SEC1";
 
+/// Binding check for distribution / trajectory tails.
+///
+/// - Both empty: allowed (legacy V1 segments without MSH, and no orch expectation).
+/// - Segment binds MSH but caller omitted expectation: reject.
+/// - Expectation empty string: reject.
+/// - Otherwise require exact equality.
+pub(crate) fn measurement_spec_binding_ok(
+    expected: Option<&str>,
+    segment_hash: &str,
+    label: &str,
+) -> bool {
+    match expected {
+        None if segment_hash.is_empty() => true,
+        None => {
+            eprintln!(
+                "[STARK Core] Failed: {label} segment binds measurement_spec_hash but expectation was omitted"
+            );
+            false
+        }
+        Some("") => {
+            eprintln!("[STARK Core] Failed: expected measurement_spec_hash is empty");
+            false
+        }
+        Some(h) if h != segment_hash => {
+            eprintln!("[STARK Core] Failed: {label} measurement_spec_hash mismatch");
+            false
+        }
+        Some(_) => true,
+    }
+}
+
+/// Require two MSH strings to match (including both empty).
+pub(crate) fn require_equal_measurement_spec(
+    left: &str,
+    right: &str,
+    detail: &str,
+) -> Result<(), String> {
+    if left == right {
+        Ok(())
+    } else {
+        Err(format!("measurement_spec_hash mismatch {detail}"))
+    }
+}
+
 pub struct StarkContext<'a> {
     pub circuit_id: &'a str,
     pub sub_task_id: &'a str,

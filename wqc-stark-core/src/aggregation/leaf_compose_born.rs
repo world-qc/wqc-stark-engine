@@ -203,12 +203,11 @@ pub fn compose_unitary_born_leaf(
             "measurement_spec_hash mismatch between unitary child and StarkContext".to_string(),
         );
     }
-    if parsed.measurement_spec_hash != segment.measurement_spec_hash {
-        return Err(
-            "measurement_spec_hash mismatch between unitary child and distribution segment"
-                .to_string(),
-        );
-    }
+    crate::transcript::require_equal_measurement_spec(
+        &parsed.measurement_spec_hash,
+        &segment.measurement_spec_hash,
+        "between unitary child and distribution segment",
+    )?;
 
     let born_child = encode_born_leaf(context.sub_task_id, segment, Some(born_inner));
     verify_born_leaf(context.sub_task_id, &born_child, context.security_level)?;
@@ -327,7 +326,13 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
         eprintln!("[LeafCompose] Failed: unitary↔Born link digest mismatch");
         return false;
     }
-    if parsed.measurement_spec_hash != segment.measurement_spec_hash {
+    if crate::transcript::require_equal_measurement_spec(
+        &parsed.measurement_spec_hash,
+        &segment.measurement_spec_hash,
+        "vs distribution segment",
+    )
+    .is_err()
+    {
         eprintln!("[LeafCompose] Failed: measurement_spec_hash mismatch vs distribution segment");
         return false;
     }

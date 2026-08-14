@@ -4,10 +4,9 @@
 //!
 //! - **Leaf proofs** (v1/v2) are verified at node ingest before rewards.
 //! - **Compose** pairs two already-valid child proofs into a v3 container.
-//! - **R2**: optional legacy `AggregationAir` STARK tail (digest + OK flags).
-//! - **R3-M1–M3e**: `RecursiveAggregationAir` STARK tail binding child digests **and**
-//!   SHA3 digests of verified child Plonky3 payloads (+ V6 PCS certs; see zk-STARK.md §8).
-//! - **Root verify (fast path)**: single rec-agg (or legacy agg) STARK at the root.
+//! - **R2**: `AggregationAir` STARK tail (digest + OK flags); never short-circuits root verify.
+//! - **R3**: `RecursiveAggregationAir` V6 tail when both child PCS payloads are present.
+//! - **Root verify (R3 fast path)**: RecAgg only when both sides carry verified PCS.
 //! - **Root verify (audit)**: walks the v3 tree and re-checks every leaf STARK.
 
 mod leaf;

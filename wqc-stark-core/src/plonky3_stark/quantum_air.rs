@@ -1,4 +1,6 @@
 //! Plonky3 `Air` implementation for the quantum execution matrix.
+//!
+//! Symbolic twin of the host numeric AIR in [`crate::air`]. Keep gate constraints aligned.
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};

@@ -3,6 +3,8 @@
 //! Appended after optional distribution / Born tails:
 //! `_M31_TRAJ_V1_` or `_M31_TRAJ_V2_` + segment payload (+ optional `_M31_TRAJ_STARK_V1_` zk bundle)
 
+use crate::transcript::measurement_spec_binding_ok;
+
 pub const TRAJ_V1_MARKER: &[u8] = b"_M31_TRAJ_V1_";
 pub const TRAJ_V2_MARKER: &[u8] = b"_M31_TRAJ_V2_";
 
@@ -597,15 +599,12 @@ pub fn verify_trajectory_binding(
         eprintln!("[STARK Core] Failed: trajectory shots mismatch");
         return false;
     }
-    if let Some(expected_hash) = expected_measurement_spec_hash {
-        if expected_hash.is_empty() {
-            eprintln!("[STARK Core] Failed: expected measurement_spec_hash is empty");
-            return false;
-        }
-        if segment.measurement_spec_hash != expected_hash {
-            eprintln!("[STARK Core] Failed: trajectory measurement_spec_hash mismatch");
-            return false;
-        }
+    if !measurement_spec_binding_ok(
+        expected_measurement_spec_hash,
+        &segment.measurement_spec_hash,
+        "trajectory",
+    ) {
+        return false;
     }
     let recomputed = counts_from_trajectory_segment(&segment);
     if &recomputed != reported_counts {

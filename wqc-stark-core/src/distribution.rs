@@ -4,6 +4,8 @@
 //! `_M31_DIST_V2_` + sample_seed + shots + measurement_spec_hash + probability_digest + probs
 //! (`_M31_DIST_V1_` tails without `measurement_spec_hash` remain decodable for devnet replay).
 
+use crate::transcript::measurement_spec_binding_ok;
+
 pub const DIST_V1_MARKER: &[u8] = b"_M31_DIST_V1_";
 pub const DIST_V2_MARKER: &[u8] = b"_M31_DIST_V2_";
 
@@ -480,15 +482,12 @@ pub fn verify_distribution_binding(
         eprintln!("[STARK Core] Failed: distribution shots mismatch");
         return false;
     }
-    if let Some(expected_hash) = expected_measurement_spec_hash {
-        if expected_hash.is_empty() {
-            eprintln!("[STARK Core] Failed: expected measurement_spec_hash is empty");
-            return false;
-        }
-        if segment.measurement_spec_hash != expected_hash {
-            eprintln!("[STARK Core] Failed: distribution measurement_spec_hash mismatch");
-            return false;
-        }
+    if !measurement_spec_binding_ok(
+        expected_measurement_spec_hash,
+        &segment.measurement_spec_hash,
+        "distribution",
+    ) {
+        return false;
     }
     let recomputed = sample_counts_from_probabilities(
         &segment.probabilities,
@@ -558,6 +557,25 @@ mod tests {
         let counts = sample_counts_from_probabilities(&probs, 256, 99);
         assert_eq!(counts.get("0").copied(), Some(118));
         assert_eq!(counts.get("1").copied(), Some(138));
+    }
+
+    #[test]
+    fn verify_distribution_binding_rejects_omitted_expectation_when_segment_binds_msh() {
+        let segment = bell_segment();
+        let counts = sample_counts_from_probabilities(
+            &segment.probabilities,
+            segment.shots,
+            segment.sample_seed,
+        );
+        let proof = append_distribution_tail(b"stark".to_vec(), &segment);
+        assert!(!verify_distribution_binding(
+            &proof,
+            segment.sample_seed,
+            segment.shots,
+            None,
+            &counts,
+            segment.shots,
+        ));
     }
 
     #[test]

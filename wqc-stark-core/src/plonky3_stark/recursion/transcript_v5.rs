@@ -42,30 +42,6 @@ fn locate_inner_marker(proof: &[u8]) -> Option<usize> {
     Some(pos)
 }
 
-#[allow(dead_code)] // retained for legacy V5 transcript builders / tests
-pub fn encode_rec_agg_proof(
-    context: &RecursiveAggregationContext<'_>,
-    plonky3_bytes: &[u8],
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(context.parent_task_id.as_bytes());
-    out.push(0);
-    out.extend_from_slice(V5_REC_AGG_INNER_MARKER);
-    out.extend_from_slice(context.compose_label.as_bytes());
-    out.push(0);
-    out.extend_from_slice(context.manifest_root_hash.as_bytes());
-    out.push(0);
-    out.extend_from_slice(&context.left_child_hash);
-    out.extend_from_slice(&context.right_child_hash);
-    out.extend_from_slice(&context.left_stark_digest);
-    out.extend_from_slice(&context.right_stark_digest);
-    out.push(context.left_kind);
-    out.push(context.right_kind);
-    out.extend_from_slice(&(plonky3_bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(plonky3_bytes);
-    out
-}
-
 pub fn decode_rec_agg_proof_owned(
     proof: &[u8],
     expected: &RecursiveAggregationContext<'_>,

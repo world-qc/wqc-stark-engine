@@ -28,6 +28,7 @@ fn optional_leaf_context<'a>(
     node_id: *const c_char,
     slice_id: *const c_char,
     output_hash: *const c_char,
+    security_level: &'a str,
 ) -> Option<StarkContext<'a>> {
     if circuit_id.is_null() || sub_task_id.is_null() {
         return None;
@@ -45,7 +46,7 @@ fn optional_leaf_context<'a>(
         output_hash: cstr_or_empty(output_hash),
         terminal_statevector_digest: "",
         measurement_spec_hash: "",
-        security_level: "",
+        security_level,
     })
 }
 
@@ -65,6 +66,7 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
     slice_id: *const c_char,
     output_hash: *const c_char,
     security_level: *const c_char,
+    measurement_spec_hash: *const c_char,
     proof_bytes: *const u8,
     proof_len: u32,
 ) -> i32 {
@@ -92,7 +94,7 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
             slice_id: cstr_or_empty(slice_id),
             output_hash: cstr_or_empty(output_hash),
             terminal_statevector_digest: "",
-            measurement_spec_hash: "",
+            measurement_spec_hash: cstr_or_empty(measurement_spec_hash),
             security_level: cstr_or_empty(security_level),
         };
 
@@ -164,12 +166,14 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
         let left_pcs_slice = optional_bytes(left_pcs, left_pcs_len);
         let right_pcs_slice = optional_bytes(right_pcs, right_pcs_len);
 
+        let compose_security = cstr_or_empty(security_level);
         let left_ctx = optional_leaf_context(
             left_circuit_id,
             left_sub_task_id,
             left_node_id,
             left_slice_id,
             left_output_hash,
+            compose_security,
         );
         let right_ctx = optional_leaf_context(
             right_circuit_id,
@@ -177,6 +181,7 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
             right_node_id,
             right_slice_id,
             right_output_hash,
+            compose_security,
         );
 
         let composed = match compose_stark_proofs_with_pcs(
@@ -184,7 +189,7 @@ pub unsafe extern "C" fn wqc_compose_stark_proofs(
                 parent_task_id: cstr_or_empty(parent_task_id),
                 compose_label: cstr_or_empty(compose_label),
                 manifest_root_hash: cstr_or_empty(manifest_root_hash),
-                security_level: cstr_or_empty(security_level),
+                security_level: compose_security,
             },
             left_slice,
             right_slice,
@@ -560,10 +565,12 @@ pub unsafe extern "C" fn wqc_is_unitary_born_compose(
 
 /// Verifies trajectory tail binding: shot outcomes + seed → reported counts.
 ///
+/// `measurement_spec_hash` is required (non-null, non-empty).
+///
 /// # Safety
 ///
-/// `proof_bytes` must reference at least `proof_len` bytes. `counts_json` must be
-/// null-terminated UTF-8. `measurement_spec_hash` may be null.
+/// `proof_bytes` must reference at least `proof_len` bytes. `counts_json` and
+/// `measurement_spec_hash` must be null-terminated UTF-8.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_verify_trajectory_binding(
     proof_bytes: *const u8,
@@ -574,8 +581,13 @@ pub unsafe extern "C" fn wqc_verify_trajectory_binding(
     counts_json: *const c_char,
 ) -> i32 {
     let result = catch_unwind(|| {
-        if proof_bytes.is_null() || counts_json.is_null() {
+        if proof_bytes.is_null() || counts_json.is_null() || measurement_spec_hash.is_null() {
             eprintln!("[Rust FFI] trajectory binding: null pointer");
+            return 0;
+        }
+        let expected_spec = cstr_or_empty(measurement_spec_hash);
+        if expected_spec.is_empty() {
+            eprintln!("[Rust FFI] trajectory binding: measurement_spec_hash required");
             return 0;
         }
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
@@ -587,19 +599,11 @@ pub unsafe extern "C" fn wqc_verify_trajectory_binding(
                 return 0;
             }
         };
-        let expected_spec = {
-            let s = cstr_or_empty(measurement_spec_hash);
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        };
         if verify_trajectory_binding(
             proof_slice,
             sample_seed,
             shots,
-            expected_spec,
+            Some(expected_spec),
             &reported_counts,
             reported_shots,
         ) {
@@ -615,12 +619,12 @@ pub unsafe extern "C" fn wqc_verify_trajectory_binding(
 /// Verifies distribution tail binding: Born probabilities + seed → reported counts.
 ///
 /// `counts_json` must be canonical `{"counts":{...},"shots":N}` (orchestrator format).
-/// `measurement_spec_hash` may be null/empty to skip spec binding (legacy V1 tails).
+/// `measurement_spec_hash` is required (non-null, non-empty) — matches orch fail-closed policy.
 ///
 /// # Safety
 ///
-/// `proof_bytes` must reference at least `proof_len` bytes. `counts_json` must be
-/// null-terminated UTF-8. `measurement_spec_hash` may be null.
+/// `proof_bytes` must reference at least `proof_len` bytes. `counts_json` and
+/// `measurement_spec_hash` must be null-terminated UTF-8.
 #[no_mangle]
 pub unsafe extern "C" fn wqc_verify_distribution_binding(
     proof_bytes: *const u8,
@@ -631,8 +635,13 @@ pub unsafe extern "C" fn wqc_verify_distribution_binding(
     counts_json: *const c_char,
 ) -> i32 {
     let result = catch_unwind(|| {
-        if proof_bytes.is_null() || counts_json.is_null() {
+        if proof_bytes.is_null() || counts_json.is_null() || measurement_spec_hash.is_null() {
             eprintln!("[Rust FFI] distribution binding: null pointer");
+            return 0;
+        }
+        let expected_spec = cstr_or_empty(measurement_spec_hash);
+        if expected_spec.is_empty() {
+            eprintln!("[Rust FFI] distribution binding: measurement_spec_hash required");
             return 0;
         }
         let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
@@ -644,19 +653,11 @@ pub unsafe extern "C" fn wqc_verify_distribution_binding(
                 return 0;
             }
         };
-        let expected_spec = {
-            let s = cstr_or_empty(measurement_spec_hash);
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        };
         if verify_distribution_binding(
             proof_slice,
             sample_seed,
             shots,
-            expected_spec,
+            Some(expected_spec),
             &reported_counts,
             reported_shots,
         ) {

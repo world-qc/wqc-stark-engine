@@ -1,4 +1,7 @@
 //! Mersenne31 quantum execution AIR: trace ingestion and constraint accumulation.
+//!
+//! Host-side numeric twin of [`crate::plonky3_stark::quantum_air::QuantumExecutionAir`].
+//! Keep gate transition math aligned when changing either side (drift risk).
 
 mod constraints;
 pub mod distribution;
