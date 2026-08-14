@@ -35,8 +35,8 @@ wqc-stark-engine/
 
 | Version | Marker | Role |
 |---------|--------|------|
-| v1 | `_M31_QUANTUM_AIR_V1_` | Legacy embedded-trace AIR (unitary only); **rejected** by current verifiers |
-| v2 | `_M31_PLONKY3_STARK_V2_` | Plonky3 Circle PCS uni-STARK (unitary); still the primary leaf proof |
+| v1 | `_M31_QUANTUM_AIR_V1_` | Legacy embedded-trace AIR (unitary only); still accepted by verifiers per [zk-STARK.md](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md), but production leaves use **v2** |
+| v2 | `_M31_PLONKY3_STARK_V2_` | Plonky3 Circle PCS uni-STARK (unitary); primary leaf proof |
 | v3 | `_WQC_COMPOSE_V3_` | Proof-tree compose — binds two child proofs by SHA3-256 hash (leaf or agg pairs) |
 | v4 | `_WQC_AGG_STARK_V4_` / `_WQC_AGG_TAIL_V4_` | AggregationAir digest attestation |
 | v5 | `_WQC_REC_AGG_V5_` / `_WQC_REC_TAIL_V5_` | Recursive aggregation (legacy); wraps AggregationAir + child metadata |

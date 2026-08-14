@@ -41,8 +41,8 @@ pub use trajectory::{
     TrajectorySegment, TrajectoryShotTrace, TRAJ_V1_MARKER, TRAJ_V2_MARKER,
 };
 pub use transcript::{
-    air_digest_from_trace, decode_proof_v1_owned, encode_proof_v1, find_marker, StarkContext,
-    LEGACY_MARKER, MEASUREMENT_SPEC_HASH_PI_PREFIX, SECURITY_LEVEL_PI_PREFIX, V1_MARKER, V2_MARKER,
+    air_digest_from_trace, encode_proof_v1, find_marker, StarkContext, LEGACY_MARKER,
+    MEASUREMENT_SPEC_HASH_PI_PREFIX, SECURITY_LEVEL_PI_PREFIX, V1_MARKER, V2_MARKER,
 };
 
 use transcript::verify_public_input_binding;
@@ -223,28 +223,8 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
             eprintln!("[STARK Core] Failed: invalid trajectory tail");
             return false;
         }
-        eprintln!(
-            "[STARK Core] Verification success (v1 AIR, trace_len={}, auxiliary tails)",
-            trace.len()
-        );
-        return true;
     }
 
-    if crate::distribution::split_distribution_tail(proof)
-        .and_then(|(_, tail)| tail)
-        .is_some()
-    {
-        eprintln!(
-            "[STARK Core] Verification success (v1 AIR, trace_len={}, distribution tail)",
-            trace.len()
-        );
-        return true;
-    }
-
-    eprintln!(
-        "[STARK Core] Verification success (v1 AIR, trace_len={})",
-        trace.len()
-    );
     true
 }
 

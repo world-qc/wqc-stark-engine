@@ -104,25 +104,6 @@ pub fn pad_air_matrix_for_uni_stark(
     RowMajorMatrix::new(values, width)
 }
 
-/// Pads an AIR matrix height to the next power of two (Plonky3 uni-STARK requirement).
-pub fn pad_air_matrix_to_power_of_two(
-    matrix: RowMajorMatrix<Mersenne31>,
-) -> RowMajorMatrix<Mersenne31> {
-    let height = matrix.height();
-    let target = height.next_power_of_two();
-    if target == height {
-        return matrix;
-    }
-
-    let width = matrix.width;
-    let mut values = matrix.values;
-    let last_row: Vec<Mersenne31> = values[(height - 1) * width..height * width].to_vec();
-    for _ in height..target {
-        values.extend_from_slice(&last_row);
-    }
-    RowMajorMatrix::new(values, width)
-}
-
 /// Evaluates transition constraints across adjacent AIR rows; zero iff the trace is valid.
 pub fn evaluate_air_sum(trace_matrix: &RowMajorMatrix<Mersenne31>) -> Mersenne31 {
     let constants = AirConstants::mersenne31_defaults();

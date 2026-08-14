@@ -70,11 +70,6 @@ pub unsafe extern "C" fn wqc_verify_stark_proof(
     proof_bytes: *const u8,
     proof_len: u32,
 ) -> i32 {
-    eprintln!(
-        "[Rust FFI] verify: circuit={:?}, sub_task={:?}, slice={:?}, security={:?}, proof_len={}",
-        circuit_id, sub_task_id, slice_id, security_level, proof_len
-    );
-
     let result = catch_unwind(|| {
         if circuit_id.is_null()
             || sub_task_id.is_null()
