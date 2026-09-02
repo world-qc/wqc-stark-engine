@@ -1,6 +1,7 @@
 pub mod aggregation;
 pub mod air;
 pub mod distribution;
+pub mod shrink;
 pub mod trace_spec;
 pub mod trajectory;
 pub mod transcript;

@@ -1,0 +1,50 @@
+# E5b shrink — full idle two-leaf RecAgg + PCS benchmark (slow).
+#
+# Trigger manually or on a weekly schedule. Not run on every PR.
+
+name: E5b shrink benchmark
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 0"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  shrink-full-compose:
+    name: Idle two-leaf RecAgg regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Full compose under regression ceiling
+        run: |
+          cargo test -p wqc-stark-core --features plonky3-stark --release --locked --verbose \
+            idle_two_leaf_rec_agg_compose_under_regression_ceiling -- --ignored --exact --nocapture
+
+      - name: Refresh baseline JSON (artifact only)
+        run: |
+          cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --release -- \
+            --write-baseline --write-fixture
+
+      - name: Upload shrink artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: e5b-shrink-baseline
+          path: |
+            fixtures/e5b/baseline.json
+            fixtures/e5b/idle_two_leaf_root.bin
+          if-no-files-found: warn

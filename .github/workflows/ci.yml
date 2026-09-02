@@ -41,3 +41,7 @@ jobs:
       # and must be run locally — they are multi-hour on GHA and blow minute quotas.
       - name: cargo test (release, skip ignored)
         run: cargo test --release --locked --verbose
+
+      # E5b-1a: plonky3-stark + shrink fast bounds (R2 size, baseline JSON).
+      - name: cargo test (plonky3-stark, release, skip ignored)
+        run: cargo test -p wqc-stark-core --features plonky3-stark --release --locked --verbose

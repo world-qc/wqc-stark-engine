@@ -94,6 +94,10 @@ cargo test -p wqc-stark-core --features plonky3-stark --release -- --ignored --t
 
 # Single test (faster feedback; e.g. 2-leaf compose size ~85 min)
 cargo test -p wqc-stark-core --features plonky3-stark --release unitary_trajectory_compose_roundtrip -- --ignored --nocapture
+
+# E5b shrink: full idle two-leaf RecAgg regression (see CONTRIBUTING.md)
+cargo test -p wqc-stark-core --features plonky3-stark --release \
+  idle_two_leaf_rec_agg_compose_under_regression_ceiling -- --ignored --exact --nocapture
 ```
 
 **Leaf PCS memory:** `build_leaf_pcs_certificate` / aggregation PCS use FriFold group proofs,

@@ -85,6 +85,28 @@ cargo test -p wqc-stark-core --features plonky3-stark
 cargo build --release -p wqc-stark-ffi
 ```
 
+### E5b shrink regression (root size)
+
+E5b **Shrink** tracks idle two-leaf root proof size toward the 500 KB pre-wrap gate (`wqc-contracts` `on-chain_settlement_scope.md` §7). Fast PR checks:
+
+```bash
+cargo test -p wqc-stark-core --features plonky3-stark --release \
+  shrink_gate_constants_match_scope baseline_json_matches_constants r2_idle_two_leaf_root_under_max
+```
+
+Full RecAgg + PCS compose (~hours) — local or scheduled workflow `.github/workflows/e5b-shrink-benchmark.yml`:
+
+```bash
+cargo test -p wqc-stark-core --features plonky3-stark --release \
+  idle_two_leaf_rec_agg_compose_under_regression_ceiling -- --ignored --exact
+
+# Or refresh fixtures/e5b/baseline.json + idle_two_leaf_root.bin:
+cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --release -- \
+  --write-baseline --write-fixture
+```
+
+Baseline JSON lives at `fixtures/e5b/baseline.json`; the golden `idle_two_leaf_root.bin` is gitignored until generated locally.
+
 ## Pull Request Guidelines
 
 A good pull request:
