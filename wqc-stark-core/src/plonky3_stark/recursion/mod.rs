@@ -33,6 +33,7 @@ mod keccak_f_native;
 mod keccak_merkle_air;
 mod leaf_pcs_cert;
 mod merkle_keccak;
+mod merkle_poseidon2;
 mod ood_air;
 mod ood_bind;
 mod ood_fold;
@@ -42,6 +43,8 @@ mod opening_cert;
 mod pcs_geom;
 mod pcs_memory;
 mod poseidon2_spike;
+mod poseidon2_perm_air;
+mod poseidon2_group_m4b;
 mod prove;
 mod prove_workspace;
 mod transcript_v5;
@@ -133,6 +136,9 @@ pub use leaf_pcs_cert::{
 pub use merkle_keccak::{
     compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
 };
+pub use merkle_poseidon2::{
+    compress_digests_poseidon, hash_val_leaf_poseidon, merkle_root_from_path_poseidon,
+};
 pub use ood_air::{
     generate_ood_proof, verify_ood_proof, OodAirKind, OodCheckAir, OodStepProof,
     OOD_MAX_TRACE_WIDTH,
@@ -154,6 +160,14 @@ pub use pcs_geom::{
     validate_born_recursion_outcomes, validate_born_recursion_width, LeafKind, PcsGeom,
     BORN_RECURSION_MAX_OUTCOMES, BORN_RECURSION_MAX_TRACE_WIDTH, LEAF_DEEP_RO_MAX_WIDTH,
     SHOT_TRACE_WIDTH, TRAJ_MARGINAL_TRACE_WIDTH, UNITARY_TRACE_WIDTH,
+};
+pub use poseidon2_perm_air::{
+    generate_poseidon2_perm_proof, verify_poseidon2_perm_proof, Poseidon2PermAir,
+    POSEIDON2_PERM_ROWS, POSEIDON2_PERM_WIDTH,
+};
+pub use poseidon2_group_m4b::{
+    generate_poseidon_group_fold_proof, verify_poseidon_group_fold_proof, PoseidonGroupFoldProof,
+    PoseidonMmcsGroupPathAir,
 };
 pub use pcs_memory::{
     budget_bytes_from_env, estimate_pcs_peak_bytes, plan_pcs_memory, PcsMemoryPlan,

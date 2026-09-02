@@ -23,14 +23,19 @@ pub const POSEIDON2_WIDTH: usize = 16;
 /// Estimated Keccak-f round columns in the in-circuit sponge AIR (see `keccak_f_air`).
 pub const KECCAK_AIR_COLS_PER_ROUND: usize = super::keccak256_air::SPONGE_WIDTH;
 
-/// Poseidon2 width-16 M31: 4 external + 22 internal + 4 external rounds (default RC tables).
-pub const POSEIDON2_ROUNDS_WIDTH16: usize = 30;
+/// Poseidon2 width-16 M31: 1 mds + 4 external + 14 internal + 4 external round steps.
+pub const POSEIDON2_ROUNDS_WIDTH16: usize = 23;
 
 /// Native 32-byte digest via Poseidon2 sponge (spike — not consensus wire format).
 pub fn poseidon2_compress32(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     let perm = default_mersenne31_poseidon2_16();
     let mut state = [Mersenne31::ZERO; POSEIDON2_WIDTH];
-    for (i, chunk) in left.chunks(4).chain(right.chunks(4)).enumerate().take(8) {
+    for (i, chunk) in left[..16]
+        .chunks(4)
+        .chain(right[..16].chunks(4))
+        .enumerate()
+        .take(8)
+    {
         let mut b = [0u8; 4];
         b.copy_from_slice(chunk);
         state[i] = Mersenne31::new(u32::from_le_bytes(b));
