@@ -22,8 +22,8 @@ pub use idle_compose::{
 /// Mainnet shrink gate from `on-chain_settlement_scope.md` §7.1 (500 KB pre-wrap).
 pub const SHRINK_GATE_BYTES: u64 = 500 * 1024;
 
-/// Documented idle two-leaf baseline ≈ 16 MiB (`wqc-stark-engine` README).
-pub const IDLE_TWO_LEAF_DOCUMENTED_BASELINE_BYTES: u64 = 16 * 1024 * 1024;
+/// Measured idle two-leaf baseline (`fixtures/e5b/baseline.json`, `wqc-stark-engine` README).
+pub const IDLE_TWO_LEAF_DOCUMENTED_BASELINE_BYTES: u64 = 10_742_800;
 
 /// Regression ceiling until shrink gate is met (12.5% headroom over documented baseline).
 pub const IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES: u64 = 18 * 1024 * 1024;
@@ -41,7 +41,7 @@ mod tests {
     #[test]
     fn shrink_gate_constants_match_scope() {
         assert_eq!(SHRINK_GATE_BYTES, 500 * 1024);
-        assert_eq!(IDLE_TWO_LEAF_DOCUMENTED_BASELINE_BYTES, 16 * 1024 * 1024);
+        assert_eq!(IDLE_TWO_LEAF_DOCUMENTED_BASELINE_BYTES, 10_742_800);
         assert_eq!(IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES, 18 * 1024 * 1024);
     }
 
