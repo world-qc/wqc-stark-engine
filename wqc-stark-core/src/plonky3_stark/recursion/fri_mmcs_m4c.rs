@@ -17,7 +17,14 @@ use super::fri_mmcs_bind::{
 };
 use super::fri_mmcs_group_m4b::{
     generate_keccak_group_fold_proof, m4b_group_chunk, verify_keccak_group_fold_proof,
-    KeccakGroupFoldProof, MmcsPathStatement,
+    MmcsPathStatement,
+};
+use super::mmcs_group_fold::{
+    mmcs_group_hash_kind, poseidon_group_width_supported, poseidon_spike_statements,
+    MmcsGroupFoldProof, MmcsGroupHashKind,
+};
+use super::poseidon2_group_m4b::{
+    generate_poseidon_group_fold_proof, verify_poseidon_group_fold_proof,
 };
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::fri_ro::{decode_input_proof, reconstruct_query_ro};
@@ -33,21 +40,28 @@ pub const LEAF_MMCS_FOLD_V: u8 = 3;
 const EF_DIM: usize = 3;
 const CHAL_LEAF_WIDTH: usize = 6;
 
+/// v4: per-group `hash_tag` byte (Keccak / Poseidon) before each group body.
+pub const LEAF_MMCS_FOLD_V4: u8 = 4;
+
+/// Collected Mmcs path statements per category (pre-chunk), for benchmarks / replay.
+#[derive(Debug, Clone, Default)]
+pub struct LeafMmcsGroupStatements {
+    pub val_trace: Vec<MmcsPathStatement>,
+    pub val_quot: Option<Vec<MmcsPathStatement>>,
+    pub val_quot_batch: Option<Vec<MmcsPathStatement>>,
+    pub chal_first_layer: Option<Vec<MmcsPathStatement>>,
+    pub chal_commit: Vec<(usize, Vec<MmcsPathStatement>)>,
+}
+
 /// Group folds attached to a leaf PCS certificate (M4c / batch fold).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LeafMmcsFoldGroups {
-    /// Chunked group STARKs per category (v3). Empty = category not folded;
-    /// multiple entries = paths split into `WQC_PCS_MMCS_GROUP_CHUNK`-sized chunks
-    /// proven sequentially. Chunk boundaries are recovered from each group's
-    /// `path_count` on verify (env-independent).
-    pub val_trace: Vec<KeccakGroupFoldProof>,
-    pub val_quot: Vec<KeccakGroupFoldProof>,
-    /// Equal-height multi-chunk Val quot Merkle (concat leaf → M4b).
-    pub val_quot_batch: Vec<KeccakGroupFoldProof>,
-    /// Single-matrix Chal first_layer (idle unitary) → M4b.
-    pub chal_first_layer: Vec<KeccakGroupFoldProof>,
-    /// Commit-phase groups; ordered by ascending depth, then chunk within depth.
-    pub chal_commit: Vec<KeccakGroupFoldProof>,
+    /// Chunked group STARKs per category (v3/v4). Empty = category not folded.
+    pub val_trace: Vec<MmcsGroupFoldProof>,
+    pub val_quot: Vec<MmcsGroupFoldProof>,
+    pub val_quot_batch: Vec<MmcsGroupFoldProof>,
+    pub chal_first_layer: Vec<MmcsGroupFoldProof>,
+    pub chal_commit: Vec<MmcsGroupFoldProof>,
 }
 
 fn log2_strict(n: usize) -> Result<usize, String> {
@@ -343,21 +357,200 @@ fn group_eligible(stmts: &[MmcsPathStatement]) -> bool {
         .all(|s| s.row.len() == width && s.siblings.len() == depth)
 }
 
-/// Fold eligible paths into one group STARK per `WQC_PCS_MMCS_GROUP_CHUNK`-sized chunk.
-/// Chunks are proven **sequentially**; each `generate_*` encodes then drops its
-/// structured uni-STARK so peak RAM tracks one chunk workspace (C10′).
-fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<KeccakGroupFoldProof>, String> {
+/// Fold eligible paths into one group STARK per chunk (hash from [`mmcs_group_hash_kind`]).
+fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldProof>, String> {
     if !group_eligible(stmts) {
+        return Ok(Vec::new());
+    }
+    let chunk = m4b_group_chunk();
+    let kind = mmcs_group_hash_kind();
+    let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
+    for c in stmts.chunks(chunk) {
+        let g = match kind {
+            MmcsGroupHashKind::Keccak => {
+                MmcsGroupFoldProof::Keccak(generate_keccak_group_fold_proof(c)?)
+            }
+            MmcsGroupHashKind::Poseidon => {
+                if !c.iter().all(|s| poseidon_group_width_supported(s.row.len())) {
+                    return Err(format!(
+                        "poseidon-mmcs: leaf_width > {} in chunk (prototype limit)",
+                        super::poseidon2_spike::POSEIDON2_WIDTH
+                    ));
+                }
+                let spike = poseidon_spike_statements(c)?;
+                MmcsGroupFoldProof::Poseidon(generate_poseidon_group_fold_proof(&spike)?)
+            }
+        };
+        groups.push(g);
+    }
+    groups.shrink_to_fit();
+    Ok(groups)
+}
+
+/// Collect homogeneous Mmcs path statements (no prove) for size benchmarks.
+pub fn collect_leaf_mmcs_group_statements(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+    bundle: &AggFriMmcsBundle,
+) -> Result<LeafMmcsGroupStatements, String> {
+    let mut out = LeafMmcsGroupStatements {
+        val_trace: collect_val_trace_stmts(proof, trace_width, &bundle.val)?,
+        val_quot: collect_val_quot_stmts(proof, trace_width, &bundle.val)?,
+        val_quot_batch: None,
+        chal_first_layer: collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)?,
+        chal_commit: collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?,
+    };
+    if out.val_quot.is_none() {
+        out.val_quot_batch =
+            collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)?.filter(|s| !s.is_empty());
+    }
+    Ok(out)
+}
+
+fn sum_keccak_group_bytes(groups: &[MmcsGroupFoldProof]) -> u64 {
+    groups
+        .iter()
+        .filter_map(|g| g.keccak())
+        .map(|g| g.group_stark.len() as u64)
+        .sum()
+}
+
+fn try_poseidon_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldProof>, String> {
+    if !group_eligible(stmts) || !stmts.iter().all(|s| poseidon_group_width_supported(s.row.len())) {
         return Ok(Vec::new());
     }
     let chunk = m4b_group_chunk();
     let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
     for c in stmts.chunks(chunk) {
-        let g = generate_keccak_group_fold_proof(c)?;
-        groups.push(g);
+        let spike = poseidon_spike_statements(c)?;
+        groups.push(MmcsGroupFoldProof::Poseidon(
+            generate_poseidon_group_fold_proof(&spike)?,
+        ));
     }
     groups.shrink_to_fit();
     Ok(groups)
+}
+
+fn sum_group_fold_bytes(groups: &[MmcsGroupFoldProof]) -> u64 {
+    groups.iter().map(|g| g.group_stark_len() as u64).sum()
+}
+
+/// Per-category Mmcs group byte breakdown (Keccak measured + Poseidon spike re-prove).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct PoseidonMmcsBenchmarkReport {
+    pub keccak_total: u64,
+    pub poseidon_measured: u64,
+    pub poseidon_extrapolated: u64,
+    pub poseidon_total_estimate: u64,
+    pub keccak_groups: u32,
+    pub poseidon_groups_measured: u32,
+    pub poseidon_groups_skipped_wide: u32,
+}
+
+fn benchmark_category(
+    stmts: &[MmcsPathStatement],
+    keccak_groups: &[MmcsGroupFoldProof],
+    ratio_num: u64,
+    ratio_den: u64,
+    report: &mut PoseidonMmcsBenchmarkReport,
+) -> Result<(), String> {
+    report.keccak_total += sum_keccak_group_bytes(keccak_groups);
+    report.keccak_groups += keccak_groups.len() as u32;
+
+    if stmts.is_empty() {
+        return Ok(());
+    }
+    if stmts.iter().all(|s| poseidon_group_width_supported(s.row.len())) {
+        let p_groups = try_poseidon_group_chunked(stmts)?;
+        let bytes = sum_group_fold_bytes(&p_groups);
+        report.poseidon_measured += bytes;
+        report.poseidon_groups_measured += p_groups.len() as u32;
+    } else {
+        report.poseidon_groups_skipped_wide += keccak_groups.len() as u32;
+        for g in keccak_groups {
+            let k = g.group_stark_len() as u64;
+            report.poseidon_extrapolated += k.saturating_mul(ratio_num) / ratio_den.max(1);
+        }
+    }
+    Ok(())
+}
+
+/// Re-prove collected statements with Poseidon2 groups; extrapolate wide widths via W=3 ratio.
+pub fn benchmark_poseidon_mmcs_groups(
+    stmts: &LeafMmcsGroupStatements,
+    keccak: &LeafMmcsFoldGroups,
+) -> Result<PoseidonMmcsBenchmarkReport, String> {
+    let ratio = poseidon_keccak_group_size_ratio_w3()?;
+    let mut report = PoseidonMmcsBenchmarkReport::default();
+
+    benchmark_category(&stmts.val_trace, &keccak.val_trace, ratio.0, ratio.1, &mut report)?;
+    if let Some(q) = &stmts.val_quot {
+        benchmark_category(q, &keccak.val_quot, ratio.0, ratio.1, &mut report)?;
+    }
+    if let Some(qb) = &stmts.val_quot_batch {
+        benchmark_category(qb, &keccak.val_quot_batch, ratio.0, ratio.1, &mut report)?;
+    }
+    if let Some(fl) = &stmts.chal_first_layer {
+        benchmark_category(fl, &keccak.chal_first_layer, ratio.0, ratio.1, &mut report)?;
+    }
+    let mut g_off = 0usize;
+    for (_depth, depth_stmts) in &stmts.chal_commit {
+        let mut stmt_off = 0usize;
+        while stmt_off < depth_stmts.len() && g_off < keccak.chal_commit.len() {
+            let n = keccak.chal_commit[g_off].path_count() as usize;
+            let end = (stmt_off + n).min(depth_stmts.len());
+            benchmark_category(
+                &depth_stmts[stmt_off..end],
+                std::slice::from_ref(&keccak.chal_commit[g_off]),
+                ratio.0,
+                ratio.1,
+                &mut report,
+            )?;
+            stmt_off += n;
+            g_off += 1;
+        }
+    }
+
+    report.poseidon_total_estimate = report.poseidon_measured + report.poseidon_extrapolated;
+    Ok(report)
+}
+
+/// Reference Keccak/Poseidon group STARK size ratio at W=3 depth=1 (2 paths).
+fn poseidon_keccak_group_size_ratio_w3() -> Result<(u64, u64), String> {
+    use p3_field::PrimeCharacteristicRing;
+    use p3_mersenne_31::Mersenne31;
+
+    let row = vec![
+        Mersenne31::from_u32(1),
+        Mersenne31::from_u32(2),
+        Mersenne31::from_u32(3),
+    ];
+    let sibling = [9u8; 32];
+    let stmts: Vec<_> = (0usize..2)
+        .map(|i| {
+            let leaf = hash_val_leaf(&row);
+            let root = if i.is_multiple_of(2) {
+                keccak256_compress(leaf, sibling)
+            } else {
+                keccak256_compress(sibling, leaf)
+            };
+            MmcsPathStatement {
+                row: row.clone(),
+                siblings: vec![sibling],
+                index: i,
+                root,
+            }
+        })
+        .collect();
+    let k = generate_keccak_group_fold_proof(&stmts)?;
+    let p_stmts = poseidon_spike_statements(&stmts)?;
+    let p = generate_poseidon_group_fold_proof(&p_stmts)?;
+    let kn = k.group_stark.len() as u64;
+    let pn = p.group_stark.len() as u64;
+    if kn == 0 {
+        return Err("reference keccak group size zero".into());
+    }
+    Ok((pn, kn))
 }
 
 /// Equal-height multi-matrix batch → concat leaf path statement (no injects).
@@ -619,17 +812,25 @@ pub fn bind_leaf_mmcs_with_groups(
 /// and the chunks must exactly partition `stmts` (order-preserving, env-independent).
 fn verify_group_chunks(
     stmts: &[MmcsPathStatement],
-    groups: &[KeccakGroupFoldProof],
+    groups: &[MmcsGroupFoldProof],
     label: &str,
 ) -> Result<(), String> {
     let mut off = 0usize;
     for g in groups {
-        let n = g.path_count as usize;
+        let n = g.path_count() as usize;
         let end = off
             .checked_add(n)
             .filter(|&e| e <= stmts.len())
             .ok_or_else(|| format!("{label} chunk [{off}+{n}] exceeds {} stmts", stmts.len()))?;
-        if !verify_keccak_group_fold_proof(&stmts[off..end], g) {
+        let chunk = &stmts[off..end];
+        let ok = match g {
+            MmcsGroupFoldProof::Keccak(p) => verify_keccak_group_fold_proof(chunk, p),
+            MmcsGroupFoldProof::Poseidon(p) => {
+                let spike = poseidon_spike_statements(chunk)?;
+                verify_poseidon_group_fold_proof(&spike, p)
+            }
+        };
+        if !ok {
             return Err(format!("{label} group verify failed (chunk at {off})"));
         }
         off = end;
@@ -874,20 +1075,18 @@ fn bind_chal_with_groups(
                 let g = group_iter
                     .next()
                     .ok_or_else(|| format!("missing chal commit group for depth {depth}"))?;
-                if g.depth as usize != *depth {
+                if g.depth() as usize != *depth {
                     return Err(format!(
                         "chal commit group depth {} != expected {depth}",
-                        g.depth
+                        g.depth()
                     ));
                 }
-                let n = g.path_count as usize;
+                let n = g.path_count() as usize;
                 let end = off
                     .checked_add(n)
                     .filter(|&e| e <= stmts.len())
                     .ok_or_else(|| format!("chal commit depth {depth} chunk overflow"))?;
-                if !verify_keccak_group_fold_proof(&stmts[off..end], g) {
-                    return Err(format!("chal commit group depth {depth} verify failed"));
-                }
+                verify_group_chunks(&stmts[off..end], std::slice::from_ref(g), "chal commit")?;
                 off = end;
             }
         }
@@ -981,7 +1180,7 @@ fn bind_chal_with_groups(
             let grouped = groups
                 .chal_commit
                 .iter()
-                .any(|g| g.depth as usize == path.depth as usize);
+                .any(|g| g.depth() as usize == path.depth as usize);
             if grouped {
                 if !verify_fri_mmcs_path_digests(
                     &row,

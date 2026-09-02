@@ -148,7 +148,7 @@ outcome dimension K≤21 (AIR width W≤68). Protocol details:
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** idle two-leaf RecAgg V6 root ≈ **10.2 MiB** at devnet default (40 FRI queries, `WQC_PCS_MMCS_GROUP_CHUNK=24`); recorded in `fixtures/e5b/baseline.json`. **Knob sweep** (`fixtures/e5b/sweep.json`): best so far **`low`/chunk24 ≈ 4.8 MiB** (`5_022_410` bytes, −53%); chunk40 helps at 40q (−45%) but not at 8q. E5b shrink gate: **500 KB**. **Next:** Poseidon2 Mmcs group fold AIR (`recursion/poseidon2_spike.rs`).
+- **Proof size / PCS (E5b shrink baseline):** idle two-leaf RecAgg V6 root ≈ **10.2 MiB** at devnet default (40 FRI queries, `WQC_PCS_MMCS_GROUP_CHUNK=24`); recorded in `fixtures/e5b/baseline.json`. **Knob sweep** (`fixtures/e5b/sweep.json`): best so far **`low`/chunk24 ≈ 4.8 MiB** (`5_022_410` bytes, −53%); chunk40 helps at 40q (−45%) but not at 8q. E5b shrink gate: **500 KB**. **Poseidon2 Mmcs groups (PoC):** idle leaf PCS at `low`/chunk24 — Keccak Mmcs group STARKs **≈2.40 MiB/side**; Poseidon2 estimate **≈544 KiB** (2 groups measured at W≤16, wide groups extrapolated); projected leaf PCS **≈643 KiB** vs **≈2.50 MiB** Keccak (`fixtures/e5b/poseidon-benchmark.json`). Enable spike prove path: `cargo … --features plonky3-stark,poseidon-mmcs` + `WQC_PCS_MMCS_HASH=poseidon` (wire `LEAF_MMCS_FOLD_V4` hash tags; FRI Merkle still Keccak until migration).
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.
 - Prove-time witness oracles in-circuit

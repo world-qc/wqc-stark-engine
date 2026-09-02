@@ -11,6 +11,9 @@ mod sweep;
 #[cfg(feature = "plonky3-stark")]
 mod idle_compose;
 
+#[cfg(feature = "plonky3-stark")]
+mod poseidon_benchmark;
+
 pub mod baseline;
 
 pub use profile::{query_count_shrink_factor, ShrinkComposeProfile};
@@ -21,6 +24,12 @@ pub use r2_compose::compose_idle_two_leaf_root_r2_only;
 pub use idle_compose::{
     compose_idle_two_leaf_root_with_pcs, compose_idle_two_leaf_root_with_pcs_and_bytes,
     rec_agg_tail_bytes, IdleTwoLeafComposeReport,
+};
+
+#[cfg(feature = "plonky3-stark")]
+pub use poseidon_benchmark::{
+    benchmark_idle_leaf_poseidon_mmcs, IdleLeafPoseidonMmcsReport, SWEEP_REF_LABEL,
+    SWEEP_REF_LEFT_PCS_BYTES, SWEEP_REF_MMCS_GROUPS_PER_SIDE, SWEEP_REF_ROOT_BYTES,
 };
 
 /// Mainnet shrink gate from `on-chain_settlement_scope.md` §7.1 (500 KB pre-wrap).
@@ -147,6 +156,26 @@ mod tests {
         assert!(
             report.root_bytes < IDLE_TWO_LEAF_DOCUMENTED_BASELINE_BYTES as usize,
             "low-security root should be smaller than ultra/default baseline"
+        );
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    #[ignore = "slow; local only — idle leaf PCS prove + Poseidon group re-prove"]
+    fn idle_leaf_poseidon_mmcs_benchmark_smoke() {
+        use crate::shrink::benchmark_idle_leaf_poseidon_mmcs;
+
+        let report = benchmark_idle_leaf_poseidon_mmcs("low").expect("benchmark");
+        assert!(report.leaf_pcs_bytes > 0);
+        assert!(report.mmcs_groups_stark_bytes_keccak > 0);
+        assert!(report.mmcs_groups_stark_bytes_poseidon_estimate > 0);
+        assert!(
+            report.mmcs_groups_stark_saved_bytes > 0,
+            "Poseidon groups should be smaller than Keccak"
+        );
+        assert!(
+            report.leaf_pcs_poseidon_estimate_bytes < report.leaf_pcs_bytes as i64,
+            "estimated Poseidon PCS should shrink vs Keccak"
         );
     }
 

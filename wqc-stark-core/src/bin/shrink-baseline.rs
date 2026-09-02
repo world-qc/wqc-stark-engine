@@ -10,7 +10,8 @@ use wqc_stark_core::shrink::baseline::{
 };
 use wqc_stark_core::shrink::compose_idle_two_leaf_root_with_pcs_and_bytes;
 use wqc_stark_core::shrink::{
-    ShrinkComposeProfile, IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES, SHRINK_GATE_BYTES,
+    benchmark_idle_leaf_poseidon_mmcs, ShrinkComposeProfile, IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES,
+    SHRINK_GATE_BYTES, SWEEP_REF_LABEL,
 };
 
 fn main() {
@@ -23,7 +24,12 @@ fn main() {
 fn run() -> Result<(), String> {
     let write_fixture = env::args().any(|a| a == "--write-fixture");
     let write_baseline = env::args().any(|a| a == "--write-baseline") || write_fixture;
+    let poseidon_benchmark = env::args().any(|a| a == "--poseidon-benchmark");
     let profile = parse_profile()?;
+
+    if poseidon_benchmark {
+        return run_poseidon_benchmark(&profile.security_level);
+    }
 
     eprintln!(
         "E5b shrink: proving idle two-leaf root (profile={}, {} FRI queries)…",
@@ -122,4 +128,42 @@ fn unix_timestamp() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("unix:{secs}")
+}
+
+fn run_poseidon_benchmark(security_level: &str) -> Result<(), String> {
+    eprintln!(
+        "E5b Poseidon Mmcs benchmark: idle leaf PCS (security_level={security_level})…"
+    );
+    let report = benchmark_idle_leaf_poseidon_mmcs(security_level)?;
+    let out = serde_json::json!({
+        "benchmark": "idle_leaf_pcs_poseidon_mmcs_groups",
+        "security_level": report.security_level,
+        "leaf_pcs_bytes_keccak": report.leaf_pcs_bytes,
+        "mmcs_groups_stark_bytes_keccak": report.mmcs_groups_stark_bytes_keccak,
+        "mmcs_groups_stark_bytes_poseidon_estimate": report.mmcs_groups_stark_bytes_poseidon_estimate,
+        "mmcs_groups_stark_saved_bytes": report.mmcs_groups_stark_saved_bytes,
+        "leaf_pcs_poseidon_estimate_bytes": report.leaf_pcs_poseidon_estimate_bytes,
+        "poseidon_groups_measured": report.poseidon.poseidon_groups_measured,
+        "poseidon_groups_skipped_wide": report.poseidon.poseidon_groups_skipped_wide,
+        "reference_sweep": report.reference_sweep_label,
+        "reference_keccak_root_bytes": report.reference_keccak_root_bytes,
+        "reference_mmcs_groups_per_side": report.reference_mmcs_groups_per_side,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
+    );
+
+    let repo = stark_engine_repo_root();
+    let path = repo.join("fixtures/e5b/poseidon-benchmark.json");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write {}: {e}", path.display()))?;
+    eprintln!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
+    Ok(())
 }

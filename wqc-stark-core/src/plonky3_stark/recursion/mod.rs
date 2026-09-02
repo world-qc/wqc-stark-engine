@@ -33,6 +33,7 @@ mod keccak_f_native;
 mod keccak_merkle_air;
 mod leaf_pcs_cert;
 mod merkle_keccak;
+mod mmcs_group_fold;
 mod merkle_poseidon2;
 mod ood_air;
 mod ood_bind;
@@ -107,7 +108,11 @@ pub use fri_mmcs_group_m4b::{
     generate_keccak_group_fold_proof, verify_keccak_group_fold_proof, KeccakGroupFoldProof,
     MmcsGroupPathAir, MmcsPathStatement,
 };
-pub use fri_mmcs_m4c::{LeafMmcsFoldGroups, LEAF_MMCS_FOLD_V};
+pub use fri_mmcs_m4c::{
+    apply_leaf_mmcs_m4c_folds, benchmark_poseidon_mmcs_groups, collect_leaf_mmcs_group_statements,
+    bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups, LeafMmcsGroupStatements,
+    PoseidonMmcsBenchmarkReport, LEAF_MMCS_FOLD_V, LEAF_MMCS_FOLD_V4,
+};
 pub use fri_mmcs_path::{
     generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
     verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
@@ -128,13 +133,18 @@ pub use keccak_merkle_air::{
     MerkleFoldAir, MERKLE_FOLD_DEPTH,
 };
 pub use leaf_pcs_cert::{
-    build_encoded_leaf_pcs_bundle_from_child, build_leaf_pcs_bundle_from_child,
-    build_leaf_pcs_certificate, leaf_bundle_stark_sizes, leaf_bundle_stmt_digest,
-    leaf_pcs_stark_sizes, leaf_stmt_digest, verify_leaf_pcs_bundle, verify_leaf_pcs_certificate,
-    LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
+    benchmark_poseidon_mmcs_from_child, build_encoded_leaf_pcs_bundle_from_child,
+    build_leaf_pcs_bundle_from_child, build_leaf_pcs_certificate, leaf_bundle_stark_sizes,
+    leaf_bundle_stmt_digest, leaf_pcs_stark_sizes, leaf_stmt_digest, verify_leaf_pcs_bundle,
+    verify_leaf_pcs_certificate, LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
+};
+pub use mmcs_group_fold::{
+    mmcs_group_hash_kind, mmcs_path_stmt_poseidon_spike, poseidon_group_width_supported,
+    poseidon_spike_statements, MmcsGroupFoldProof, MmcsGroupHashKind, MMCS_GROUP_HASH_KECCAK,
+    MMCS_GROUP_HASH_POSEIDON, PCS_MMCS_HASH_ENV,
 };
 pub use merkle_keccak::{
-    compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
+    compress_digests, hash_lde_leaf, hash_val_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
 };
 pub use merkle_poseidon2::{
     compress_digests_poseidon, hash_val_leaf_poseidon, merkle_root_from_path_poseidon,

@@ -39,10 +39,10 @@ use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
     FriValMmcsQueryProof,
 };
-use super::fri_mmcs_group_m4b::KeccakGroupFoldProof;
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
 };
+use super::mmcs_group_fold::MmcsGroupFoldProof;
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_leaf_ood_step;
@@ -98,8 +98,9 @@ pub struct LeafPcsStarkSizes {
 
 /// Sums `group_stark` / `fold_stark` / `deep_stark` / `ood_stark` lengths (excludes meta / digests).
 pub fn leaf_pcs_stark_sizes(cert: &LeafPcsCertificate) -> LeafPcsStarkSizes {
-    let group_bytes =
-        |gs: &[KeccakGroupFoldProof]| -> usize { gs.iter().map(|g| g.group_stark.len()).sum() };
+    let group_bytes = |gs: &[MmcsGroupFoldProof]| -> usize {
+        gs.iter().map(|g| g.group_stark_len()).sum()
+    };
     let mmcs_groups = group_bytes(&cert.mmcs_groups.val_trace)
         + group_bytes(&cert.mmcs_groups.val_quot)
         + group_bytes(&cert.mmcs_groups.val_quot_batch)
@@ -732,6 +733,35 @@ pub fn build_leaf_pcs_bundle_from_child(child_bytes: &[u8]) -> Result<LeafPcsBun
 pub fn build_encoded_leaf_pcs_bundle_from_child(child_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let bundle = build_leaf_pcs_bundle_from_child(child_bytes)?;
     Ok(crate::plonky3_stark::recursion::encode_leaf_pcs_bundle_bytes(&bundle))
+}
+
+/// Re-prove collected Mmcs path statements with Poseidon2 groups (size benchmark helper).
+pub fn benchmark_poseidon_mmcs_from_child(
+    child_bytes: &[u8],
+    ctx: &crate::transcript::StarkContext<'_>,
+) -> Result<(usize, super::fri_mmcs_m4c::PoseidonMmcsBenchmarkReport), String> {
+    let plonky3 = decode_proof_v2_plonky3_bytes(child_bytes, ctx)
+        .ok_or_else(|| "decode plonky3 proof from child".to_string())?;
+    let proof = proof_from_plonky3(&plonky3)?;
+    let pcs_len = build_encoded_leaf_pcs_bundle_from_child(child_bytes)?.len();
+    let bundle = build_leaf_pcs_bundle_from_child(child_bytes)?;
+    let cert = bundle
+        .certs
+        .first()
+        .ok_or("expected one leaf PCS cert")?;
+    let mmcs_bundle = AggFriMmcsBundle {
+        val: cert.fri_val_mmcs.clone(),
+        chal: cert.fri_chal_mmcs.clone(),
+    };
+    let trace_width = cert.trace_width as usize;
+    let stmts = super::fri_mmcs_m4c::collect_leaf_mmcs_group_statements(
+        &proof,
+        trace_width,
+        &mmcs_bundle,
+    )?;
+    let report =
+        super::fri_mmcs_m4c::benchmark_poseidon_mmcs_groups(&stmts, &cert.mmcs_groups)?;
+    Ok((pcs_len, report))
 }
 
 #[cfg(test)]

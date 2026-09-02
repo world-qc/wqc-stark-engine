@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 plonky3-stark = ["p3-uni-stark", "p3-air", "p3-circle", "p3-commit", "p3-challenger", "p3-fri", "p3-keccak", "p3-merkle-tree", "p3-symmetric", "p3-util", "postcard"]
+poseidon-mmcs = ["plonky3-stark"]
 
 [dependencies]
 p3-field = "0.6.1"
