@@ -291,47 +291,25 @@ pub fn verify_keccak_merkle_path_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregation::CHILD_HASH_LEN;
-    use crate::air::pad_air_matrix_for_uni_stark;
-    use crate::plonky3_stark::aggregation::build_agg_matrix;
-    use crate::plonky3_stark::config::devnet_circle_config;
-    use p3_commit::{Mmcs, Pcs};
-    use p3_matrix::Matrix;
-    use p3_uni_stark::StarkGenericConfig;
+    use crate::plonky3_stark::recursion::merkle_keccak::{
+        hash_lde_leaf, merkle_root_from_path_keccak,
+    };
+    use p3_field::PrimeCharacteristicRing;
 
     #[test]
-    fn merkle_fold_stark_against_pcs_opening() {
-        let matrix = pad_air_matrix_for_uni_stark(build_agg_matrix(
-            [3u8; CHILD_HASH_LEN],
-            [4u8; CHILD_HASH_LEN],
-        ));
-        let config = devnet_circle_config();
-        let pcs = config.pcs();
-        let domain = <crate::plonky3_stark::config::Pcs as Pcs<
-            crate::plonky3_stark::config::Challenge,
-            crate::plonky3_stark::config::Challenger,
-        >>::natural_domain_for_degree(pcs, matrix.height());
-        let (comm, prover_data) = <crate::plonky3_stark::config::Pcs as Pcs<
-            crate::plonky3_stark::config::Challenge,
-            crate::plonky3_stark::config::Challenger,
-        >>::commit(pcs, vec![(domain, matrix)]);
-        let batch = pcs.mmcs.open_batch(0, &prover_data);
-        let root = *comm.roots().first().unwrap();
-        assert_eq!(batch.opening_proof.len(), MERKLE_FOLD_DEPTH);
+    fn merkle_fold_stark_against_synthetic_keccak_path() {
+        // Keccak fold AIR is independent of production Poseidon ValMmcs.
+        let lde_row: Vec<_> = (0..AGG_WIDTH)
+            .map(|i| Mersenne31::from_u32(i as u32 + 1))
+            .collect();
+        let leaf = hash_lde_leaf(&lde_row);
+        let siblings = [[9u8; 32]; MERKLE_FOLD_DEPTH];
+        let root = merkle_root_from_path_keccak(leaf, &siblings, 0);
 
-        let path = generate_keccak_merkle_path_proof(
-            &batch.opened_values[0],
-            &batch.opening_proof,
-            0,
-            &root,
-        )
-        .expect("prove fold");
+        let path = generate_keccak_merkle_path_proof(&lde_row, &siblings, 0, &root)
+            .expect("prove fold");
         assert!(verify_keccak_merkle_path_proof(
-            &batch.opened_values[0],
-            &batch.opening_proof,
-            0,
-            &root,
-            &path
+            &lde_row, &siblings, 0, &root, &path
         ));
     }
 }

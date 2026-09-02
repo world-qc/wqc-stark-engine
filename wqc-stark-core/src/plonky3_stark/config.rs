@@ -1,4 +1,8 @@
-//! Circle STARK configuration (Mersenne31 + Keccak MMCS).
+//! Circle STARK configuration (Mersenne31 + Poseidon2 MMCS).
+//!
+//! ValMmcs / ChallengeMmcs use packed Poseidon2 (`config_poseidon`) — digests remain
+//! `[u8; 32]` (8×M31 LE) so RecAgg wire and `SerializingChallenger32` stay compatible.
+//! The Fiat–Shamir challenger hash remains Keccak-256.
 //!
 //! # FRI queries and SecurityLevel
 //!
@@ -16,22 +20,24 @@ use core::marker::PhantomData;
 
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
-use p3_commit::ExtensionMmcs;
-use p3_field::extension::BinomialExtensionField;
 use p3_fri::FriParameters;
+use p3_field::extension::BinomialExtensionField;
 use p3_keccak::Keccak256Hash;
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_mersenne_31::Mersenne31;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+use p3_mersenne_31::{default_mersenne31_poseidon2_16, Mersenne31};
 use p3_uni_stark::StarkConfig;
+
+use super::config_poseidon::{
+    PoseidonChallengeMmcs, PoseidonPackedCompress, PoseidonPackedFieldHash, PoseidonValMmcs,
+};
 
 pub type Val = Mersenne31;
 pub type Challenge = BinomialExtensionField<Val, 3>;
+/// FS sponge hash (Keccak); independent of Poseidon ValMmcs.
 pub type ByteHash = Keccak256Hash;
-pub type FieldHash = SerializingHasher<ByteHash>;
-pub type Compress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
-pub type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, Compress, 2, 32>;
-pub type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+pub type FieldHash = PoseidonPackedFieldHash;
+pub type Compress = PoseidonPackedCompress;
+pub type ValMmcs = PoseidonValMmcs;
+pub type ChallengeMmcs = PoseidonChallengeMmcs;
 pub type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 pub type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
 pub type WqcStarkConfig = StarkConfig<Pcs, Challenge, Challenger>;
@@ -96,9 +102,9 @@ pub fn circle_config_for_security_level(level: &str, log_blowup: usize) -> WqcSt
 }
 
 fn circle_config_with_blowup(log_blowup: usize, num_queries: usize) -> WqcStarkConfig {
-    let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(byte_hash);
-    let compress = Compress::new(byte_hash);
+    let perm = default_mersenne31_poseidon2_16();
+    let field_hash = PoseidonPackedFieldHash::new(perm.clone());
+    let compress = PoseidonPackedCompress::new(perm);
     let val_mmcs = ValMmcs::new(field_hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let fri_params = FriParameters {
@@ -115,6 +121,7 @@ fn circle_config_with_blowup(log_blowup: usize, num_queries: usize) -> WqcStarkC
         fri_params,
         _phantom: PhantomData,
     };
+    let byte_hash = ByteHash {};
     let challenger = Challenger::from_hasher(vec![], byte_hash);
     WqcStarkConfig::new(pcs, challenger)
 }

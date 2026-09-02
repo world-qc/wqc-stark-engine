@@ -2192,7 +2192,7 @@ mod tests {
         use crate::plonky3_stark::recursion::fri_mmcs_group_m4b::generate_keccak_group_fold_proof;
         use crate::plonky3_stark::recursion::fri_mmcs_group_m4b::MmcsPathStatement;
         use crate::plonky3_stark::recursion::keccak_f_native::keccak256_compress;
-        use crate::plonky3_stark::recursion::merkle_keccak::hash_val_leaf;
+        use crate::plonky3_stark::recursion::merkle_keccak::hash_val_leaf_keccak;
         use crate::plonky3_stark::recursion::mmcs_group_fold::MmcsGroupFoldProof;
         use p3_field::PrimeCharacteristicRing;
 
@@ -2201,7 +2201,7 @@ mod tests {
             Mersenne31::from_u32(2),
             Mersenne31::from_u32(3),
         ];
-        let leaf = hash_val_leaf(&row);
+        let leaf = hash_val_leaf_keccak(&row);
         let sib = [9u8; 32];
         let root = keccak256_compress(leaf, sib);
         let stmts = vec![
@@ -2220,7 +2220,7 @@ mod tests {
                 siblings: vec![[3u8; 32]],
                 index: 1,
                 root: {
-                    let l = hash_val_leaf(&[
+                    let l = hash_val_leaf_keccak(&[
                         Mersenne31::from_u32(4),
                         Mersenne31::from_u32(5),
                         Mersenne31::from_u32(6),
@@ -2246,11 +2246,11 @@ mod tests {
 
     #[test]
     fn m4c_group_fold_v4_poseidon_codec_roundtrip() {
+        use crate::plonky3_stark::config_poseidon::pack_digest;
         use crate::plonky3_stark::recursion::fri_mmcs_group_m4b::MmcsPathStatement;
-        use crate::plonky3_stark::recursion::keccak_f_native::keccak256_compress;
-        use crate::plonky3_stark::recursion::merkle_keccak::hash_val_leaf;
+        use crate::plonky3_stark::recursion::merkle_keccak::{compress_digests, hash_val_leaf};
         use crate::plonky3_stark::recursion::mmcs_group_fold::{
-            poseidon_spike_statements, MmcsGroupFoldProof, MMCS_GROUP_HASH_POSEIDON,
+            MmcsGroupFoldProof, MMCS_GROUP_HASH_POSEIDON,
         };
         use crate::plonky3_stark::recursion::poseidon2_group_m4b::generate_poseidon_group_fold_proof;
         use p3_field::PrimeCharacteristicRing;
@@ -2261,16 +2261,15 @@ mod tests {
             Mersenne31::from_u32(3),
         ];
         let leaf = hash_val_leaf(&row);
-        let sib = [9u8; 32];
-        let root = keccak256_compress(leaf, sib);
+        let sib = pack_digest([Mersenne31::from_u32(9); 8]);
+        let root = compress_digests(leaf, sib);
         let stmts = vec![MmcsPathStatement {
             row,
             siblings: vec![sib],
             index: 0,
             root,
         }];
-        let spike = poseidon_spike_statements(&stmts).expect("spike");
-        let p = generate_poseidon_group_fold_proof(&spike).expect("poseidon group");
+        let p = generate_poseidon_group_fold_proof(&stmts).expect("poseidon group");
         let groups = LeafMmcsFoldGroups {
             val_trace: vec![MmcsGroupFoldProof::Poseidon(p)],
             ..Default::default()

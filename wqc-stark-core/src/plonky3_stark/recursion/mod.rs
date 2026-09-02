@@ -143,9 +143,8 @@ pub use leaf_pcs_cert::{
     verify_leaf_pcs_certificate, LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
 };
 pub use mmcs_group_fold::{
-    mmcs_group_hash_kind, mmcs_path_stmt_poseidon_spike, poseidon_group_width_supported,
-    poseidon_spike_statements, MmcsGroupFoldProof, MmcsGroupHashKind, MMCS_GROUP_HASH_KECCAK,
-    MMCS_GROUP_HASH_POSEIDON, PCS_MMCS_HASH_ENV,
+    mmcs_group_hash_kind, poseidon_group_width_supported, MmcsGroupFoldProof, MmcsGroupHashKind,
+    MMCS_GROUP_HASH_KECCAK, MMCS_GROUP_HASH_POSEIDON, PCS_MMCS_HASH_ENV,
 };
 pub use merkle_keccak::{
     compress_digests, hash_lde_leaf, hash_val_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,

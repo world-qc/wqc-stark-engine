@@ -959,7 +959,7 @@ mod tests {
         let kind = LeafKind::Unitary;
         let stmt = leaf_stmt_digest(kind, &proof).expect("stmt");
         let cert = build_leaf_pcs_certificate(&proof, kind, stmt).expect("cert");
-        assert_eq!(mmcs_merkle_mode(), MmcsMerkleMode::PoseidonGroupSpike);
+        assert_eq!(mmcs_merkle_mode(), MmcsMerkleMode::PoseidonNative);
         assert!(
             cert.mmcs_groups.val_trace.iter().any(|g| g.hash_kind() == MmcsGroupHashKind::Poseidon),
             "expected Poseidon val_trace group"

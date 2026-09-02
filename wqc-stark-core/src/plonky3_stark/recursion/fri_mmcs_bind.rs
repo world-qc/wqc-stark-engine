@@ -18,12 +18,8 @@ use super::fri_mmcs_path::{
     verify_fri_mmcs_path_proof, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
 };
 use super::fri_ro::{decode_input_proof, reconstruct_query_ro};
-use super::keccak256_air::{
-    prove_compress, prove_val_leaf, verify_compress_digest, verify_val_leaf_digest,
-    Keccak256StarkProof,
-};
-use super::keccak_f_native::keccak256_compress;
-use super::merkle_keccak::hash_val_leaf;
+use super::keccak256_air::Keccak256StarkProof;
+use super::merkle_keccak::{compress_digests, hash_val_leaf};
 
 fn log2_strict(n: usize) -> Result<usize, String> {
     if n == 0 || !n.is_power_of_two() {
@@ -105,9 +101,22 @@ pub struct AggFriMmcsBundle {
     pub chal: Vec<FriChalMmcsQueryProof>,
 }
 
-fn clear_keccak_stark(k: &mut Keccak256StarkProof) {
-    k.stark.clear();
-    k.stark.shrink_to_fit();
+fn poseidon_leaf_stub(row: &[Mersenne31]) -> Keccak256StarkProof {
+    let digest = hash_val_leaf(row);
+    Keccak256StarkProof {
+        msg_len: (row.len() * 4) as u32,
+        digest,
+        stark: Vec::new(),
+    }
+}
+
+fn poseidon_compress_stub(left: [u8; 32], right: [u8; 32]) -> Keccak256StarkProof {
+    let digest = compress_digests(left, right);
+    Keccak256StarkProof {
+        msg_len: 64,
+        digest,
+        stark: Vec::new(),
+    }
 }
 
 /// Prove binary multi-matrix Mmcs path matching Plonky3 MerkleTreeMmcs (N=2, cap=0).
@@ -155,6 +164,7 @@ fn generate_chal_batch_path_inner(
     expected_root: &[u8; 32],
     drop_nested: bool,
 ) -> Result<FriChalBatchPathProof, String> {
+    let _ = drop_nested;
     if dimensions.len() != opened_vals.len() || dimensions.is_empty() {
         return Err("batch shape mismatch".into());
     }
@@ -184,16 +194,7 @@ fn generate_chal_batch_path_inner(
         if opened_vals[i].len() != dimensions[i].width {
             return Err("opened width mismatch".into());
         }
-        let mut k = prove_val_leaf(&opened_vals[i])?;
-        if k.digest != hash_val_leaf(&opened_vals[i]) {
-            return Err("batch leaf digest mismatch".into());
-        }
-        if drop_nested {
-            if !verify_val_leaf_digest(&opened_vals[i], &k.digest, &k) {
-                return Err("batch leaf keccak self-check failed".into());
-            }
-            clear_keccak_stark(&mut k);
-        }
+        let k = poseidon_leaf_stub(&opened_vals[i]);
         leaf_rows.push(opened_vals[i].clone());
         leaf_digests.push(k.digest);
         leaf_keccs.push(k);
@@ -226,15 +227,9 @@ fn generate_chal_batch_path_inner(
     if at_leaf.len() == 1 {
         digest = leaf_digests[digest_of[at_leaf[0]]];
     } else {
-        let mut k = prove_val_leaf(&concat)?;
+        let k = poseidon_leaf_stub(&concat);
         if k.digest != digest {
             return Err("multi-leaf hash mismatch".into());
-        }
-        if drop_nested {
-            if !verify_val_leaf_digest(&concat, &k.digest, &k) {
-                return Err("multi-leaf keccak self-check failed".into());
-            }
-            clear_keccak_stark(&mut k);
         }
         // Track as extra leaf (append).
         leaf_rows.push(concat);
@@ -262,16 +257,7 @@ fn generate_chal_batch_path_inner(
         } else {
             (sib, digest)
         };
-        let mut c = prove_compress(left, right)?;
-        if c.digest != keccak256_compress(left, right) {
-            return Err("sib compress mismatch".into());
-        }
-        if drop_nested {
-            if !verify_compress_digest(left, right, &c.digest, &c) {
-                return Err("sib compress keccak self-check failed".into());
-            }
-            clear_keccak_stark(&mut c);
-        }
+        let c = poseidon_compress_stub(left, right);
         digest = c.digest;
         sib_layer_digests.push(digest);
         sib_compresses.push(c);
@@ -293,31 +279,13 @@ fn generate_chal_batch_path_inner(
             let inj_digest = if inject_idxs.len() == 1 {
                 leaf_digests[digest_of[inject_idxs[0]]]
             } else {
-                let mut k = prove_val_leaf(&inj_concat)?;
-                if k.digest != hash_val_leaf(&inj_concat) {
-                    return Err("inject leaf mismatch".into());
-                }
-                if drop_nested {
-                    if !verify_val_leaf_digest(&inj_concat, &k.digest, &k) {
-                        return Err("inject leaf keccak self-check failed".into());
-                    }
-                    clear_keccak_stark(&mut k);
-                }
+                let k = poseidon_leaf_stub(&inj_concat);
                 leaf_rows.push(inj_concat);
                 leaf_digests.push(k.digest);
                 leaf_keccs.push(k);
                 leaf_digests[leaf_digests.len() - 1]
             };
-            let mut c = prove_compress(digest, inj_digest)?;
-            if c.digest != keccak256_compress(digest, inj_digest) {
-                return Err("inject compress mismatch".into());
-            }
-            if drop_nested {
-                if !verify_compress_digest(digest, inj_digest, &c.digest, &c) {
-                    return Err("inject compress keccak self-check failed".into());
-                }
-                clear_keccak_stark(&mut c);
-            }
+            let c = poseidon_compress_stub(digest, inj_digest);
             digest = c.digest;
             inject_digests.push(digest);
             inject_compresses.push(c);
@@ -372,11 +340,8 @@ pub(crate) fn verify_chal_batch_path_replay(
     for (i, &oi) in order.iter().enumerate() {
         if i >= proof.leaf_rows.len()
             || proof.leaf_rows[i].as_slice() != opened_vals[oi].as_slice()
-            || !verify_val_leaf_digest(
-                &proof.leaf_rows[i],
-                &proof.leaf_digests[i],
-                &proof.leaf_keccs[i],
-            )
+            || hash_val_leaf(&proof.leaf_rows[i]) != proof.leaf_digests[i]
+            || proof.leaf_keccs[i].digest != proof.leaf_digests[i]
         {
             eprintln!("[FriChalBatch] leaf {i}");
             return false;
@@ -409,11 +374,8 @@ pub(crate) fn verify_chal_batch_path_replay(
         let mut found = None;
         for i in dimensions.len()..proof.leaf_rows.len() {
             if proof.leaf_digests[i] == expect
-                && verify_val_leaf_digest(
-                    &proof.leaf_rows[i],
-                    &proof.leaf_digests[i],
-                    &proof.leaf_keccs[i],
-                )
+                && hash_val_leaf(&proof.leaf_rows[i]) == expect
+                && proof.leaf_keccs[i].digest == expect
             {
                 found = Some(expect);
                 break;
@@ -447,7 +409,9 @@ pub(crate) fn verify_chal_batch_path_replay(
             (sib, digest)
         };
         let expect = proof.sib_layer_digests[sib_i];
-        if !verify_compress_digest(left, right, &expect, &proof.sib_compresses[sib_i]) {
+        if compress_digests(left, right) != expect
+            || proof.sib_compresses[sib_i].digest != expect
+        {
             eprintln!("[FriChalBatch] sib compress {sib_i}");
             return false;
         }
@@ -477,7 +441,8 @@ pub(crate) fn verify_chal_batch_path_replay(
                 return false;
             }
             let expect = proof.inject_digests[inj_i];
-            if !verify_compress_digest(digest, inj_digest, &expect, &proof.inject_compresses[inj_i])
+            if compress_digests(digest, inj_digest) != expect
+                || proof.inject_compresses[inj_i].digest != expect
             {
                 eprintln!("[FriChalBatch] inject compress {inj_i}");
                 return false;
@@ -582,7 +547,7 @@ pub(crate) fn verify_chal_batch_path_digests(
             (sib, digest)
         };
         let expect = proof.sib_layer_digests[sib_i];
-        if keccak256_compress(left, right) != expect {
+        if compress_digests(left, right) != expect {
             eprintln!("[FriChalBatchDigests] sib compress {sib_i}");
             return false;
         }
@@ -612,7 +577,7 @@ pub(crate) fn verify_chal_batch_path_digests(
                 return false;
             }
             let expect = proof.inject_digests[inj_i];
-            if keccak256_compress(digest, inj_digest) != expect {
+            if compress_digests(digest, inj_digest) != expect {
                 eprintln!("[FriChalBatchDigests] inject compress {inj_i}");
                 return false;
             }
@@ -745,7 +710,7 @@ fn fri_val_mmcs_bundle_from_proof_inner(
             let row0 = &quot_open.opened_values[0];
             let leaf = hash_val_leaf(row0);
             let sib = [0u8; 32];
-            let synth_root = keccak256_compress(leaf, sib);
+            let synth_root = compress_digests(leaf, sib);
             let path = gen_path(row0, &[sib], 0, &synth_root)
                 .map_err(|e| format!("q{q} quot stub path: {e}"))?;
             (q_idx as u32, path, Some(batch))

@@ -20,16 +20,15 @@ use super::fri_mmcs_group_m4b::{
     MmcsPathStatement,
 };
 use super::mmcs_group_fold::{
-    mmcs_group_hash_kind, poseidon_group_width_supported, poseidon_spike_statements,
-    MmcsGroupFoldProof, MmcsGroupHashKind,
+    mmcs_group_hash_kind, poseidon_group_width_supported, MmcsGroupFoldProof, MmcsGroupHashKind,
 };
 use super::poseidon2_group_m4b::{
     generate_poseidon_group_fold_proof, verify_poseidon_group_fold_proof,
 };
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::fri_ro::{decode_input_proof, reconstruct_query_ro};
-use super::keccak_f_native::{keccak256_compress, keccak256_val_leaf, KECCAK_RATE};
-use super::merkle_keccak::hash_val_leaf;
+use super::keccak_f_native::KECCAK_RATE;
+use super::merkle_keccak::{compress_digests, hash_val_leaf};
 
 /// Leaf PCS Mmcs wire version (after `kind` byte in V6 leaf cert).
 /// v2: adds `val_quot_batch` + `chal_first_layer` equal-height / single-matrix batch folds.
@@ -152,8 +151,8 @@ pub fn verify_fri_mmcs_path_digests(
     {
         return false;
     }
-    let leaf = keccak256_val_leaf(row);
-    if leaf != path.leaf_digest || leaf != hash_val_leaf(row) || leaf != path.leaf_keccak.digest {
+    let leaf = hash_val_leaf(row);
+    if leaf != path.leaf_digest || leaf != path.leaf_keccak.digest {
         return false;
     }
     let mut digest = leaf;
@@ -164,7 +163,7 @@ pub fn verify_fri_mmcs_path_digests(
         } else {
             (*sib, digest)
         };
-        let next = keccak256_compress(left, right);
+        let next = compress_digests(left, right);
         if next != path.layer_digests[i] {
             return false;
         }
@@ -377,8 +376,7 @@ fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldPro
                         c.iter().map(|s| s.row.len()).max().unwrap_or(0)
                     ));
                 }
-                let spike = poseidon_spike_statements(c)?;
-                MmcsGroupFoldProof::Poseidon(generate_poseidon_group_fold_proof(&spike)?)
+                MmcsGroupFoldProof::Poseidon(generate_poseidon_group_fold_proof(c)?)
             }
         };
         groups.push(g);
@@ -422,9 +420,8 @@ fn try_poseidon_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGro
     let chunk = m4b_group_chunk();
     let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
     for c in stmts.chunks(chunk) {
-        let spike = poseidon_spike_statements(c)?;
         groups.push(MmcsGroupFoldProof::Poseidon(
-            generate_poseidon_group_fold_proof(&spike)?,
+            generate_poseidon_group_fold_proof(c)?,
         ));
     }
     groups.shrink_to_fit();
@@ -519,20 +516,23 @@ pub fn benchmark_poseidon_mmcs_groups(
 fn poseidon_keccak_group_size_ratio_w3() -> Result<(u64, u64), String> {
     use p3_field::PrimeCharacteristicRing;
     use p3_mersenne_31::Mersenne31;
+    use super::merkle_keccak::{
+        compress_digests_keccak, hash_val_leaf_keccak,
+    };
 
     let row = vec![
         Mersenne31::from_u32(1),
         Mersenne31::from_u32(2),
         Mersenne31::from_u32(3),
     ];
-    let sibling = [9u8; 32];
-    let stmts: Vec<_> = (0usize..2)
+    let sibling = crate::plonky3_stark::config_poseidon::pack_digest([Mersenne31::from_u32(9); 8]);
+    let keccak_stmts: Vec<_> = (0usize..2)
         .map(|i| {
-            let leaf = hash_val_leaf(&row);
+            let leaf = hash_val_leaf_keccak(&row);
             let root = if i.is_multiple_of(2) {
-                keccak256_compress(leaf, sibling)
+                compress_digests_keccak(leaf, sibling)
             } else {
-                keccak256_compress(sibling, leaf)
+                compress_digests_keccak(sibling, leaf)
             };
             MmcsPathStatement {
                 row: row.clone(),
@@ -542,9 +542,24 @@ fn poseidon_keccak_group_size_ratio_w3() -> Result<(u64, u64), String> {
             }
         })
         .collect();
-    let k = generate_keccak_group_fold_proof(&stmts)?;
-    let p_stmts = poseidon_spike_statements(&stmts)?;
-    let p = generate_poseidon_group_fold_proof(&p_stmts)?;
+    let poseidon_stmts: Vec<_> = (0usize..2)
+        .map(|i| {
+            let leaf = hash_val_leaf(&row);
+            let root = if i.is_multiple_of(2) {
+                compress_digests(leaf, sibling)
+            } else {
+                compress_digests(sibling, leaf)
+            };
+            MmcsPathStatement {
+                row: row.clone(),
+                siblings: vec![sibling],
+                index: i,
+                root,
+            }
+        })
+        .collect();
+    let k = generate_keccak_group_fold_proof(&keccak_stmts)?;
+    let p = generate_poseidon_group_fold_proof(&poseidon_stmts)?;
     let kn = k.group_stark.len() as u64;
     let pn = p.group_stark.len() as u64;
     if kn == 0 {
@@ -1023,10 +1038,7 @@ fn verify_group_chunks(
         let chunk = &stmts[off..end];
         let ok = match g {
             MmcsGroupFoldProof::Keccak(p) => verify_keccak_group_fold_proof(chunk, p),
-            MmcsGroupFoldProof::Poseidon(p) => {
-                let spike = poseidon_spike_statements(chunk)?;
-                verify_poseidon_group_fold_proof(&spike, p)
-            }
+            MmcsGroupFoldProof::Poseidon(p) => verify_poseidon_group_fold_proof(chunk, p),
         };
         if !ok {
             return Err(format!("{label} group verify failed (chunk at {off})"));

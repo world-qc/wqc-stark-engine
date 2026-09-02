@@ -1,48 +1,62 @@
-//! ValMmcs-compatible Keccak-256 Merkle path (AggregationAir LDE).
+//! ValMmcs-compatible Keccak-256 Merkle path helpers (AggregationAir LDE tests / Keccak groups).
 //!
-//! Matches `SerializingHasher<Keccak256Hash>` leaf hashing and
-//! `CompressionFunctionFromHasher<Keccak256Hash, 2, 32>` binary compress.
+//! Production [`crate::plonky3_stark::config::ValMmcs`] uses Poseidon2; these Keccak helpers
+//! remain for Keccak group-fold AIRs and legacy path STARKs.
 
 #[cfg(test)]
 use p3_field::PrimeField32;
-#[cfg(test)]
 use p3_keccak::Keccak256Hash;
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use p3_symmetric::{
+    CompressionFunctionFromHasher, CryptographicHasher, PseudoCompressionFunction,
+    SerializingHasher,
+};
 
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
-use crate::plonky3_stark::config::{ByteHash, Compress, FieldHash};
 
 /// Typical sibling count for AggregationAir LDE height 8, binary tree, cap_height 0.
 pub const AGG_LDE_MERKLE_DEPTH: usize = 3;
 
-fn field_hash() -> FieldHash {
-    FieldHash::new(ByteHash {})
+type KeccakFieldHash = SerializingHasher<Keccak256Hash>;
+type KeccakCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
+
+fn field_hash() -> KeccakFieldHash {
+    KeccakFieldHash::new(Keccak256Hash {})
 }
 
-fn compress_fn() -> Compress {
-    Compress::new(ByteHash {})
+fn compress_fn() -> KeccakCompress {
+    KeccakCompress::new(Keccak256Hash {})
 }
 
-/// Leaf digest of a single AggregationAir-width LDE row (ValMmcs leaf hash).
+/// Leaf digest of a single AggregationAir-width LDE row (Keccak ValMmcs leaf hash).
 pub fn hash_lde_leaf(row: &[Mersenne31]) -> [u8; 32] {
     debug_assert_eq!(row.len(), AGG_WIDTH);
-    hash_val_leaf(row)
+    hash_val_leaf_keccak(row)
 }
 
-/// Leaf digest of an arbitrary-width M31 row (ValMmcs / flattened ChallengeMmcs).
-pub fn hash_val_leaf(row: &[Mersenne31]) -> [u8; 32] {
+/// Keccak leaf digest of an arbitrary-width M31 row (legacy / Keccak group AIRs).
+pub fn hash_val_leaf_keccak(row: &[Mersenne31]) -> [u8; 32] {
     field_hash().hash_iter(row.iter().copied())
 }
 
+/// Production PCS leaf digest (Poseidon2 packed ValMmcs).
+pub fn hash_val_leaf(row: &[Mersenne31]) -> [u8; 32] {
+    crate::plonky3_stark::config_poseidon::hash_val_leaf_poseidon_mmcs(row)
+}
+
 /// Binary Keccak-256 compress: `H(left || right)`.
-pub fn compress_digests(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+pub fn compress_digests_keccak(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     compress_fn().compress([left, right])
+}
+
+/// Production PCS binary compress (Poseidon2 packed).
+pub fn compress_digests(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+    crate::plonky3_stark::config_poseidon::compress_digests_poseidon_mmcs(left, right)
 }
 
 /// Recomputes the Merkle root for a binary path (N=2, no injection, cap_height=0).
 ///
-/// `index` is the leaf index; `siblings[i]` is the sibling at layer `i` (leaf → root).
+/// Uses production Poseidon ValMmcs compress.
 pub fn merkle_root_from_path(
     leaf_digest: [u8; 32],
     siblings: &[[u8; 32]],
@@ -55,6 +69,25 @@ pub fn merkle_root_from_path(
             compress_digests(digest, *sibling)
         } else {
             compress_digests(*sibling, digest)
+        };
+        index /= 2;
+    }
+    digest
+}
+
+/// Keccak Merkle root replay (Keccak group / legacy tests).
+pub fn merkle_root_from_path_keccak(
+    leaf_digest: [u8; 32],
+    siblings: &[[u8; 32]],
+    mut index: usize,
+) -> [u8; 32] {
+    let mut digest = leaf_digest;
+    for sibling in siblings {
+        let pos = index % 2;
+        digest = if pos == 0 {
+            compress_digests_keccak(digest, *sibling)
+        } else {
+            compress_digests_keccak(*sibling, digest)
         };
         index /= 2;
     }
@@ -74,23 +107,24 @@ pub fn verify_agg_merkle_path(
     if siblings.len() > AGG_LDE_MERKLE_DEPTH + 2 {
         return false;
     }
-    let leaf = hash_lde_leaf(lde_row);
+    let leaf = hash_val_leaf(lde_row);
     let root = merkle_root_from_path(leaf, siblings, index);
     &root == expected_root
 }
 
-/// Serializes an M31 row to the exact byte stream ValMmcs leaf-hashes.
 #[cfg(test)]
-pub fn m31_row_to_leaf_bytes(row: &[Mersenne31]) -> Vec<u8> {
-    row.iter()
-        .flat_map(|x| x.as_canonical_u32().to_le_bytes())
-        .collect()
+fn m31_row_to_leaf_bytes(row: &[Mersenne31]) -> Vec<u8> {
+    use p3_field::PrimeField32;
+    let mut out = Vec::with_capacity(row.len() * 4);
+    for v in row {
+        out.extend_from_slice(&v.as_canonical_u32().to_le_bytes());
+    }
+    out
 }
 
-/// Keccak-256 over raw bytes (same as `Keccak256Hash` / tiny_keccak v256).
 #[cfg(test)]
-pub fn keccak256_bytes(input: &[u8]) -> [u8; 32] {
-    Keccak256Hash.hash_iter(input.iter().copied())
+fn keccak256_bytes(input: &[u8]) -> [u8; 32] {
+    Keccak256Hash {}.hash_iter(input.iter().copied())
 }
 
 #[cfg(test)]
@@ -107,11 +141,11 @@ mod tests {
     use crate::plonky3_stark::config::devnet_circle_config;
 
     #[test]
-    fn leaf_hash_matches_serializing_hasher() {
+    fn leaf_hash_keccak_matches_native_bytes() {
         let row: Vec<_> = (0..AGG_WIDTH)
             .map(|i| Mersenne31::from_u32(i as u32))
             .collect();
-        let a = hash_lde_leaf(&row);
+        let a = hash_val_leaf_keccak(&row);
         let b = keccak256_bytes(&m31_row_to_leaf_bytes(&row));
         assert_eq!(a, b);
     }

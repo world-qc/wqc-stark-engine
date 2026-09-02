@@ -1,28 +1,105 @@
-//! Poseidon2 field-native ValMmcs scaffolding (E5b migration Phase 3).
+//! Poseidon2 field-native ValMmcs for production [`super::config::WqcStarkConfig`].
 //!
-//! Parallel to [`super::config`] Keccak/`SerializingHasher` wire. Digests are
-//! **8 × M31** (not `[u8; 32]`), matching Plonky3 BabyBear Poseidon trees.
-//! Production `WqcStarkConfig` stays Keccak until RecAgg / leaf PCS digest
-//! encoding is migrated.
+//! Digests are **packed** `8 × M31 → [u8; 32]` so RecAgg / leaf PCS wire and
+//! `SerializingChallenger32` stay byte-digest shaped, while leaf/compress match
+//! Plonky3 `PaddingFreeSponge` + `TruncatedPermutation` (same as BabyBear Poseidon trees).
 
-use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::Field;
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_commit::ExtensionMmcs;
+use p3_field::extension::BinomialExtensionField;
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::{default_mersenne31_poseidon2_16, Mersenne31, Poseidon2Mersenne31};
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_symmetric::{
+    CryptographicHasher, PaddingFreeSponge, Permutation, PseudoCompressionFunction,
+    TruncatedPermutation,
+};
 
-use super::config::{Challenge, Val};
+type Val = Mersenne31;
+type Challenge = BinomialExtensionField<Val, 3>;
 
-/// Poseidon2 width-16 permutation (same as group-fold spike).
+/// Poseidon2 width-16 permutation (Plonky3 default M31 RC tables).
 pub type Poseidon2Perm16 = Poseidon2Mersenne31<16>;
 /// Leaf / row hasher: sponge WIDTH=16, RATE=8, OUT=8 field limbs.
 pub type PoseidonFieldHash = PaddingFreeSponge<Poseidon2Perm16, 16, 8, 8>;
 /// Binary compress: truncated perm over 2×8 limbs.
 pub type PoseidonCompress = TruncatedPermutation<Poseidon2Perm16, 2, 8, 16>;
-/// Field-native Merkle Mmcs (digest = 8 × M31).
-pub type PoseidonValMmcs = MerkleTreeMmcs<
+
+/// Field limbs per Poseidon Merkle digest (packed into 32 bytes on the wire).
+pub const POSEIDON_DIGEST_LIMBS: usize = 8;
+/// Sponge rate (= digest limb count).
+pub const POSEIDON_RATE: usize = 8;
+
+/// Pack 8×M31 into a 32-byte wire digest (little-endian canonical u32 each).
+pub fn pack_digest(limbs: [Mersenne31; POSEIDON_DIGEST_LIMBS]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, limb) in limbs.iter().enumerate() {
+        out[i * 4..(i + 1) * 4].copy_from_slice(&limb.as_canonical_u32().to_le_bytes());
+    }
+    out
+}
+
+/// Unpack a 32-byte wire digest into 8×M31.
+pub fn unpack_digest(bytes: [u8; 32]) -> [Mersenne31; POSEIDON_DIGEST_LIMBS] {
+    let mut limbs = [Mersenne31::ZERO; POSEIDON_DIGEST_LIMBS];
+    for (i, limb) in limbs.iter_mut().enumerate() {
+        let mut b = [0u8; 4];
+        b.copy_from_slice(&bytes[i * 4..(i + 1) * 4]);
+        *limb = Mersenne31::new(u32::from_le_bytes(b));
+    }
+    limbs
+}
+
+/// Field hasher that emits packed `[u8; 32]` digests for MerkleTreeMmcs.
+#[derive(Clone)]
+pub struct PoseidonPackedFieldHash {
+    inner: PoseidonFieldHash,
+}
+
+impl PoseidonPackedFieldHash {
+    pub fn new(perm: Poseidon2Perm16) -> Self {
+        Self {
+            inner: PoseidonFieldHash::new(perm),
+        }
+    }
+}
+
+impl CryptographicHasher<Val, [u8; 32]> for PoseidonPackedFieldHash {
+    fn hash_iter<I>(&self, input: I) -> [u8; 32]
+    where
+        I: IntoIterator<Item = Val>,
+    {
+        pack_digest(self.inner.hash_iter(input))
+    }
+}
+
+/// Binary compress over packed digests (unpack → TruncatedPermutation → pack).
+#[derive(Clone)]
+pub struct PoseidonPackedCompress {
+    inner: PoseidonCompress,
+}
+
+impl PoseidonPackedCompress {
+    pub fn new(perm: Poseidon2Perm16) -> Self {
+        Self {
+            inner: PoseidonCompress::new(perm),
+        }
+    }
+}
+
+impl PseudoCompressionFunction<[u8; 32], 2> for PoseidonPackedCompress {
+    fn compress(&self, input: [[u8; 32]; 2]) -> [u8; 32] {
+        let left = unpack_digest(input[0]);
+        let right = unpack_digest(input[1]);
+        pack_digest(self.inner.compress([left, right]))
+    }
+}
+
+/// Production ValMmcs: Poseidon2 sponge/compress with packed `[u8; 32]` digests.
+pub type PoseidonValMmcs = MerkleTreeMmcs<Val, u8, PoseidonPackedFieldHash, PoseidonPackedCompress, 2, 32>;
+pub type PoseidonChallengeMmcs = ExtensionMmcs<Val, Challenge, PoseidonValMmcs>;
+
+/// Field-native (unpacked) ValMmcs — used by isolated smoke tests / migration docs.
+pub type PoseidonFieldValMmcs = MerkleTreeMmcs<
     <Val as Field>::Packing,
     <Val as Field>::Packing,
     PoseidonFieldHash,
@@ -30,16 +107,12 @@ pub type PoseidonValMmcs = MerkleTreeMmcs<
     2,
     8,
 >;
-pub type PoseidonChallengeMmcs = ExtensionMmcs<Val, Challenge, PoseidonValMmcs>;
 
-/// Field limbs per Poseidon Merkle digest (vs Keccak's 32 bytes).
-pub const POSEIDON_DIGEST_LIMBS: usize = 8;
-
-/// Builds a Poseidon2 ValMmcs with Plonky3 default M31 RC tables (`cap_height = 0`).
+/// Builds production Poseidon ValMmcs (`cap_height = 0`).
 pub fn poseidon_val_mmcs() -> PoseidonValMmcs {
     let perm = default_mersenne31_poseidon2_16();
-    let hash = PoseidonFieldHash::new(perm.clone());
-    let compress = PoseidonCompress::new(perm);
+    let hash = PoseidonPackedFieldHash::new(perm.clone());
+    let compress = PoseidonPackedCompress::new(perm);
     PoseidonValMmcs::new(hash, compress, 0)
 }
 
@@ -48,17 +121,88 @@ pub fn poseidon_challenge_mmcs() -> PoseidonChallengeMmcs {
     PoseidonChallengeMmcs::new(poseidon_val_mmcs())
 }
 
+/// Leaf digest matching production ValMmcs.
+pub fn hash_val_leaf_poseidon_mmcs(row: &[Mersenne31]) -> [u8; 32] {
+    PoseidonPackedFieldHash::new(default_mersenne31_poseidon2_16()).hash_iter(row.iter().copied())
+}
+
+/// Binary compress matching production ValMmcs.
+pub fn compress_digests_poseidon_mmcs(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+    PoseidonPackedCompress::new(default_mersenne31_poseidon2_16()).compress([left, right])
+}
+
+/// Pre-permutation sponge states for a leaf row (RATE=8 overwrite absorb).
+///
+/// Each returned state is the width-16 input to one Poseidon2 perm in the sponge.
+pub fn poseidon_sponge_leaf_perm_inputs(row: &[Mersenne31]) -> Vec<[Mersenne31; 16]> {
+    let perm = default_mersenne31_poseidon2_16();
+    let mut state = [Mersenne31::ZERO; 16];
+    let mut inputs = Vec::new();
+    let mut input = row.iter().copied();
+    'outer: loop {
+        for i in 0..POSEIDON_RATE {
+            if let Some(x) = input.next() {
+                state[i] = x;
+            } else {
+                if i != 0 {
+                    inputs.push(state);
+                }
+                break 'outer;
+            }
+        }
+        inputs.push(state);
+        perm.permute_mut(&mut state);
+    }
+    inputs
+}
+
+/// Number of Poseidon2 perms in the leaf sponge for this row width.
+pub fn poseidon_leaf_perm_count(leaf_width: usize) -> usize {
+    if leaf_width == 0 {
+        0
+    } else {
+        leaf_width.div_ceil(POSEIDON_RATE)
+    }
+}
+
+/// Compress perm input state: `left ‖ right` (8+8 limbs).
+pub fn poseidon_compress_perm_input(
+    left: [u8; 32],
+    right: [u8; 32],
+) -> [Mersenne31; 16] {
+    let l = unpack_digest(left);
+    let r = unpack_digest(right);
+    let mut state = [Mersenne31::ZERO; 16];
+    state[..8].copy_from_slice(&l);
+    state[8..].copy_from_slice(&r);
+    state
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use p3_commit::{BatchOpeningRef, Mmcs};
-    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::Dimensions;
+
+    #[test]
+    fn pack_unpack_roundtrip() {
+        let limbs = [
+            Mersenne31::from_u32(1),
+            Mersenne31::from_u32(2),
+            Mersenne31::from_u32(3),
+            Mersenne31::from_u32(4),
+            Mersenne31::from_u32(5),
+            Mersenne31::from_u32(6),
+            Mersenne31::from_u32(7),
+            Mersenne31::from_u32(8),
+        ];
+        assert_eq!(unpack_digest(pack_digest(limbs)), limbs);
+    }
 
     #[test]
     fn poseidon_val_mmcs_commit_open_roundtrip() {
         let mmcs = poseidon_val_mmcs();
-        // 8 rows × width 3 — power-of-two height for a small tree.
         let mut values = Vec::with_capacity(8 * 3);
         for r in 0u32..8 {
             values.push(Mersenne31::from_u32(r * 3 + 1));
@@ -69,7 +213,6 @@ mod tests {
         let (commit, prover_data) = mmcs.commit(vec![mat]);
         let index = 5usize;
         let batch = mmcs.open_batch(index, &prover_data);
-        assert_eq!(batch.opened_values.len(), 1);
         assert_eq!(batch.opened_values[0].len(), 3);
         let dims = [Dimensions {
             width: 3,
@@ -85,14 +228,25 @@ mod tests {
     }
 
     #[test]
-    fn poseidon_digest_is_eight_limbs() {
-        assert_eq!(POSEIDON_DIGEST_LIMBS, 8);
+    fn packed_leaf_matches_mmcs_open() {
         let mmcs = poseidon_val_mmcs();
-        let mat = RowMajorMatrix::new(vec![Mersenne31::ONE; 4], 1);
-        let (commit, _) = mmcs.commit(vec![mat]);
-        // MerkleCap with cap_height=0 → single root digest of 8 limbs.
-        assert_eq!(commit.num_roots(), 1);
-        let root = commit.roots()[0];
-        assert_eq!(root.len(), POSEIDON_DIGEST_LIMBS);
+        let row: Vec<_> = (0..3).map(|i| Mersenne31::from_u32(i + 1)).collect();
+        // Single-row matrix → leaf digest is the commitment root.
+        let mat = RowMajorMatrix::new(row.clone(), 3);
+        let (commit, data) = mmcs.commit(vec![mat]);
+        let batch = mmcs.open_batch(0, &data);
+        let leaf = hash_val_leaf_poseidon_mmcs(&row);
+        assert_eq!(leaf, *commit.roots().first().expect("root"));
+        assert!(batch.opening_proof.is_empty());
+    }
+
+    #[test]
+    fn sponge_perm_count_matches_helper() {
+        assert_eq!(poseidon_leaf_perm_count(3), 1);
+        assert_eq!(poseidon_leaf_perm_count(8), 1);
+        assert_eq!(poseidon_leaf_perm_count(9), 2);
+        assert_eq!(poseidon_leaf_perm_count(48), 6);
+        assert_eq!(poseidon_sponge_leaf_perm_inputs(&[Mersenne31::ONE; 3]).len(), 1);
+        assert_eq!(poseidon_sponge_leaf_perm_inputs(&[Mersenne31::ONE; 48]).len(), 6);
     }
 }

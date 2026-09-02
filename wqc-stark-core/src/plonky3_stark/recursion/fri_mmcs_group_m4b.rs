@@ -35,7 +35,7 @@ use super::keccak_f_native::{
     keccak256_compress, keccak256_val_leaf, num_permutations, val_row_to_bytes, KECCAK256_OUT,
     KECCAK_DELIM, KECCAK_RATE, KECCAK_ROUNDS, KECCAK_STATE_BITS, RC,
 };
-use super::merkle_keccak::hash_val_leaf;
+use super::merkle_keccak::hash_val_leaf_keccak;
 
 /// Enough for idle unitary Val-trace + Chal-commit (80) with headroom.
 pub const M4B_MAX_PATHS: usize = 128;
@@ -672,7 +672,7 @@ fn fold_path_witness(
         ));
     }
     let leaf_digest = keccak256_val_leaf(row);
-    if leaf_digest != hash_val_leaf(row) {
+    if leaf_digest != hash_val_leaf_keccak(row) {
         return Err("leaf digest mismatch".into());
     }
 
@@ -972,7 +972,7 @@ mod tests {
             Mersenne31::from_u32(seed + 1),
             Mersenne31::from_u32(seed + 2),
         ];
-        let leaf = hash_val_leaf(&row);
+        let leaf = hash_val_leaf_keccak(&row);
         let root = if index.is_multiple_of(2) {
             keccak256_compress(leaf, sibling)
         } else {
@@ -1057,7 +1057,7 @@ mod tests {
                     .map(|i| Mersenne31::from_u32((p as u32 + 1) * 100 + i as u32 * 17 + 3))
                     .collect();
                 assert_eq!(val_row_to_bytes(&row).len(), 192);
-                let leaf = hash_val_leaf(&row);
+                let leaf = hash_val_leaf_keccak(&row);
                 let sibling = [u8::try_from(p + 11).unwrap(); 32];
                 let index = p;
                 let root = if index % 2 == 0 {
