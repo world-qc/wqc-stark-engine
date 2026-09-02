@@ -25,6 +25,12 @@ pub struct ShrinkBaseline {
     pub documented_baseline_bytes: u64,
     pub fixture_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mmcs_group_chunk: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fri_num_queries: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -38,6 +44,9 @@ impl Default for ShrinkBaseline {
             shrink_gate_bytes: SHRINK_GATE_BYTES,
             documented_baseline_bytes: IDLE_TWO_LEAF_DOCUMENTED_BASELINE_BYTES,
             fixture_path: FIXTURE_ROOT_BIN.to_string(),
+            security_level: None,
+            mmcs_group_chunk: None,
+            fri_num_queries: None,
             updated_at: None,
             note: Some(
                 "Run `cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --release` to refresh."

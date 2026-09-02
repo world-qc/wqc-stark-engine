@@ -148,7 +148,7 @@ outcome dimension K≤21 (AIR width W≤68). Protocol details:
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** idle two-leaf RecAgg V6 root ≈ **10.2 MiB** (`10_742_800` bytes; measured 2026-09 via `shrink-baseline`, recorded in `fixtures/e5b/baseline.json`). Profile: **40 FRI queries** (devnet default — empty `security_level` or `ultra`), prebuilt leaf PCS, `WQC_PCS_MMCS_GROUP_CHUNK=24`. Per-side leaf PCS bundle ≈ **5.1 MiB**. E5b shrink gate (pre-wrap mainnet KPI): **500 KB**. Optional: recursion-friendly hash (e.g. Poseidon2) inside fold circuits.
+- **Proof size / PCS (E5b shrink baseline):** idle two-leaf RecAgg V6 root ≈ **10.2 MiB** at devnet default (40 FRI queries, `WQC_PCS_MMCS_GROUP_CHUNK=24`); recorded in `fixtures/e5b/baseline.json`. **Knob sweep** (`fixtures/e5b/sweep.json`): best so far **`low`/chunk24 ≈ 4.8 MiB** (`5_022_410` bytes, −53%); chunk40 helps at 40q (−45%) but not at 8q. E5b shrink gate: **500 KB**. **Next:** Poseidon2 Mmcs group fold AIR (`recursion/poseidon2_spike.rs`).
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.
 - Prove-time witness oracles in-circuit

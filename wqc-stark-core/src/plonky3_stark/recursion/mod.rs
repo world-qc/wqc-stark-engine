@@ -41,6 +41,7 @@ mod ood_native;
 mod opening_cert;
 mod pcs_geom;
 mod pcs_memory;
+mod poseidon2_spike;
 mod prove;
 mod prove_workspace;
 mod transcript_v5;

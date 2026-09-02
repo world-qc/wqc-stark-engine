@@ -4,13 +4,17 @@
 //! [`compose_idle_two_leaf_root_with_pcs`] locally or in the scheduled CI workflow;
 //! default PR CI runs fast bounds and optional golden-fixture checks only.
 
+mod profile;
 mod r2_compose;
+mod sweep;
 
 #[cfg(feature = "plonky3-stark")]
 mod idle_compose;
 
 pub mod baseline;
 
+pub use profile::{query_count_shrink_factor, ShrinkComposeProfile};
+pub use sweep::ShrinkSweep;
 pub use r2_compose::compose_idle_two_leaf_root_r2_only;
 
 #[cfg(feature = "plonky3-stark")]
@@ -37,6 +41,7 @@ mod tests {
     use crate::shrink::baseline::{
         stark_engine_repo_root, ShrinkBaseline, BASELINE_JSON, FIXTURE_ROOT_BIN,
     };
+    use crate::shrink::ShrinkSweep;
 
     #[test]
     fn shrink_gate_constants_match_scope() {
@@ -83,6 +88,75 @@ mod tests {
         } else {
             assert!(out.is_none());
         }
+    }
+
+    #[test]
+    fn query_count_shrink_factor_ladder() {
+        assert!((query_count_shrink_factor("low") - 0.2).abs() < f64::EPSILON);
+        assert!((query_count_shrink_factor("normal") - 0.4).abs() < f64::EPSILON);
+        assert!((query_count_shrink_factor("high") - 0.8).abs() < f64::EPSILON);
+        assert!((query_count_shrink_factor("ultra") - 1.0).abs() < f64::EPSILON);
+        assert!((query_count_shrink_factor("") - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn idle_compose_honors_security_level_on_leaf_proofs() {
+        use crate::plonky3_stark::decode_proof_v2_plonky3_bytes;
+        use crate::plonky3_stark::recursion::fri_queries_from_proof;
+        use crate::transcript::StarkContext;
+        use crate::{generate_plonky3_stark_proof, trace_spec};
+        use p3_uni_stark::Proof;
+
+        let trace = trace_spec::idle_qubit0_trace();
+        for (level, expect_q) in [("low", 8usize), ("ultra", 40usize)] {
+            let ctx = StarkContext {
+                circuit_id: "e5b-shrink-idle",
+                sub_task_id: "sub-shrink-test",
+                node_id: "node-shrink-1",
+                slice_id: "000",
+                output_hash: "out-shrink",
+                terminal_statevector_digest: "",
+                measurement_spec_hash: "",
+                security_level: level,
+            };
+            let proof = generate_plonky3_stark_proof(&ctx, &trace).expect("prove");
+            let p3 = decode_proof_v2_plonky3_bytes(&proof, &ctx).expect("decode");
+            let p3_proof: Proof<_> = postcard::from_bytes(&p3).expect("postcard");
+            assert_eq!(
+                fri_queries_from_proof(&p3_proof).expect("n"),
+                expect_q,
+                "security_level={level}"
+            );
+        }
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    #[ignore = "slow; PCS prove — run locally to measure low-security shrink"]
+    fn idle_two_leaf_low_security_compose_under_regression_ceiling() {
+        use crate::shrink::idle_compose::compose_idle_two_leaf_root_with_pcs;
+
+        let report = compose_idle_two_leaf_root_with_pcs("low").expect("low compose");
+        assert!(report.has_rec_agg_tail);
+        assert!(
+            report.root_bytes as u64 <= IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES,
+            "low-security root {} bytes",
+            report.root_bytes
+        );
+        assert!(
+            report.root_bytes < IDLE_TWO_LEAF_DOCUMENTED_BASELINE_BYTES as usize,
+            "low-security root should be smaller than ultra/default baseline"
+        );
+    }
+
+    #[test]
+    fn sweep_json_best_beats_default() {
+        let repo = stark_engine_repo_root();
+        let sweep = ShrinkSweep::load_from_repo(&repo).expect("load sweep");
+        let default = sweep.default_row().expect("default row");
+        let best = sweep.best_row().expect("best row");
+        assert!(best.root_bytes < default.root_bytes);
     }
 
     #[cfg(feature = "plonky3-stark")]

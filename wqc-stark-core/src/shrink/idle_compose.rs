@@ -19,7 +19,11 @@ pub struct IdleTwoLeafComposeReport {
     pub has_rec_agg_tail: bool,
 }
 
-fn idle_leaf_context(sub_task_id: &'static str, slice_id: &'static str) -> StarkContext<'static> {
+fn idle_leaf_context<'a>(
+    sub_task_id: &'static str,
+    slice_id: &'static str,
+    security_level: &'a str,
+) -> StarkContext<'a> {
     StarkContext {
         circuit_id: "e5b-shrink-idle",
         sub_task_id,
@@ -28,7 +32,7 @@ fn idle_leaf_context(sub_task_id: &'static str, slice_id: &'static str) -> Stark
         output_hash: "out-shrink",
         terminal_statevector_digest: "",
         measurement_spec_hash: "",
-        security_level: "",
+        security_level,
     }
 }
 
@@ -45,8 +49,8 @@ pub fn compose_idle_two_leaf_root_with_pcs(
 pub fn compose_idle_two_leaf_root_with_pcs_and_bytes(
     security_level: &str,
 ) -> Result<(IdleTwoLeafComposeReport, Vec<u8>), String> {
-    let left_ctx = idle_leaf_context("sub-shrink-a", "000");
-    let right_ctx = idle_leaf_context("sub-shrink-b", "001");
+    let left_ctx = idle_leaf_context("sub-shrink-a", "000", security_level);
+    let right_ctx = idle_leaf_context("sub-shrink-b", "001", security_level);
     let trace = trace_spec::idle_qubit0_trace();
 
     let left = generate_plonky3_stark_proof(&left_ctx, &trace)?;

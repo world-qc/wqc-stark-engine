@@ -1,0 +1,66 @@
+{
+  "benchmark": "idle_two_leaf_rec_agg_v6_prebuilt_pcs",
+  "measured_at": "2026-09",
+  "shrink_gate_bytes": 512000,
+  "rows": [
+    {
+      "label": "default/chunk24",
+      "security_level": "",
+      "fri_num_queries": 40,
+      "mmcs_group_chunk": 24,
+      "root_bytes": 10742800,
+      "left_pcs_bytes": 5324713,
+      "mmcs_groups_per_side": 5039697,
+      "note": "E5b baseline (fixtures/e5b/baseline.json)"
+    },
+    {
+      "label": "default/chunk40",
+      "security_level": "",
+      "fri_num_queries": 40,
+      "mmcs_group_chunk": 40,
+      "root_bytes": 5911670,
+      "left_pcs_bytes": 2909148,
+      "mmcs_groups_per_side": 2624228,
+      "note": "chunk40 at 40q: ~45% smaller root vs chunk24"
+    },
+    {
+      "label": "normal/chunk24",
+      "security_level": "normal",
+      "fri_num_queries": 16,
+      "mmcs_group_chunk": 24,
+      "root_bytes": 5309884,
+      "left_pcs_bytes": 2634620,
+      "mmcs_groups_per_side": 2486308
+    },
+    {
+      "label": "low/chunk24",
+      "security_level": "low",
+      "fri_num_queries": 8,
+      "mmcs_group_chunk": 24,
+      "root_bytes": 5022410,
+      "left_pcs_bytes": 2499954,
+      "mmcs_groups_per_side": 2400773,
+      "note": "best knob-only profile so far (~4.8 MiB)"
+    },
+    {
+      "label": "low/chunk40",
+      "security_level": "low",
+      "fri_num_queries": 8,
+      "mmcs_group_chunk": 40,
+      "root_bytes": 5022410,
+      "left_pcs_bytes": 2499954,
+      "mmcs_groups_per_side": 2400773,
+      "note": "no gain vs chunk24 — 8 queries fit in one Mmcs group"
+    }
+  ],
+  "best_knob_only": {
+    "label": "low/chunk24",
+    "root_bytes": 5022410,
+    "vs_default_pct": 53
+  },
+  "next_levers": [
+    "Poseidon2 Mmcs group fold AIR (replace Keccak-in-STARK — ~97% of leaf PCS STARK bytes)",
+    "Compound: low security + larger chunk only helps when fri_num_queries > chunk",
+    "Wire metadata stripping (siblings/limbs post-bind) — secondary"
+  ]
+}

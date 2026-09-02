@@ -9,7 +9,9 @@ use wqc_stark_core::shrink::baseline::{
     stark_engine_repo_root, ShrinkBaseline, BASELINE_JSON, FIXTURE_ROOT_BIN,
 };
 use wqc_stark_core::shrink::compose_idle_two_leaf_root_with_pcs_and_bytes;
-use wqc_stark_core::shrink::{IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES, SHRINK_GATE_BYTES};
+use wqc_stark_core::shrink::{
+    ShrinkComposeProfile, IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES, SHRINK_GATE_BYTES,
+};
 
 fn main() {
     if let Err(e) = run() {
@@ -21,9 +23,14 @@ fn main() {
 fn run() -> Result<(), String> {
     let write_fixture = env::args().any(|a| a == "--write-fixture");
     let write_baseline = env::args().any(|a| a == "--write-baseline") || write_fixture;
+    let profile = parse_profile()?;
 
-    eprintln!("E5b shrink: proving idle two-leaf root (this may take hours)…");
-    let (report, root) = compose_idle_two_leaf_root_with_pcs_and_bytes("")?;
+    eprintln!(
+        "E5b shrink: proving idle two-leaf root (profile={}, {} FRI queries)…",
+        profile.label(),
+        profile.fri_num_queries()
+    );
+    let (report, root) = compose_idle_two_leaf_root_with_pcs_and_bytes(&profile.security_level)?;
 
     let repo = stark_engine_repo_root();
     let mut out = serde_json::json!({
@@ -33,6 +40,9 @@ fn run() -> Result<(), String> {
         "left_pcs_bytes": report.left_pcs_bytes,
         "right_pcs_bytes": report.right_pcs_bytes,
         "has_rec_agg_tail": report.has_rec_agg_tail,
+        "security_level": profile.security_level,
+        "mmcs_group_chunk": profile.mmcs_group_chunk,
+        "fri_num_queries": profile.fri_num_queries(),
         "shrink_gate_bytes": SHRINK_GATE_BYTES,
         "regression_ceiling_bytes": IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES,
     });
@@ -62,9 +72,13 @@ fn run() -> Result<(), String> {
     if write_baseline {
         let mut baseline = ShrinkBaseline::load_from_repo(&repo)?;
         baseline.root_bytes = Some(report.root_bytes as u64);
+        baseline.security_level = Some(profile.security_level.clone());
+        baseline.mmcs_group_chunk = Some(profile.mmcs_group_chunk as u32);
+        baseline.fri_num_queries = Some(profile.fri_num_queries() as u32);
         baseline.updated_at = Some(unix_timestamp());
         baseline.note = Some(format!(
-            "Measured by shrink-baseline; has_rec_agg={}",
+            "Measured by shrink-baseline ({}); has_rec_agg={}",
+            profile.label(),
             report.has_rec_agg_tail
         ));
         baseline.save_to_repo(&repo)?;
@@ -76,6 +90,29 @@ fn run() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn parse_profile() -> Result<ShrinkComposeProfile, String> {
+    let args: Vec<String> = env::args().collect();
+    let mut profile = ShrinkComposeProfile::from_env();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--security-level" => {
+                let level = args
+                    .get(i + 1)
+                    .ok_or("--security-level requires a value (low|normal|high|ultra)")?;
+                profile = profile.with_security_level(level);
+                i += 2;
+            }
+            flag if flag.starts_with("--security-level=") => {
+                profile = profile.with_security_level(flag.trim_start_matches("--security-level="));
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok(profile)
 }
 
 fn unix_timestamp() -> String {

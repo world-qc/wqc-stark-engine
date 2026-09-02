@@ -103,6 +103,12 @@ cargo test -p wqc-stark-core --features plonky3-stark --release \
 # Or refresh fixtures/e5b/baseline.json + idle_two_leaf_root.bin:
 cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --release -- \
   --write-baseline --write-fixture
+
+# Shrink optimization knobs (R3/PCS wire size):
+#   --security-level low|normal|high|ultra   (FRI query ladder; default = 40 queries)
+#   WQC_PCS_MMCS_GROUP_CHUNK=40              (fewer/larger Mmcs group STARKs)
+cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --release -- \
+  --security-level low
 ```
 
 Baseline JSON lives at `fixtures/e5b/baseline.json`; the golden `idle_two_leaf_root.bin` is gitignored until generated locally.

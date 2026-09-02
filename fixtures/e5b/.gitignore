@@ -1,3 +1,7 @@
 # Large golden root proof — generate locally via shrink-baseline (gitignored).
 idle_two_leaf_root.bin
 baseline-run.log
+baseline-low-run.log
+baseline-low-chunk40-run.log
+baseline-normal-run.log
+baseline-default-chunk40-run.log
