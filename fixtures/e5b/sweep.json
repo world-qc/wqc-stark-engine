@@ -59,8 +59,8 @@
     "vs_default_pct": 53
   },
   "next_levers": [
-    "Poseidon2 Mmcs groups: wide W=48 measured (was extrapolated); Merkle tree migration for consensus",
+    "Wire WqcStarkConfig to config_poseidon ValMmcs (8×M31 digests) — remove spike statements",
     "Compound: low security + larger chunk only helps when fri_num_queries > chunk",
-    "Wire metadata stripping (siblings/limbs post-bind) — secondary"
+    "Poseidon compose at default/ultra security (40q) for gate tracking"
   ]
 }

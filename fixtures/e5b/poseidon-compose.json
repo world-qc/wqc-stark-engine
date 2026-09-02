@@ -1,0 +1,13 @@
+{
+  "benchmark": "idle_two_leaf_poseidon_compose",
+  "has_rec_agg_tail": true,
+  "keccak_reference_root_bytes": 5022410,
+  "left_leaf_bytes": 3679,
+  "left_pcs_bytes": 722222,
+  "reference_sweep": "low/chunk24",
+  "right_leaf_bytes": 3679,
+  "right_pcs_bytes": 722222,
+  "root_bytes": 1466946,
+  "root_saved_vs_keccak_ref": 3555464,
+  "security_level": "low"
+}

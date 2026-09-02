@@ -370,6 +370,9 @@ pub fn build_leaf_pcs_certificate(
         .map_err(|e| format!("R3-M4c Mmcs group fold failed: {e}"))?;
     bind_leaf_mmcs_with_groups(proof, &mmcs_bundle, &mmcs_groups, trace_width)
         .map_err(|e| format!("R3-M4c Mmcs group bind failed: {e}"))?;
+    let _ = super::fri_mmcs_m4c::strip_val_mmcs_siblings_for_groups(&mut mmcs_bundle.val, &mmcs_groups);
+    let _ =
+        super::fri_mmcs_m4c::strip_chal_mmcs_siblings_for_groups(&mut mmcs_bundle.chal, &mmcs_groups);
 
     let trace_commitment = commitment_root(&proof.commitments.trace)?;
     let merkle_fold = mmcs_bundle.val[0].trace_path.clone();
@@ -486,13 +489,33 @@ pub fn verify_leaf_pcs_certificate(
         eprintln!("[LeafPcsCertificate] Failed: fri mmcs count");
         return false;
     }
-    for (i, qp) in cert.fri_val_mmcs.iter().enumerate() {
+    let mut mmcs_bundle = AggFriMmcsBundle {
+        val: cert.fri_val_mmcs.clone(),
+        chal: cert.fri_chal_mmcs.clone(),
+    };
+    if let Err(e) = super::fri_mmcs_m4c::hydrate_val_mmcs_siblings_from_proof(
+        proof,
+        &mut mmcs_bundle.val,
+        trace_width,
+    ) {
+        eprintln!("[LeafPcsCertificate] Failed: hydrate val siblings: {e}");
+        return false;
+    }
+    if let Err(e) = super::fri_mmcs_m4c::hydrate_chal_mmcs_siblings_from_proof(
+        proof,
+        &mut mmcs_bundle.chal,
+        trace_width,
+    ) {
+        eprintln!("[LeafPcsCertificate] Failed: hydrate chal siblings: {e}");
+        return false;
+    }
+    for (i, qp) in mmcs_bundle.val.iter().enumerate() {
         if !path_self_check_val(qp) {
             eprintln!("[LeafPcsCertificate] Failed: ValMmcs shape at {i}");
             return false;
         }
     }
-    for (i, qp) in cert.fri_chal_mmcs.iter().enumerate() {
+    for (i, qp) in mmcs_bundle.chal.iter().enumerate() {
         if !path_self_check_chal(qp) {
             eprintln!("[LeafPcsCertificate] Failed: ChallengeMmcs shape at {i}");
             return false;
@@ -500,7 +523,7 @@ pub fn verify_leaf_pcs_certificate(
     }
 
     // LDE rebuild skipped: merkle_fold is the query-0 ValMmcs trace path.
-    if cert.merkle_fold != cert.fri_val_mmcs[0].trace_path {
+    if cert.merkle_fold != mmcs_bundle.val[0].trace_path {
         eprintln!("[LeafPcsCertificate] Failed: merkle_fold mismatch");
         return false;
     }
@@ -517,10 +540,6 @@ pub fn verify_leaf_pcs_certificate(
             return false;
         }
     }
-    let mmcs_bundle = AggFriMmcsBundle {
-        val: cert.fri_val_mmcs.clone(),
-        chal: cert.fri_chal_mmcs.clone(),
-    };
     if let Err(e) = bind_leaf_mmcs_with_groups(proof, &mmcs_bundle, &cert.mmcs_groups, trace_width)
     {
         eprintln!("[LeafPcsCertificate] Failed: FRI Mmcs bind: {e}");
@@ -743,17 +762,16 @@ pub fn benchmark_poseidon_mmcs_from_child(
     let plonky3 = decode_proof_v2_plonky3_bytes(child_bytes, ctx)
         .ok_or_else(|| "decode plonky3 proof from child".to_string())?;
     let proof = proof_from_plonky3(&plonky3)?;
-    let pcs_len = build_encoded_leaf_pcs_bundle_from_child(child_bytes)?.len();
     let bundle = build_leaf_pcs_bundle_from_child(child_bytes)?;
+    let pcs_len =
+        crate::plonky3_stark::recursion::encode_leaf_pcs_bundle_bytes(&bundle).len();
     let cert = bundle
         .certs
         .first()
         .ok_or("expected one leaf PCS cert")?;
-    let mmcs_bundle = AggFriMmcsBundle {
-        val: cert.fri_val_mmcs.clone(),
-        chal: cert.fri_chal_mmcs.clone(),
-    };
     let trace_width = cert.trace_width as usize;
+    // Siblings are stripped in the cert wire form; re-extract from the child proof for benchmarks.
+    let mmcs_bundle = fri_mmcs_bundle_from_proof_drop_nested(&proof, trace_width)?;
     let stmts = super::fri_mmcs_m4c::collect_leaf_mmcs_group_statements(
         &proof,
         trace_width,
@@ -835,6 +853,10 @@ mod tests {
             !cert.mmcs_groups.chal_first_layer.is_empty(),
             "expected chal_first_layer group"
         );
+        assert!(
+            cert.fri_val_mmcs.iter().all(|q| q.trace_siblings.is_empty()),
+            "expected stripped trace siblings after M4c group bind"
+        );
 
         assert!(
             cert.fri_fold_groups.fold_ys.is_some(),
@@ -909,5 +931,40 @@ mod tests {
         let stmt = leaf_stmt_digest(LeafKind::Born, &proof).expect("stmt");
         let cert = build_leaf_pcs_certificate(&proof, LeafKind::Born, stmt).expect("cert");
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
+    }
+
+    #[cfg(feature = "poseidon-mmcs")]
+    #[test]
+    #[ignore = "slow; local only — poseidon-mmcs leaf PCS prove + dual-bind verify"]
+    fn unitary_leaf_pcs_poseidon_mmcs_mode_roundtrip() {
+        use crate::plonky3_stark::recursion::{
+            mmcs_merkle_mode, MmcsGroupHashKind, MmcsMerkleMode, PCS_MMCS_HASH_ENV,
+        };
+
+        std::env::set_var(PCS_MMCS_HASH_ENV, "poseidon");
+        let ctx = StarkContext {
+            circuit_id: "c-leaf-poseidon",
+            sub_task_id: "sub-leaf-pcs-poseidon",
+            node_id: "n1",
+            slice_id: "0",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+            security_level: "low",
+        };
+        let trace = crate::trace_spec::idle_qubit0_trace();
+        let transcript = crate::plonky3_stark::generate_plonky3_proof(&ctx, &trace).expect("prove");
+        let plonky3 = decode_proof_v2_plonky3_bytes(&transcript, &ctx).expect("decode");
+        let proof = proof_from_plonky3(&plonky3).expect("postcard");
+        let kind = LeafKind::Unitary;
+        let stmt = leaf_stmt_digest(kind, &proof).expect("stmt");
+        let cert = build_leaf_pcs_certificate(&proof, kind, stmt).expect("cert");
+        assert_eq!(mmcs_merkle_mode(), MmcsMerkleMode::PoseidonGroupSpike);
+        assert!(
+            cert.mmcs_groups.val_trace.iter().any(|g| g.hash_kind() == MmcsGroupHashKind::Poseidon),
+            "expected Poseidon val_trace group"
+        );
+        assert!(verify_leaf_pcs_certificate(&proof, &cert));
+        std::env::remove_var(PCS_MMCS_HASH_ENV);
     }
 }

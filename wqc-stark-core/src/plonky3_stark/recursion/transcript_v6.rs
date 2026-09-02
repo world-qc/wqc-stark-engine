@@ -1052,7 +1052,12 @@ fn decode_chal_batch(proof: &[u8], offset: usize) -> Option<(FriChalBatchPathPro
         cursor = next;
     }
     let (n_sib_c, cursor) = read_u32_le(proof, cursor)?;
-    if n_sib_c as usize != siblings.len() || n_sib_c as usize > FRI_MMCS_MAX_DEPTH {
+    if n_sib_c as usize > FRI_MMCS_MAX_DEPTH {
+        return None;
+    }
+    // Post-bind sibling strip may clear `siblings` while retaining layer digests /
+    // empty compress stubs for host digest replay after hydrate.
+    if !siblings.is_empty() && n_sib_c as usize != siblings.len() {
         return None;
     }
     let mut sib_compresses = Vec::with_capacity(n_sib_c as usize);

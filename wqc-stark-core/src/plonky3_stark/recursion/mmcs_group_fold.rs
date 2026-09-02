@@ -3,7 +3,6 @@
 use super::fri_mmcs_group_m4b::{KeccakGroupFoldProof, MmcsPathStatement};
 use super::merkle_poseidon2::{hash_val_leaf_poseidon, merkle_root_from_path_poseidon};
 use super::poseidon2_group_m4b::PoseidonGroupFoldProof;
-use super::poseidon2_spike::POSEIDON2_WIDTH;
 
 /// Per-group hash tag in [`LEAF_MMCS_FOLD_V4`] wire encoding.
 pub const MMCS_GROUP_HASH_KECCAK: u8 = 0;
@@ -111,7 +110,7 @@ pub fn poseidon_group_width_supported(leaf_width: usize) -> bool {
 pub fn mmcs_path_stmt_poseidon_spike(stmt: &MmcsPathStatement) -> Result<MmcsPathStatement, String> {
     if !poseidon_group_width_supported(stmt.row.len()) {
         return Err(format!(
-            "poseidon group leaf_width {} > {POSEIDON2_WIDTH}",
+            "poseidon group leaf_width {} not M4b-eligible",
             stmt.row.len()
         ));
     }

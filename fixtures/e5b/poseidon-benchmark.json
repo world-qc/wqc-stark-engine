@@ -1,7 +1,7 @@
 {
   "benchmark": "idle_leaf_pcs_poseidon_mmcs_groups",
-  "leaf_pcs_bytes_keccak": 2499954,
-  "leaf_pcs_poseidon_estimate_bytes": 723754,
+  "leaf_pcs_bytes_keccak": 2499186,
+  "leaf_pcs_poseidon_estimate_bytes": 722986,
   "mmcs_groups_stark_bytes_keccak": 2400773,
   "mmcs_groups_stark_bytes_poseidon_estimate": 624573,
   "mmcs_groups_stark_saved_bytes": 1776200,

@@ -32,6 +32,11 @@ pub use poseidon_benchmark::{
     SWEEP_REF_LEFT_PCS_BYTES, SWEEP_REF_MMCS_GROUPS_PER_SIDE, SWEEP_REF_ROOT_BYTES,
 };
 
+#[cfg(all(feature = "plonky3-stark", feature = "poseidon-mmcs"))]
+pub use poseidon_benchmark::{
+    benchmark_idle_two_leaf_poseidon_compose, IdleTwoLeafPoseidonComposeReport,
+};
+
 /// Mainnet shrink gate from `on-chain_settlement_scope.md` §7.1 (500 KB pre-wrap).
 pub const SHRINK_GATE_BYTES: u64 = 500 * 1024;
 
@@ -177,6 +182,23 @@ mod tests {
             report.leaf_pcs_poseidon_estimate_bytes < report.leaf_pcs_bytes as i64,
             "estimated Poseidon PCS should shrink vs Keccak"
         );
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    #[ignore = "slow; multi-hour — idle two-leaf RecAgg with poseidon-mmcs PCS"]
+    fn idle_two_leaf_poseidon_compose_smoke() {
+        #[cfg(feature = "poseidon-mmcs")]
+        {
+            use crate::shrink::benchmark_idle_two_leaf_poseidon_compose;
+            let report = benchmark_idle_two_leaf_poseidon_compose("low").expect("compose");
+            assert!(report.compose.has_rec_agg_tail);
+            assert!(report.compose.root_bytes > 0);
+            eprintln!(
+                "poseidon compose root={} saved_vs_ref={}",
+                report.compose.root_bytes, report.root_saved_vs_keccak_ref
+            );
+        }
     }
 
     #[test]

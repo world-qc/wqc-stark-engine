@@ -25,10 +25,14 @@ fn run() -> Result<(), String> {
     let write_fixture = env::args().any(|a| a == "--write-fixture");
     let write_baseline = env::args().any(|a| a == "--write-baseline") || write_fixture;
     let poseidon_benchmark = env::args().any(|a| a == "--poseidon-benchmark");
+    let poseidon_compose = env::args().any(|a| a == "--poseidon-compose");
     let profile = parse_profile()?;
 
     if poseidon_benchmark {
         return run_poseidon_benchmark(&profile.security_level);
+    }
+    if poseidon_compose {
+        return run_poseidon_compose(&profile.security_level);
     }
 
     eprintln!(
@@ -166,4 +170,49 @@ fn run_poseidon_benchmark(security_level: &str) -> Result<(), String> {
     .map_err(|e| format!("write {}: {e}", path.display()))?;
     eprintln!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
     Ok(())
+}
+
+#[cfg(feature = "poseidon-mmcs")]
+fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
+    use wqc_stark_core::shrink::benchmark_idle_two_leaf_poseidon_compose;
+
+    eprintln!(
+        "E5b Poseidon compose: idle two-leaf RecAgg (security_level={security_level})…"
+    );
+    let report = benchmark_idle_two_leaf_poseidon_compose(security_level)?;
+    let out = serde_json::json!({
+        "benchmark": "idle_two_leaf_poseidon_compose",
+        "security_level": report.security_level,
+        "root_bytes": report.compose.root_bytes,
+        "left_leaf_bytes": report.compose.left_leaf_bytes,
+        "right_leaf_bytes": report.compose.right_leaf_bytes,
+        "left_pcs_bytes": report.compose.left_pcs_bytes,
+        "right_pcs_bytes": report.compose.right_pcs_bytes,
+        "has_rec_agg_tail": report.compose.has_rec_agg_tail,
+        "keccak_reference_root_bytes": report.keccak_reference_root_bytes,
+        "root_saved_vs_keccak_ref": report.root_saved_vs_keccak_ref,
+        "reference_sweep": SWEEP_REF_LABEL,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
+    );
+
+    let repo = stark_engine_repo_root();
+    let path = repo.join("fixtures/e5b/poseidon-compose.json");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write {}: {e}", path.display()))?;
+    eprintln!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
+    Ok(())
+}
+
+#[cfg(not(feature = "poseidon-mmcs"))]
+fn run_poseidon_compose(_security_level: &str) -> Result<(), String> {
+    Err("rebuild with --features plonky3-stark,poseidon-mmcs for --poseidon-compose".into())
 }

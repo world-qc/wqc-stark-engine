@@ -1,7 +1,10 @@
 //! Idle leaf PCS — Poseidon2 Mmcs group size benchmark vs Keccak baseline.
 
 use crate::plonky3_stark::recursion::benchmark_poseidon_mmcs_from_child;
+use crate::plonky3_stark::recursion::PCS_MMCS_HASH_ENV;
 use crate::plonky3_stark::recursion::PoseidonMmcsBenchmarkReport;
+use crate::shrink::idle_compose::compose_idle_two_leaf_root_with_pcs;
+use crate::shrink::IdleTwoLeafComposeReport;
 use crate::trace_spec;
 use crate::transcript::StarkContext;
 use crate::generate_plonky3_stark_proof;
@@ -26,6 +29,14 @@ pub struct IdleLeafPoseidonMmcsReport {
     pub reference_mmcs_groups_per_side: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleTwoLeafPoseidonComposeReport {
+    pub security_level: String,
+    pub keccak_reference_root_bytes: u64,
+    pub compose: IdleTwoLeafComposeReport,
+    pub root_saved_vs_keccak_ref: i64,
+}
+
 fn idle_leaf_context(sub_task_id: &'static str, security_level: &'static str) -> StarkContext<'static> {
     StarkContext {
         circuit_id: "e5b-shrink-idle",
@@ -39,18 +50,22 @@ fn idle_leaf_context(sub_task_id: &'static str, security_level: &'static str) ->
     }
 }
 
+fn parse_security_level(security_level: &str) -> Result<&'static str, String> {
+    match security_level {
+        "" => Ok(""),
+        "low" => Ok("low"),
+        "normal" => Ok("normal"),
+        "high" => Ok("high"),
+        "ultra" => Ok("ultra"),
+        other => Err(format!("unsupported security_level {other}")),
+    }
+}
+
 /// Prove one idle leaf PCS and compare Keccak vs Poseidon2 group STARK bytes.
 pub fn benchmark_idle_leaf_poseidon_mmcs(
     security_level: &str,
 ) -> Result<IdleLeafPoseidonMmcsReport, String> {
-    let level: &'static str = match security_level {
-        "" => "",
-        "low" => "low",
-        "normal" => "normal",
-        "high" => "high",
-        "ultra" => "ultra",
-        other => return Err(format!("unsupported security_level {other}")),
-    };
+    let level = parse_security_level(security_level)?;
     let ctx = idle_leaf_context("sub-poseidon-bench", level);
     let trace = trace_spec::idle_qubit0_trace();
     let transcript = generate_plonky3_stark_proof(&ctx, &trace)?;
@@ -72,5 +87,22 @@ pub fn benchmark_idle_leaf_poseidon_mmcs(
         reference_sweep_label: SWEEP_REF_LABEL.to_string(),
         reference_keccak_root_bytes: SWEEP_REF_ROOT_BYTES,
         reference_mmcs_groups_per_side: SWEEP_REF_MMCS_GROUPS_PER_SIDE,
+    })
+}
+
+/// Full idle two-leaf RecAgg compose with `WQC_PCS_MMCS_HASH=poseidon` (requires `poseidon-mmcs`).
+#[cfg(feature = "poseidon-mmcs")]
+pub fn benchmark_idle_two_leaf_poseidon_compose(
+    security_level: &str,
+) -> Result<IdleTwoLeafPoseidonComposeReport, String> {
+    let level = parse_security_level(security_level)?;
+    std::env::set_var(PCS_MMCS_HASH_ENV, "poseidon");
+    let compose = compose_idle_two_leaf_root_with_pcs(level)?;
+    std::env::remove_var(PCS_MMCS_HASH_ENV);
+    Ok(IdleTwoLeafPoseidonComposeReport {
+        security_level: security_level.to_string(),
+        keccak_reference_root_bytes: SWEEP_REF_ROOT_BYTES,
+        root_saved_vs_keccak_ref: SWEEP_REF_ROOT_BYTES as i64 - compose.root_bytes as i64,
+        compose,
     })
 }

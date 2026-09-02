@@ -46,6 +46,7 @@ mod pcs_memory;
 mod poseidon2_spike;
 mod poseidon2_perm_air;
 mod poseidon2_group_m4b;
+mod poseidon_merkle_migration;
 mod prove;
 mod prove_workspace;
 mod transcript_v5;
@@ -110,8 +111,11 @@ pub use fri_mmcs_group_m4b::{
 };
 pub use fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, benchmark_poseidon_mmcs_groups, collect_leaf_mmcs_group_statements,
-    bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups, LeafMmcsGroupStatements,
-    PoseidonMmcsBenchmarkReport, LEAF_MMCS_FOLD_V, LEAF_MMCS_FOLD_V4,
+    bind_leaf_mmcs_with_groups, chal_mmcs_sibling_wire_bytes, hydrate_chal_mmcs_siblings_from_proof,
+    hydrate_val_mmcs_siblings_from_proof, mmcs_sibling_strip_enabled,
+    strip_chal_mmcs_siblings_for_groups, strip_val_mmcs_siblings_for_groups,
+    val_mmcs_sibling_wire_bytes, LeafMmcsFoldGroups, LeafMmcsGroupStatements,
+    PCS_STRIP_MMCS_SIBLINGS_ENV, PoseidonMmcsBenchmarkReport, LEAF_MMCS_FOLD_V, LEAF_MMCS_FOLD_V4,
 };
 pub use fri_mmcs_path::{
     generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
@@ -178,6 +182,9 @@ pub use poseidon2_perm_air::{
 pub use poseidon2_group_m4b::{
     generate_poseidon_group_fold_proof, verify_poseidon_group_fold_proof, PoseidonGroupFoldProof,
     PoseidonMmcsGroupPathAir,
+};
+pub use poseidon_merkle_migration::{
+    mmcs_merkle_mode, poseidon_group_spike_active, poseidon_native_mmcs_active, MmcsMerkleMode,
 };
 pub use pcs_memory::{
     budget_bytes_from_env, estimate_pcs_peak_bytes, plan_pcs_memory, PcsMemoryPlan,
