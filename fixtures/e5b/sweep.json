@@ -59,7 +59,7 @@
     "vs_default_pct": 53
   },
   "next_levers": [
-    "Poseidon2 Mmcs group fold AIR (replace Keccak-in-STARK — ~97% of leaf PCS STARK bytes)",
+    "Poseidon2 Mmcs groups: wide W=48 measured (was extrapolated); Merkle tree migration for consensus",
     "Compound: low security + larger chunk only helps when fri_num_queries > chunk",
     "Wire metadata stripping (siblings/limbs post-bind) — secondary"
   ]

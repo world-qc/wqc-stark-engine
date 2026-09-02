@@ -19,7 +19,8 @@ use super::fri_mmcs_group_m4b::{MmcsPathStatement, M4B_MAX_PATHS, M4B_PATH_IDX_B
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
 use super::fri_mmcs_path_m4a::M4A_SEG_IDX_BITS;
 use super::merkle_poseidon2::{
-    compress_digests_poseidon, hash_val_leaf_poseidon, merkle_root_from_path_poseidon,
+    compress_digests_poseidon, hash_val_leaf_poseidon, leaf_perm_state,
+    merkle_root_from_path_poseidon, poseidon_leaf_perm_count, poseidon_m4b_width_eligible,
 };
 use super::poseidon2_spike::POSEIDON2_WIDTH;
 use super::poseidon2_perm_air::{
@@ -132,13 +133,6 @@ fn digest_bytes_to_limbs(d: [u8; 32]) -> [Mersenne31; DIGEST_LIMBS] {
     })
 }
 
-fn leaf_state_from_row(row: &[Mersenne31]) -> [Mersenne31; POSEIDON2_WIDTH] {
-    let mut state = [Mersenne31::ZERO; POSEIDON2_WIDTH];
-    for (i, v) in row.iter().enumerate().take(POSEIDON2_WIDTH) {
-        state[i] = *v;
-    }
-    state
-}
 
 fn compress_state(left: [u8; 32], right: [u8; 32]) -> [Mersenne31; POSEIDON2_WIDTH] {
     let mut state = [Mersenne31::ZERO; POSEIDON2_WIDTH];
@@ -184,9 +178,12 @@ fn build_group_matrix(
 ) -> RowMajorMatrix<Mersenne31> {
     let mut values = Vec::new();
     for (p, (row, compress_inputs)) in paths.iter().enumerate() {
-        append_perm_segment(&mut values, leaf_state_from_row(row), 0, p);
-        for (i, input) in compress_inputs.iter().enumerate() {
-            append_perm_segment(&mut values, *input, i + 1, p);
+        let n_leaf = poseidon_leaf_perm_count(row.len());
+        for k in 0..n_leaf {
+            append_perm_segment(&mut values, leaf_perm_state(row, k), k, p);
+        }
+        for (layer, input) in compress_inputs.iter().enumerate() {
+            append_perm_segment(&mut values, *input, n_leaf + layer, p);
         }
     }
     let active_rows = values.len() / POSEIDON2_GROUP_WIDTH;
@@ -280,6 +277,8 @@ where
         builder.assert_zero(pv[0].clone() - AB::Expr::from(AB::F::from_u32(path_count as u32)));
         builder.assert_zero(pv[1].clone() - AB::Expr::from(AB::F::from_u32(depth as u32)));
 
+        let n_leaf = poseidon_leaf_perm_count(leaf_width);
+
         for p in 0..path_count {
             let path_sel = eq_bits_const::<AB>(&path_bits_c, p as u32);
             let row_base = pv_path_base(p, leaf_width);
@@ -289,22 +288,29 @@ where
             let sib_base = pv_siblings_off(p, leaf_width);
             let layer_base = pv_layers_off(p, leaf_width);
 
-            // Leaf segment start: bind absorb state.
-            let leaf_start =
-                seg_start_c.clone() * eq_bits_const::<AB>(&seg_bits_c, 0) * path_sel.clone();
-            for i in 0..leaf_width {
-                builder.assert_zero(
-                    leaf_start.clone() * (AB::Expr::from(curr_state[i]) - pv[row_base + i].clone()),
-                );
-            }
-            for i in leaf_width..POSEIDON2_WIDTH {
-                builder.assert_zero(leaf_start.clone() * AB::Expr::from(curr_state[i]));
+            // Leaf perm segment starts: bind row chunk `k`.
+            for k in 0..n_leaf {
+                let leaf_start = seg_start_c.clone()
+                    * eq_bits_const::<AB>(&seg_bits_c, k as u32)
+                    * path_sel.clone();
+                let off = k * POSEIDON2_WIDTH;
+                for i in 0..POSEIDON2_WIDTH {
+                    let row_i = off + i;
+                    if row_i < leaf_width {
+                        builder.assert_zero(
+                            leaf_start.clone()
+                                * (AB::Expr::from(curr_state[i]) - pv[row_base + row_i].clone()),
+                        );
+                    } else {
+                        builder.assert_zero(leaf_start.clone() * AB::Expr::from(curr_state[i]));
+                    }
+                }
             }
 
             // Compress segment starts: left/right digest limbs from PV.
             for layer in 0..depth {
                 let start = seg_start_c.clone()
-                    * eq_bits_const::<AB>(&seg_bits_c, (layer + 1) as u32)
+                    * eq_bits_const::<AB>(&seg_bits_c, (n_leaf + layer) as u32)
                     * path_sel.clone();
                 let bit = pv[idx_bits_base + layer].clone();
                 let not_bit = one.clone() - bit.clone();
@@ -331,8 +337,9 @@ where
             // Segment outputs bind when the next row starts a new segment or padding begins.
             let end_seg = is_tr.clone() * seg_start_n.clone() * live_n.clone();
             let bind_out = end_seg + end_active.clone();
-            let leaf_out =
-                bind_out.clone() * eq_bits_const::<AB>(&seg_bits_c, 0) * path_sel.clone();
+            let leaf_out = bind_out.clone()
+                * eq_bits_const::<AB>(&seg_bits_c, (n_leaf - 1) as u32)
+                * path_sel.clone();
             for limb in 0..DIGEST_LIMBS {
                 builder.assert_zero(
                     leaf_out.clone()
@@ -341,7 +348,7 @@ where
             }
             for layer in 0..depth {
                 let layer_out = bind_out.clone()
-                    * eq_bits_const::<AB>(&seg_bits_c, (layer + 1) as u32)
+                    * eq_bits_const::<AB>(&seg_bits_c, (n_leaf + layer) as u32)
                     * path_sel.clone();
                 for limb in 0..DIGEST_LIMBS {
                     builder.assert_zero(
@@ -453,8 +460,11 @@ fn fold_path_witness(
     expected_root: &[u8; 32],
 ) -> Result<([u8; 32], Vec<[u8; 32]>, Vec<[Mersenne31; POSEIDON2_WIDTH]>), String> {
     let depth = siblings.len();
-    if depth == 0 || depth > FRI_MMCS_MAX_DEPTH || row.len() > POSEIDON2_WIDTH {
-        return Err(format!("unsupported path depth {depth} or leaf width {}", row.len()));
+    if depth == 0 || depth > FRI_MMCS_MAX_DEPTH || !poseidon_m4b_width_eligible(row.len()) {
+        return Err(format!(
+            "unsupported path depth {depth} or leaf width {}",
+            row.len()
+        ));
     }
     let leaf_digest = hash_val_leaf_poseidon(row);
     let mut digest = leaf_digest;
@@ -490,8 +500,8 @@ pub fn generate_poseidon_group_fold_proof(
     if depth == 0 || depth > FRI_MMCS_MAX_DEPTH {
         return Err(format!("unsupported depth {depth}"));
     }
-    if leaf_width > POSEIDON2_WIDTH {
-        return Err(format!("leaf_width {leaf_width} > {POSEIDON2_WIDTH} in prototype"));
+    if !poseidon_m4b_width_eligible(leaf_width) {
+        return Err(format!("leaf_width {leaf_width} not M4b-eligible for Poseidon group"));
     }
 
     let mut rows = Vec::with_capacity(path_count);
@@ -574,7 +584,7 @@ pub fn verify_poseidon_group_fold_proof(
         || path_count == 0
         || depth == 0
         || depth > FRI_MMCS_MAX_DEPTH
-        || leaf_width > POSEIDON2_WIDTH
+        || !poseidon_m4b_width_eligible(leaf_width)
     {
         eprintln!("[PoseidonM4b] Failed: shape");
         return false;
@@ -726,5 +736,34 @@ mod tests {
             poseidon.group_stark.len(),
             keccak.group_stark.len()
         );
+    }
+
+    fn stmt_poseidon_w48(index: usize, sibling: [u8; 32], seed: u32) -> MmcsPathStatement {
+        let row: Vec<_> = (0..48)
+            .map(|i| Mersenne31::from_u32(seed + i as u32 * 17 + 3))
+            .collect();
+        let leaf = hash_val_leaf_poseidon(&row);
+        let root = if index.is_multiple_of(2) {
+            compress_digests_poseidon(leaf, sibling)
+        } else {
+            compress_digests_poseidon(sibling, leaf)
+        };
+        MmcsPathStatement {
+            row,
+            siblings: vec![sibling],
+            index,
+            root,
+        }
+    }
+
+    #[test]
+    fn poseidon_m4b_two_paths_width48_depth1_roundtrip() {
+        let stmts = vec![
+            stmt_poseidon_w48(0, [9u8; 32], 100),
+            stmt_poseidon_w48(1, [3u8; 32], 200),
+        ];
+        let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove w48");
+        assert_eq!(proof.leaf_width, 48);
+        assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
     }
 }

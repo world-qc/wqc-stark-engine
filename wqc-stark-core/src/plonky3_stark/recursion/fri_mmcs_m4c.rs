@@ -373,8 +373,8 @@ fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldPro
             MmcsGroupHashKind::Poseidon => {
                 if !c.iter().all(|s| poseidon_group_width_supported(s.row.len())) {
                     return Err(format!(
-                        "poseidon-mmcs: leaf_width > {} in chunk (prototype limit)",
-                        super::poseidon2_spike::POSEIDON2_WIDTH
+                        "poseidon-mmcs: leaf_width {} not M4b-eligible in chunk",
+                        c.iter().map(|s| s.row.len()).max().unwrap_or(0)
                     ));
                 }
                 let spike = poseidon_spike_statements(c)?;

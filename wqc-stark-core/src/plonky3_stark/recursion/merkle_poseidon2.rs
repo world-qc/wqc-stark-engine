@@ -6,15 +6,42 @@ use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mersenne_31::{default_mersenne31_poseidon2_16, Mersenne31};
 use p3_symmetric::Permutation;
 
+use super::keccak_f_native::KECCAK_RATE;
 use super::poseidon2_spike::{poseidon2_compress32, POSEIDON2_WIDTH};
 
-/// Leaf digest of an M31 row via Poseidon2 sponge (field-native absorb).
-pub fn hash_val_leaf_poseidon(row: &[Mersenne31]) -> [u8; 32] {
+/// Number of width-16 perm segments to absorb a ValMmcs leaf row (M4b-eligible widths).
+pub fn poseidon_leaf_perm_count(leaf_width: usize) -> usize {
+    leaf_width.div_ceil(POSEIDON2_WIDTH)
+}
+
+/// True when the Poseidon2 group prototype can prove this homogeneous width.
+pub fn poseidon_m4b_width_eligible(leaf_width: usize) -> bool {
+    let msg_len = leaf_width.saturating_mul(4);
+    (12..=2 * KECCAK_RATE).contains(&msg_len) && msg_len.is_multiple_of(4)
+}
+
+/// One leaf perm input: row chunk `perm_k * WIDTH .. (perm_k+1) * WIDTH`.
+pub fn leaf_perm_state(row: &[Mersenne31], perm_k: usize) -> [Mersenne31; POSEIDON2_WIDTH] {
     let mut state = [Mersenne31::ZERO; POSEIDON2_WIDTH];
-    for (i, v) in row.iter().enumerate().take(POSEIDON2_WIDTH) {
-        state[i] = *v;
+    let base = perm_k * POSEIDON2_WIDTH;
+    for i in 0..POSEIDON2_WIDTH {
+        if base + i < row.len() {
+            state[i] = row[base + i];
+        }
     }
-    default_mersenne31_poseidon2_16().permute_mut(&mut state);
+    state
+}
+
+/// Leaf digest of an M31 row via chained Poseidon2 perms (field-native absorb).
+pub fn hash_val_leaf_poseidon(row: &[Mersenne31]) -> [u8; 32] {
+    let perm = default_mersenne31_poseidon2_16();
+    let n = poseidon_leaf_perm_count(row.len());
+    let mut state = leaf_perm_state(row, 0);
+    perm.permute_mut(&mut state);
+    for k in 1..n {
+        state = leaf_perm_state(row, k);
+        perm.permute_mut(&mut state);
+    }
     state_to_digest(&state)
 }
 
@@ -66,6 +93,18 @@ mod tests {
         let b = hash_val_leaf_poseidon(&row);
         assert_eq!(a, b);
         assert_ne!(a, [0u8; 32]);
+    }
+
+    #[test]
+    fn poseidon_wide_leaf_hash_w48() {
+        let row: Vec<_> = (0..48)
+            .map(|i| Mersenne31::from_u32(i as u32 + 7))
+            .collect();
+        assert_eq!(poseidon_leaf_perm_count(row.len()), 3);
+        let a = hash_val_leaf_poseidon(&row);
+        let b = hash_val_leaf_poseidon(&row);
+        assert_eq!(a, b);
+        assert_ne!(a, hash_val_leaf_poseidon(&row[..16]));
     }
 
     #[test]

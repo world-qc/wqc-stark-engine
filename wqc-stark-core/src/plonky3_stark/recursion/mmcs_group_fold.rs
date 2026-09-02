@@ -104,7 +104,7 @@ pub fn mmcs_group_hash_kind() -> MmcsGroupHashKind {
 
 /// True when the Poseidon2 group prototype can prove this homogeneous width.
 pub fn poseidon_group_width_supported(leaf_width: usize) -> bool {
-    leaf_width > 0 && leaf_width <= POSEIDON2_WIDTH
+    super::merkle_poseidon2::poseidon_m4b_width_eligible(leaf_width)
 }
 
 /// Spike-only: same opening shape, Poseidon-native digests (siblings kept as opaque 32 B).
