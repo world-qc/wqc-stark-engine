@@ -13,7 +13,9 @@
 //! 4. Wire dedup — leaf/layer digests are recomputed from path statements at verify
 //!    time instead of shipped (mmcs fold wire v5); this is where PCS metadata shrank.
 //! 5. **`WQC_PCS_NESTED_FRI_QUERIES`** → nested Mmcs/FriFold FRI query count (≤ outer);
-//!    default matches outer. Remaining soft size lever on `group_stark` at 40q/chunk40.
+//!    **production default = match outer**. E5b shrink tracking profile:
+//!    outer 40 + chunk40 + nested 8 (`poseidon-compose-default-chunk40-nested8q.json`).
+//!    See `wqc-docs/spec/zk-STARK.md` §5.1.
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

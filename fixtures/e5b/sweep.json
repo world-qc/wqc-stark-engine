@@ -143,10 +143,17 @@
     }
   },
   "next_levers": [
+    "Policy: production nested FRI = outer; shrink tracking = default/chunk40/nested8q (783 597 B)",
+    "Documented in zk-STARK.md §5.1 + engine README / CONTRIBUTING (WQC_PCS_NESTED_FRI_QUERIES)",
     "PASS at low/8q (411 736 B < 500 KB gate)",
-    "New knob WQC_PCS_NESTED_FRI_QUERIES: default/chunk40/nested8q = 783 597 B (−65% vs nested=outer 2.24 MiB)",
-    "Still ~272 KB above 500 KB gate at outer40/nested8; mmcs_groups 176 KB/side + fri_fold 24 KB/side + leaf/meta",
-    "Nested-below-outer is an attestation-STARK soundness tradeoff (not outer FRI slots); document policy before defaulting",
-    "Next toward gate: further nested FRI config, residual PCS meta, or accept nested8 as the 40q production profile"
-  ]
+    "Gap on shrink profile: nested8q still ~272 KB above 500 KB (mmcs_groups ~176 KB/side + fri_fold ~24 KB/side + leaf/meta)",
+    "Next toward gate on nested8q: residual PCS meta / FriFold further pack / accept nested8 as size SoT until gate closes"
+  ],
+  "shrink_tracking": {
+    "label": "poseidon/default/chunk40/nested8q",
+    "root_bytes": 783597,
+    "vs_shrink_gate_bytes": 512000,
+    "gap_to_gate_bytes": 271597,
+    "production_default": "nested_fri_num_queries == outer fri_num_queries"
+  }
 }
