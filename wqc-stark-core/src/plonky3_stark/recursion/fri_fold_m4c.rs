@@ -8,10 +8,12 @@ use super::fri_fold_air::{
     verify_fri_fold_proof, verify_fri_fold_x_native, verify_fri_fold_y_native,
     verify_fri_fold_y_proof, FriFoldStepProof,
 };
-use super::fri_fold_bind::{bind_fri_fold_bundle_to_proof_width, fri_fold_bundle_from_proof, AggFriFoldBundle};
+use super::fri_fold_bind::{
+    bind_fri_fold_bundle_to_proof_width, fri_fold_bundle_from_proof, AggFriFoldBundle,
+};
 use super::fri_fold_group::{
     generate_fri_fold_group_proof_with_queries, verify_fri_fold_group_proof, FriFoldGroupProof,
-    FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y,
+    FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y, FRI_FOLD_KIND_YX,
 };
 
 /// Leaf/Agg PCS FriFold wire version (after Mmcs fold version in V6 cert).
@@ -25,7 +27,9 @@ pub const LEAF_FRI_FOLD_V: u8 = 2;
 pub struct LeafFriFoldGroups {
     /// All first-layer fold_y steps across proven queries.
     pub fold_ys: Option<FriFoldGroupProof>,
-    /// Commit-phase fold_x groups, one per distinct `log_folded_height` (ascending).
+    /// Commit-phase fold_x groups. Prefer a single mixed-height group
+    /// (`log_folded_height = u32::MAX`) to cut nested FRI fixed cost; legacy
+    /// wire may still carry one group per distinct height.
     pub fold_xs_by_log_h: Vec<FriFoldGroupProof>,
 }
 
@@ -44,7 +48,12 @@ pub fn resolve_fri_fold_steps_for_groups(
     trace_width: usize,
 ) -> Result<(Vec<FriFoldStepProof>, Vec<FriFoldStepProof>), String> {
     if (fold_ys.is_empty() && groups.fold_ys.is_some())
-        || (fold_xs.is_empty() && !groups.fold_xs_by_log_h.is_empty())
+        || (fold_xs.is_empty()
+            && (!groups.fold_xs_by_log_h.is_empty()
+                || groups
+                    .fold_ys
+                    .as_ref()
+                    .is_some_and(|g| g.kind == FRI_FOLD_KIND_YX)))
     {
         let mut bundle = fri_fold_bundle_from_proof(proof, trace_width)?;
         strip_fold_starks(&mut bundle.fold_ys);
@@ -55,39 +64,23 @@ pub fn resolve_fri_fold_steps_for_groups(
     }
 }
 
-/// Prove one FriFold-X group per distinct height, sequentially (C10′: do not
-/// clone every height's steps into a map at once).
-fn group_fold_xs_by_log_h(
+/// Prove all FriFold-X steps as one mixed-height group STARK.
+///
+/// Host bind still checks per-step twiddles via residual limbs (or rebuild).
+/// `log_folded_height = None` → wire marker `u32::MAX` (mixed).
+fn group_fold_xs_merged(
     fold_xs: &[FriFoldStepProof],
     num_queries: usize,
 ) -> Result<Vec<FriFoldGroupProof>, String> {
-    let mut heights: Vec<u32> = fold_xs.iter().map(|s| s.log_folded_height).collect();
-    heights.sort_unstable();
-    heights.dedup();
-    let mut out = Vec::with_capacity(heights.len());
-    for log_h in heights {
-        let steps: Vec<FriFoldStepProof> = fold_xs
-            .iter()
-            .filter(|s| s.log_folded_height == log_h)
-            .cloned()
-            .collect();
-        if steps.len() > FRI_FOLD_GROUP_MAX_STEPS {
-            return Err(format!(
-                "fold_x group at log_h={log_h} too large: {}",
-                steps.len()
-            ));
-        }
-        let g = generate_fri_fold_group_proof_with_queries(
-            FRI_FOLD_KIND_X,
-            &steps,
-            Some(log_h),
-            num_queries,
-        )?;
-        drop(steps);
-        out.push(g);
+    if fold_xs.len() > FRI_FOLD_GROUP_MAX_STEPS {
+        return Err(format!(
+            "fold_x merged group too large: {} > {FRI_FOLD_GROUP_MAX_STEPS}",
+            fold_xs.len()
+        ));
     }
-    out.shrink_to_fit();
-    Ok(out)
+    let g =
+        generate_fri_fold_group_proof_with_queries(FRI_FOLD_KIND_X, fold_xs, None, num_queries)?;
+    Ok(vec![g])
 }
 
 /// Prove FriFold groups from a limb-only (or mixed) bundle and strip nested STARKs.
@@ -105,24 +98,37 @@ pub fn apply_leaf_fri_fold_m4c_folds_with_queries(
     bundle: &mut AggFriFoldBundle,
     num_queries: usize,
 ) -> Result<LeafFriFoldGroups, String> {
-    let fold_ys = if bundle.fold_ys.is_empty() {
-        None
+    let total = bundle.fold_ys.len() + bundle.fold_xs.len();
+    let (fold_ys, fold_xs_by_log_h) = if !bundle.fold_ys.is_empty()
+        && !bundle.fold_xs.is_empty()
+        && total <= FRI_FOLD_GROUP_MAX_STEPS
+    {
+        let mut all = Vec::with_capacity(total);
+        all.extend_from_slice(&bundle.fold_ys);
+        all.extend_from_slice(&bundle.fold_xs);
+        let g =
+            generate_fri_fold_group_proof_with_queries(FRI_FOLD_KIND_YX, &all, None, num_queries)?;
+        (Some(g), Vec::new())
     } else {
-        if bundle.fold_ys.len() > FRI_FOLD_GROUP_MAX_STEPS {
-            return Err(format!("fold_y group too large: {}", bundle.fold_ys.len()));
-        }
-        Some(generate_fri_fold_group_proof_with_queries(
-            FRI_FOLD_KIND_Y,
-            &bundle.fold_ys,
-            None,
-            num_queries,
-        )?)
-    };
-
-    let fold_xs_by_log_h = if bundle.fold_xs.is_empty() {
-        Vec::new()
-    } else {
-        group_fold_xs_by_log_h(&bundle.fold_xs, num_queries)?
+        let fold_ys = if bundle.fold_ys.is_empty() {
+            None
+        } else {
+            if bundle.fold_ys.len() > FRI_FOLD_GROUP_MAX_STEPS {
+                return Err(format!("fold_y group too large: {}", bundle.fold_ys.len()));
+            }
+            Some(generate_fri_fold_group_proof_with_queries(
+                FRI_FOLD_KIND_Y,
+                &bundle.fold_ys,
+                None,
+                num_queries,
+            )?)
+        };
+        let fold_xs_by_log_h = if bundle.fold_xs.is_empty() {
+            Vec::new()
+        } else {
+            group_fold_xs_merged(&bundle.fold_xs, num_queries)?
+        };
+        (fold_ys, fold_xs_by_log_h)
     };
 
     strip_fold_starks(&mut bundle.fold_ys);
@@ -138,10 +144,15 @@ fn collect_xs_for_group<'a>(
     fold_xs: &'a [FriFoldStepProof],
     group: &FriFoldGroupProof,
 ) -> Result<Vec<&'a FriFoldStepProof>, String> {
-    let selected: Vec<_> = fold_xs
-        .iter()
-        .filter(|s| s.log_folded_height == group.log_folded_height)
-        .collect();
+    // Mixed-height groups (`u32::MAX`) cover every fold_x step in order.
+    let selected: Vec<_> = if group.log_folded_height == u32::MAX {
+        fold_xs.iter().collect()
+    } else {
+        fold_xs
+            .iter()
+            .filter(|s| s.log_folded_height == group.log_folded_height)
+            .collect()
+    };
     if selected.len() as u32 != group.step_count {
         return Err(format!(
             "fold_x group log_h={} expects {} steps, found {}",
@@ -172,6 +183,18 @@ pub fn bind_fri_fold_with_groups(
     bind_fri_fold_bundle_to_proof_width(proof, fold_ys, fold_xs, trace_width)?;
 
     if let Some(gy) = &groups.fold_ys {
+        if gy.kind == FRI_FOLD_KIND_YX {
+            let mut all = Vec::with_capacity(fold_ys.len() + fold_xs.len());
+            all.extend_from_slice(fold_ys);
+            all.extend_from_slice(fold_xs);
+            if !verify_fri_fold_group_proof(&all, gy) {
+                return Err("FriFold YX group verification failed".into());
+            }
+            if all.iter().any(|s| !s.fold_stark.is_empty()) {
+                return Err("FriFold YX residual steps must have empty fold_stark".into());
+            }
+            return Ok(());
+        }
         if !verify_fri_fold_group_proof(fold_ys, gy) {
             return Err("FriFold Y group verification failed".into());
         }

@@ -5,11 +5,11 @@
 use p3_field::PrimeCharacteristicRing;
 use p3_mersenne_31::Mersenne31;
 
+use super::keccak_f_native::KECCAK_RATE;
+use super::poseidon2_spike::POSEIDON2_WIDTH;
 use crate::plonky3_stark::config_poseidon::{
     compress_digests_poseidon_mmcs, poseidon_sponge_leaf_perm_inputs,
 };
-use super::keccak_f_native::KECCAK_RATE;
-use super::poseidon2_spike::POSEIDON2_WIDTH;
 
 pub use crate::plonky3_stark::config_poseidon::{
     compress_digests_poseidon_mmcs as compress_digests_poseidon,

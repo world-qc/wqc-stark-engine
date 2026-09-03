@@ -17,8 +17,8 @@ mod poseidon_benchmark;
 pub mod baseline;
 
 pub use profile::{query_count_shrink_factor, ShrinkComposeProfile};
-pub use sweep::ShrinkSweep;
 pub use r2_compose::compose_idle_two_leaf_root_r2_only;
+pub use sweep::ShrinkSweep;
 
 #[cfg(feature = "plonky3-stark")]
 pub use idle_compose::{

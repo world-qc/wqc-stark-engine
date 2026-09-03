@@ -306,8 +306,8 @@ mod tests {
         let siblings = [[9u8; 32]; MERKLE_FOLD_DEPTH];
         let root = merkle_root_from_path_keccak(leaf, &siblings, 0);
 
-        let path = generate_keccak_merkle_path_proof(&lde_row, &siblings, 0, &root)
-            .expect("prove fold");
+        let path =
+            generate_keccak_merkle_path_proof(&lde_row, &siblings, 0, &root).expect("prove fold");
         assert!(verify_keccak_merkle_path_proof(
             &lde_row, &siblings, 0, &root, &path
         ));

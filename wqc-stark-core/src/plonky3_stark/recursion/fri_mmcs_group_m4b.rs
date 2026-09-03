@@ -108,7 +108,9 @@ pub fn m4b_group_chunk() -> usize {
 /// Reads [`PCS_NESTED_FRI_QUERIES_ENV`] when set and in `1..=outer_queries`;
 /// otherwise returns `outer_queries` (match the leaf/agg proof).
 pub fn nested_fri_queries(outer_queries: usize) -> usize {
-    let outer = outer_queries.max(1).min(crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES);
+    let outer = outer_queries
+        .max(1)
+        .min(crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES);
     match std::env::var(PCS_NESTED_FRI_QUERIES_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -185,12 +187,7 @@ const fn pv_shared_root_off() -> usize {
     2
 }
 
-const fn pv_path_base(
-    path: usize,
-    leaf_msg_len: usize,
-    depth: usize,
-    shared_root: bool,
-) -> usize {
+const fn pv_path_base(path: usize, leaf_msg_len: usize, depth: usize, shared_root: bool) -> usize {
     let root_len = if shared_root { 0 } else { 32 };
     m4b_header_len(shared_root) + path * (leaf_msg_len + 32 + root_len + depth + depth * 32)
 }
@@ -634,8 +631,7 @@ where
                 idle.clone() * eq_bits_const::<AB>(seg_bits_c, depth as u32) * path_sel.clone();
             for byte_i in 0..KECCAK256_OUT {
                 let packed = pack_byte_from_state_bits::<AB>(&curr[..KECCAK_STATE_BITS], byte_i);
-                builder
-                    .assert_zero(root_idle.clone() * (packed - pv[root_base + byte_i].clone()));
+                builder.assert_zero(root_idle.clone() * (packed - pv[root_base + byte_i].clone()));
             }
         }
 

@@ -10,9 +10,8 @@ use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_mersenne_31::{
-    default_mersenne31_poseidon2_16, Mersenne31,
-    MERSENNE31_POSEIDON2_RC_16_EXTERNAL_FINAL, MERSENNE31_POSEIDON2_RC_16_EXTERNAL_INITIAL,
-    MERSENNE31_POSEIDON2_RC_16_INTERNAL,
+    default_mersenne31_poseidon2_16, Mersenne31, MERSENNE31_POSEIDON2_RC_16_EXTERNAL_FINAL,
+    MERSENNE31_POSEIDON2_RC_16_EXTERNAL_INITIAL, MERSENNE31_POSEIDON2_RC_16_INTERNAL,
 };
 use p3_symmetric::Permutation;
 use p3_uni_stark::{prove, verify};
@@ -132,14 +131,20 @@ fn internal_linear<R: PrimeCharacteristicRing>(state: &mut [R; POSEIDON2_WIDTH])
     }
 }
 
-fn external_round_native(state: &mut [Mersenne31; POSEIDON2_WIDTH], rc: &[Mersenne31; POSEIDON2_WIDTH]) {
+fn external_round_native(
+    state: &mut [Mersenne31; POSEIDON2_WIDTH],
+    rc: &[Mersenne31; POSEIDON2_WIDTH],
+) {
     for i in 0..POSEIDON2_WIDTH {
         state[i] = sbox5(state[i] + rc[i]);
     }
     mds_light(state);
 }
 
-fn external_round<R: PrimeCharacteristicRing>(state: &mut [R; POSEIDON2_WIDTH], rc: &[R; POSEIDON2_WIDTH]) {
+fn external_round<R: PrimeCharacteristicRing>(
+    state: &mut [R; POSEIDON2_WIDTH],
+    rc: &[R; POSEIDON2_WIDTH],
+) {
     for i in 0..POSEIDON2_WIDTH {
         state[i] = sbox5(state[i].clone() + rc[i].clone());
     }
@@ -253,10 +258,8 @@ where
             .map(|v| (*v).into())
             .collect();
 
-        let curr_state: [AB::Var; POSEIDON2_WIDTH] =
-            core::array::from_fn(|i| local[i]);
-        let next_state: [AB::Var; POSEIDON2_WIDTH] =
-            core::array::from_fn(|i| next[i]);
+        let curr_state: [AB::Var; POSEIDON2_WIDTH] = core::array::from_fn(|i| local[i]);
+        let next_state: [AB::Var; POSEIDON2_WIDTH] = core::array::from_fn(|i| next[i]);
         let step_bits: [AB::Var; POSEIDON2_STEP_BITS] =
             core::array::from_fn(|i| local[POSEIDON2_STEP_COL + i]);
         let live_c: AB::Expr = local[POSEIDON2_LIVE_COL].into();
@@ -275,11 +278,15 @@ where
         let not_last_step =
             AB::Expr::ONE - selector_for_step::<AB>(&step_bits, POSEIDON2_PERM_STEPS - 1);
         builder.assert_zero(
-            is_tr.clone() * both_live.clone() * not_last_step
+            is_tr.clone()
+                * both_live.clone()
+                * not_last_step
                 * (step_n - step_c.clone() - AB::Expr::ONE),
         );
         builder.when_first_row().assert_zero(step_c.clone());
-        builder.when_first_row().assert_zero(live_c.clone() - AB::Expr::ONE);
+        builder
+            .when_first_row()
+            .assert_zero(live_c.clone() - AB::Expr::ONE);
 
         // Bind first/last active states to public IO.
         let end_active = live_c.clone() * (AB::Expr::ONE - live_n.clone());
@@ -296,7 +303,9 @@ where
         let idle = AB::Expr::ONE - live_c.clone();
         for i in 0..POSEIDON2_WIDTH {
             builder.assert_zero(
-                is_tr.clone() * idle.clone() * (AB::Expr::from(next_state[i]) - AB::Expr::from(curr_state[i])),
+                is_tr.clone()
+                    * idle.clone()
+                    * (AB::Expr::from(next_state[i]) - AB::Expr::from(curr_state[i])),
             );
         }
 
@@ -361,13 +370,17 @@ fn zero_live_on_padded_rows(matrix: &mut RowMajorMatrix<Mersenne31>) {
     }
 }
 
-pub fn pad_poseidon_perm_matrix(input: [Mersenne31; POSEIDON2_WIDTH]) -> RowMajorMatrix<Mersenne31> {
+pub fn pad_poseidon_perm_matrix(
+    input: [Mersenne31; POSEIDON2_WIDTH],
+) -> RowMajorMatrix<Mersenne31> {
     let mut matrix = pad_air_matrix_for_uni_stark(build_perm_trace(input));
     zero_live_on_padded_rows(&mut matrix);
     matrix
 }
 
-pub fn poseidon2_permute_native(input: [Mersenne31; POSEIDON2_WIDTH]) -> [Mersenne31; POSEIDON2_WIDTH] {
+pub fn poseidon2_permute_native(
+    input: [Mersenne31; POSEIDON2_WIDTH],
+) -> [Mersenne31; POSEIDON2_WIDTH] {
     let mut state = input;
     default_mersenne31_poseidon2_16().permute_mut(&mut state);
     state
@@ -395,10 +408,7 @@ pub fn generate_poseidon2_perm_proof(
     super::prove_workspace::encode_stark_and_drop(proof, "poseidon2 perm")
 }
 
-pub fn verify_poseidon2_perm_proof(
-    input: [Mersenne31; POSEIDON2_WIDTH],
-    stark: &[u8],
-) -> bool {
+pub fn verify_poseidon2_perm_proof(input: [Mersenne31; POSEIDON2_WIDTH], stark: &[u8]) -> bool {
     let output = poseidon2_permute_native(input);
     let pv = build_public_values(&input, &output);
     let proof: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(stark) {
@@ -424,8 +434,7 @@ mod tests {
         assert_eq!(trace.height(), POSEIDON2_PERM_ROWS);
         let last = &trace.values[(POSEIDON2_PERM_ROWS - 1) * POSEIDON2_PERM_WIDTH
             ..POSEIDON2_PERM_ROWS * POSEIDON2_PERM_WIDTH];
-        let got: [Mersenne31; POSEIDON2_WIDTH] =
-            core::array::from_fn(|i| last[i]);
+        let got: [Mersenne31; POSEIDON2_WIDTH] = core::array::from_fn(|i| last[i]);
         assert_eq!(got, poseidon2_permute_native(input));
     }
 

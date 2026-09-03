@@ -1,13 +1,13 @@
 //! Idle leaf PCS — Poseidon2 Mmcs group size benchmark vs Keccak baseline.
 
+use crate::generate_plonky3_stark_proof;
 use crate::plonky3_stark::recursion::benchmark_poseidon_mmcs_from_child;
-use crate::plonky3_stark::recursion::PCS_MMCS_HASH_ENV;
 use crate::plonky3_stark::recursion::PoseidonMmcsBenchmarkReport;
+use crate::plonky3_stark::recursion::PCS_MMCS_HASH_ENV;
 use crate::shrink::idle_compose::compose_idle_two_leaf_root_with_pcs;
 use crate::shrink::IdleTwoLeafComposeReport;
 use crate::trace_spec;
 use crate::transcript::StarkContext;
-use crate::generate_plonky3_stark_proof;
 
 /// Reference row from `fixtures/e5b/sweep.json` (`low/chunk24`).
 pub const SWEEP_REF_LABEL: &str = "low/chunk24";
@@ -37,7 +37,10 @@ pub struct IdleTwoLeafPoseidonComposeReport {
     pub root_saved_vs_keccak_ref: i64,
 }
 
-fn idle_leaf_context(sub_task_id: &'static str, security_level: &'static str) -> StarkContext<'static> {
+fn idle_leaf_context(
+    sub_task_id: &'static str,
+    security_level: &'static str,
+) -> StarkContext<'static> {
     StarkContext {
         circuit_id: "e5b-shrink-idle",
         sub_task_id,

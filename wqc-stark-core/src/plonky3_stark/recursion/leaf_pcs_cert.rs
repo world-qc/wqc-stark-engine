@@ -39,12 +39,12 @@ use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
     FriValMmcsQueryProof,
 };
+use super::fri_mmcs_group_m4b::nested_fri_queries;
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
 };
-use super::fri_mmcs_group_m4b::nested_fri_queries;
-use super::mmcs_group_fold::MmcsGroupFoldProof;
 use super::fri_mmcs_path::FriMmcsPathProof;
+use super::mmcs_group_fold::MmcsGroupFoldProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_leaf_ood_step;
 use super::ood_native::generate_leaf_ood_proof;
@@ -99,9 +99,8 @@ pub struct LeafPcsStarkSizes {
 
 /// Sums `group_stark` / `fold_stark` / `deep_stark` / `ood_stark` lengths (excludes meta / digests).
 pub fn leaf_pcs_stark_sizes(cert: &LeafPcsCertificate) -> LeafPcsStarkSizes {
-    let group_bytes = |gs: &[MmcsGroupFoldProof]| -> usize {
-        gs.iter().map(|g| g.group_stark_len()).sum()
-    };
+    let group_bytes =
+        |gs: &[MmcsGroupFoldProof]| -> usize { gs.iter().map(|g| g.group_stark_len()).sum() };
     let mmcs_groups = group_bytes(&cert.mmcs_groups.val_trace)
         + group_bytes(&cert.mmcs_groups.val_quot)
         + group_bytes(&cert.mmcs_groups.val_quot_batch)
@@ -373,9 +372,12 @@ pub fn build_leaf_pcs_certificate(
         .map_err(|e| format!("R3-M4c Mmcs group fold failed: {e}"))?;
     bind_leaf_mmcs_with_groups(proof, &mmcs_bundle, &mmcs_groups, trace_width)
         .map_err(|e| format!("R3-M4c Mmcs group bind failed: {e}"))?;
-    let _ = super::fri_mmcs_m4c::strip_val_mmcs_siblings_for_groups(&mut mmcs_bundle.val, &mmcs_groups);
     let _ =
-        super::fri_mmcs_m4c::strip_chal_mmcs_siblings_for_groups(&mut mmcs_bundle.chal, &mmcs_groups);
+        super::fri_mmcs_m4c::strip_val_mmcs_siblings_for_groups(&mut mmcs_bundle.val, &mmcs_groups);
+    let _ = super::fri_mmcs_m4c::strip_chal_mmcs_siblings_for_groups(
+        &mut mmcs_bundle.chal,
+        &mmcs_groups,
+    );
 
     let trace_commitment = commitment_root(&proof.commitments.trace)?;
     let merkle_fold = mmcs_bundle.val[0].trace_path.clone();
@@ -779,22 +781,14 @@ pub fn benchmark_poseidon_mmcs_from_child(
         .ok_or_else(|| "decode plonky3 proof from child".to_string())?;
     let proof = proof_from_plonky3(&plonky3)?;
     let bundle = build_leaf_pcs_bundle_from_child(child_bytes)?;
-    let pcs_len =
-        crate::plonky3_stark::recursion::encode_leaf_pcs_bundle_bytes(&bundle).len();
-    let cert = bundle
-        .certs
-        .first()
-        .ok_or("expected one leaf PCS cert")?;
+    let pcs_len = crate::plonky3_stark::recursion::encode_leaf_pcs_bundle_bytes(&bundle).len();
+    let cert = bundle.certs.first().ok_or("expected one leaf PCS cert")?;
     let trace_width = cert.trace_width as usize;
     // Siblings are stripped in the cert wire form; re-extract from the child proof for benchmarks.
     let mmcs_bundle = fri_mmcs_bundle_from_proof_drop_nested(&proof, trace_width)?;
-    let stmts = super::fri_mmcs_m4c::collect_leaf_mmcs_group_statements(
-        &proof,
-        trace_width,
-        &mmcs_bundle,
-    )?;
-    let report =
-        super::fri_mmcs_m4c::benchmark_poseidon_mmcs_groups(&stmts, &cert.mmcs_groups)?;
+    let stmts =
+        super::fri_mmcs_m4c::collect_leaf_mmcs_group_statements(&proof, trace_width, &mmcs_bundle)?;
+    let report = super::fri_mmcs_m4c::benchmark_poseidon_mmcs_groups(&stmts, &cert.mmcs_groups)?;
     Ok((pcs_len, report))
 }
 
@@ -885,21 +879,29 @@ mod tests {
             "expected val quot or quot_batch group"
         );
         assert!(
-            !cert.mmcs_groups.chal_first_layer.is_empty(),
-            "expected chal_first_layer group"
+            !cert.mmcs_groups.chal_first_layer.is_empty()
+                || !cert.mmcs_groups.chal_commit.is_empty(),
+            "expected chal first_layer or merged chal_commit group"
         );
         assert!(
-            cert.fri_val_mmcs.iter().all(|q| q.trace_siblings.is_empty()),
+            cert.fri_val_mmcs
+                .iter()
+                .all(|q| q.trace_siblings.is_empty()),
             "expected stripped trace siblings after M4c group bind"
         );
 
         assert!(
             cert.fri_fold_groups.fold_ys.is_some(),
-            "expected FriFold Y group"
+            "expected FriFold Y or YX group"
         );
         assert!(
-            !cert.fri_fold_groups.fold_xs_by_log_h.is_empty(),
-            "expected FriFold X groups"
+            !cert.fri_fold_groups.fold_xs_by_log_h.is_empty()
+                || cert
+                    .fri_fold_groups
+                    .fold_ys
+                    .as_ref()
+                    .is_some_and(|g| g.kind == crate::plonky3_stark::recursion::FRI_FOLD_KIND_YX),
+            "expected FriFold X groups or merged YX"
         );
         assert!(
             cert.fri_fold_ys.iter().all(|s| s.fold_stark.is_empty()),
@@ -996,7 +998,10 @@ mod tests {
         let cert = build_leaf_pcs_certificate(&proof, kind, stmt).expect("cert");
         assert_eq!(mmcs_merkle_mode(), MmcsMerkleMode::PoseidonNative);
         assert!(
-            cert.mmcs_groups.val_trace.iter().any(|g| g.hash_kind() == MmcsGroupHashKind::Poseidon),
+            cert.mmcs_groups
+                .val_trace
+                .iter()
+                .any(|g| g.hash_kind() == MmcsGroupHashKind::Poseidon),
             "expected Poseidon val_trace group"
         );
         assert!(verify_leaf_pcs_certificate(&proof, &cert));

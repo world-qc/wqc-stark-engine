@@ -32,10 +32,10 @@ use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_agg_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
     FriValMmcsQueryProof,
 };
+use super::fri_mmcs_group_m4b::nested_fri_queries;
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
 };
-use super::fri_mmcs_group_m4b::nested_fri_queries;
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_agg_ood_step;

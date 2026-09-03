@@ -10,8 +10,8 @@ use wqc_stark_core::shrink::baseline::{
 };
 use wqc_stark_core::shrink::compose_idle_two_leaf_root_with_pcs_and_bytes;
 use wqc_stark_core::shrink::{
-    benchmark_idle_leaf_poseidon_mmcs, ShrinkComposeProfile, IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES,
-    SHRINK_GATE_BYTES, SWEEP_REF_LABEL,
+    benchmark_idle_leaf_poseidon_mmcs, ShrinkComposeProfile,
+    IDLE_TWO_LEAF_REGRESSION_CEILING_BYTES, SHRINK_GATE_BYTES, SWEEP_REF_LABEL,
 };
 
 fn main() {
@@ -135,9 +135,7 @@ fn unix_timestamp() -> String {
 }
 
 fn run_poseidon_benchmark(security_level: &str) -> Result<(), String> {
-    eprintln!(
-        "E5b Poseidon Mmcs benchmark: idle leaf PCS (security_level={security_level})…"
-    );
+    eprintln!("E5b Poseidon Mmcs benchmark: idle leaf PCS (security_level={security_level})…");
     let report = benchmark_idle_leaf_poseidon_mmcs(security_level)?;
     let out = serde_json::json!({
         "benchmark": "idle_leaf_pcs_poseidon_mmcs_groups",
@@ -181,9 +179,7 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     } else {
         security_level
     };
-    eprintln!(
-        "E5b Poseidon compose: idle two-leaf RecAgg (security_level={level_label})…"
-    );
+    eprintln!("E5b Poseidon compose: idle two-leaf RecAgg (security_level={level_label})…");
     let report = benchmark_idle_two_leaf_poseidon_compose(security_level)?;
     let profile = ShrinkComposeProfile::from_env().with_security_level(security_level);
     let fri_q = profile.fri_num_queries();

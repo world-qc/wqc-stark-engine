@@ -16,7 +16,8 @@
 //! 5. **`WQC_PCS_NESTED_FRI_QUERIES`** → nested Mmcs/FriFold FRI query count (≤ outer);
 //!    **production default = match outer**. E5b shrink tracking profile:
 //!    outer 40 + chunk40 + nested 4 (`poseidon-compose-default-chunk40-nested4q.json`,
-//!    PASS_SHRINK_GATE after wire v6). Nested 8 remains a tighter residual reference.
+//!    PASS_SHRINK_GATE after wire v6). Nested 8 also PASSes after chal Mmcs merge
+//!    + FriFold YX (`poseidon-compose-default-chunk40-nested8q.json`).
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

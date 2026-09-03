@@ -18,15 +18,17 @@ use super::ef_limbs::{
     ef_add_limbs, ef_assert_eq, ef_halve_limbs, ef_mul_limbs, ef_scale_by_base, ef_sub_limbs,
 };
 use super::fri_fold_air::{
-    verify_fri_fold_x_native, verify_fri_fold_y_native, FriFoldStepProof, FRI_FOLD_WIDTH,
+    fri_fold_x_native_ok, fri_fold_y_native_ok, verify_fri_fold_x_native, verify_fri_fold_y_native,
+    FriFoldStepProof, FRI_FOLD_WIDTH,
 };
 
 /// Soft cap on steps packed into one group STARK (idle unitary ≈ 80–160).
 pub const FRI_FOLD_GROUP_MAX_STEPS: usize = 256;
 
-/// `0` = fold_y (first-layer), `1` = fold_x (commit-phase).
+/// `0` = fold_y (first-layer), `1` = fold_x (commit-phase), `2` = mixed Y then X.
 pub const FRI_FOLD_KIND_Y: u8 = 0;
 pub const FRI_FOLD_KIND_X: u8 = 1;
+pub const FRI_FOLD_KIND_YX: u8 = 2;
 
 /// One outer Plonky3 STARK covering `step_count` FriFold equations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +133,11 @@ where
                 pv[beta_base + 1].clone(),
                 pv[beta_base + 2].clone(),
             ];
-            let vals_base = if shared { base + 1 } else { base + 1 + EF_LIMBS };
+            let vals_base = if shared {
+                base + 1
+            } else {
+                base + 1 + EF_LIMBS
+            };
             let v0 = [
                 pv[vals_base].clone(),
                 pv[vals_base + 1].clone(),
@@ -186,10 +192,23 @@ fn build_group_matrix(step_count: usize) -> RowMajorMatrix<Mersenne31> {
     RowMajorMatrix::new(values, FRI_FOLD_WIDTH)
 }
 
+/// Mixed group is `fold_y` steps followed by `fold_x` steps (same order as bind).
+fn native_check_yx_split(steps: &[FriFoldStepProof]) -> bool {
+    if steps.len() < 2 {
+        return false;
+    }
+    let mut n_y = 0usize;
+    while n_y < steps.len() && fri_fold_y_native_ok(&steps[n_y]) {
+        n_y += 1;
+    }
+    n_y > 0 && n_y < steps.len() && steps[n_y..].iter().all(fri_fold_x_native_ok)
+}
+
 fn native_check_steps(kind: u8, steps: &[FriFoldStepProof]) -> bool {
     match kind {
         FRI_FOLD_KIND_Y => steps.iter().all(verify_fri_fold_y_native),
         FRI_FOLD_KIND_X => steps.iter().all(verify_fri_fold_x_native),
+        FRI_FOLD_KIND_YX => native_check_yx_split(steps),
         _ => false,
     }
 }
@@ -229,7 +248,7 @@ pub fn generate_fri_fold_group_proof_with_queries(
             "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
         ));
     }
-    if kind != FRI_FOLD_KIND_Y && kind != FRI_FOLD_KIND_X {
+    if kind != FRI_FOLD_KIND_Y && kind != FRI_FOLD_KIND_X && kind != FRI_FOLD_KIND_YX {
         return Err(format!("invalid FriFold group kind {kind}"));
     }
     if !native_check_steps(kind, steps) {
@@ -274,7 +293,10 @@ pub fn verify_fri_fold_group_proof(steps: &[FriFoldStepProof], proof: &FriFoldGr
         );
         return false;
     }
-    if proof.kind != FRI_FOLD_KIND_Y && proof.kind != FRI_FOLD_KIND_X {
+    if proof.kind != FRI_FOLD_KIND_Y
+        && proof.kind != FRI_FOLD_KIND_X
+        && proof.kind != FRI_FOLD_KIND_YX
+    {
         eprintln!("[FriFoldGroup] invalid kind {}", proof.kind);
         return false;
     }
@@ -389,5 +411,72 @@ mod tests {
             .expect("group prove");
         assert_eq!(proof.log_folded_height, log_h);
         assert!(verify_fri_fold_group_proof(&steps, &proof));
+    }
+
+    #[test]
+    fn fri_fold_group_x_mixed_height_roundtrip() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(23);
+        let mut steps = Vec::new();
+        for log_h in [2usize, 3, 4] {
+            for i in 0..2 {
+                let index = i % (1 << log_h);
+                steps.push(
+                    fri_fold_step_limbs_x(
+                        index,
+                        log_h,
+                        rand_chal(&mut rng),
+                        rand_chal(&mut rng),
+                        rand_chal(&mut rng),
+                    )
+                    .expect("limbs"),
+                );
+            }
+        }
+        let proof =
+            generate_fri_fold_group_proof(FRI_FOLD_KIND_X, &steps, None).expect("mixed prove");
+        assert_eq!(proof.log_folded_height, u32::MAX);
+        assert!(verify_fri_fold_group_proof(&steps, &proof));
+    }
+
+    #[test]
+    fn fri_fold_group_yx_roundtrip() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(24);
+        let mut steps = Vec::new();
+        for i in 0..2 {
+            let log_h = 2usize;
+            steps.push(
+                fri_fold_step_limbs_y(
+                    i % (1 << log_h),
+                    log_h,
+                    rand_chal(&mut rng),
+                    rand_chal(&mut rng),
+                    rand_chal(&mut rng),
+                )
+                .expect("y"),
+            );
+        }
+        for log_h in [2usize, 3] {
+            steps.push(
+                fri_fold_step_limbs_x(
+                    0,
+                    log_h,
+                    rand_chal(&mut rng),
+                    rand_chal(&mut rng),
+                    rand_chal(&mut rng),
+                )
+                .expect("x"),
+            );
+        }
+        let proof =
+            generate_fri_fold_group_proof(FRI_FOLD_KIND_YX, &steps, None).expect("yx prove");
+        assert_eq!(proof.kind, FRI_FOLD_KIND_YX);
+        assert!(verify_fri_fold_group_proof(&steps, &proof));
+        assert!(!verify_fri_fold_group_proof(
+            &steps,
+            &FriFoldGroupProof {
+                kind: FRI_FOLD_KIND_Y,
+                ..proof.clone()
+            }
+        ));
     }
 }

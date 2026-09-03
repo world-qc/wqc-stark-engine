@@ -399,7 +399,11 @@ mod tests {
 
         let groups = apply_leaf_fri_fold_m4c_folds(&mut bundle).expect("group fold");
         assert!(groups.fold_ys.is_some());
-        assert!(!groups.fold_xs_by_log_h.is_empty());
+        let yx = groups
+            .fold_ys
+            .as_ref()
+            .is_some_and(|g| g.kind == crate::plonky3_stark::recursion::FRI_FOLD_KIND_YX);
+        assert!(yx || !groups.fold_xs_by_log_h.is_empty());
         assert!(bundle.fold_ys.iter().all(|s| s.fold_stark.is_empty()));
         assert!(bundle.fold_xs.iter().all(|s| s.fold_stark.is_empty()));
     }

@@ -95,7 +95,8 @@ impl PseudoCompressionFunction<[u8; 32], 2> for PoseidonPackedCompress {
 }
 
 /// Production ValMmcs: Poseidon2 sponge/compress with packed `[u8; 32]` digests.
-pub type PoseidonValMmcs = MerkleTreeMmcs<Val, u8, PoseidonPackedFieldHash, PoseidonPackedCompress, 2, 32>;
+pub type PoseidonValMmcs =
+    MerkleTreeMmcs<Val, u8, PoseidonPackedFieldHash, PoseidonPackedCompress, 2, 32>;
 pub type PoseidonChallengeMmcs = ExtensionMmcs<Val, Challenge, PoseidonValMmcs>;
 
 /// Field-native (unpacked) ValMmcs — used by isolated smoke tests / migration docs.
@@ -166,10 +167,7 @@ pub fn poseidon_leaf_perm_count(leaf_width: usize) -> usize {
 }
 
 /// Compress perm input state: `left ‖ right` (8+8 limbs).
-pub fn poseidon_compress_perm_input(
-    left: [u8; 32],
-    right: [u8; 32],
-) -> [Mersenne31; 16] {
+pub fn poseidon_compress_perm_input(left: [u8; 32], right: [u8; 32]) -> [Mersenne31; 16] {
     let l = unpack_digest(left);
     let r = unpack_digest(right);
     let mut state = [Mersenne31::ZERO; 16];
@@ -266,7 +264,13 @@ mod tests {
         assert_eq!(poseidon_leaf_perm_count(8), 1);
         assert_eq!(poseidon_leaf_perm_count(9), 2);
         assert_eq!(poseidon_leaf_perm_count(48), 6);
-        assert_eq!(poseidon_sponge_leaf_perm_inputs(&[Mersenne31::ONE; 3]).len(), 1);
-        assert_eq!(poseidon_sponge_leaf_perm_inputs(&[Mersenne31::ONE; 48]).len(), 6);
+        assert_eq!(
+            poseidon_sponge_leaf_perm_inputs(&[Mersenne31::ONE; 3]).len(),
+            1
+        );
+        assert_eq!(
+            poseidon_sponge_leaf_perm_inputs(&[Mersenne31::ONE; 48]).len(),
+            6
+        );
     }
 }

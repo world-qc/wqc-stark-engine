@@ -121,7 +121,7 @@ cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --rel
 
 Baseline JSON lives at `fixtures/e5b/baseline.json`; the golden `idle_two_leaf_root.bin` is gitignored until generated locally.
 
-Poseidon compose fixtures: `fixtures/e5b/poseidon-compose.json` (low/8q PASS), `poseidon-compose-default-chunk40.json` (outer=nested=40), `poseidon-compose-default-chunk40-nested4q.json` (shrink tracking PASS), `…-nested8q.json` (residual ref).
+Poseidon compose fixtures: `fixtures/e5b/poseidon-compose.json` (low/8q PASS), `poseidon-compose-default-chunk40.json` (outer=nested=40), `poseidon-compose-default-chunk40-nested8q.json` and `…-nested4q.json` (shrink tracking PASS).
 
 ## Pull Request Guidelines
 

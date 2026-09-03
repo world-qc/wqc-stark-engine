@@ -409,9 +409,7 @@ pub(crate) fn verify_chal_batch_path_replay(
             (sib, digest)
         };
         let expect = proof.sib_layer_digests[sib_i];
-        if compress_digests(left, right) != expect
-            || proof.sib_compresses[sib_i].digest != expect
-        {
+        if compress_digests(left, right) != expect || proof.sib_compresses[sib_i].digest != expect {
             eprintln!("[FriChalBatch] sib compress {sib_i}");
             return false;
         }
@@ -480,7 +478,8 @@ pub(crate) fn verify_chal_batch_path_digests(
     order.sort_by_key(|&i| std::cmp::Reverse(dimensions[i].height));
     let digests_on_wire = !proof.leaf_digests.is_empty();
     if digests_on_wire
-        && (proof.leaf_keccs.len() < dimensions.len() || proof.leaf_digests.len() < dimensions.len())
+        && (proof.leaf_keccs.len() < dimensions.len()
+            || proof.leaf_digests.len() < dimensions.len())
     {
         return false;
     }

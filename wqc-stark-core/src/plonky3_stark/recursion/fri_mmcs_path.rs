@@ -166,7 +166,13 @@ mod tests {
         let sibling = sib(9);
         let root = compress_digests(leaf, sibling);
         let proof = generate_fri_mmcs_path_proof(&row, &[sibling], 0, &root).expect("prove");
-        assert!(verify_fri_mmcs_path_proof(&row, &[sibling], 0, &root, &proof));
+        assert!(verify_fri_mmcs_path_proof(
+            &row,
+            &[sibling],
+            0,
+            &root,
+            &proof
+        ));
     }
 
     #[test]
@@ -178,7 +184,13 @@ mod tests {
         let sibling = sib(3);
         let root = compress_digests(sibling, leaf); // index=1
         let proof = generate_fri_mmcs_path_proof(&row, &[sibling], 1, &root).expect("prove");
-        assert!(verify_fri_mmcs_path_proof(&row, &[sibling], 1, &root, &proof));
+        assert!(verify_fri_mmcs_path_proof(
+            &row,
+            &[sibling],
+            1,
+            &root,
+            &proof
+        ));
     }
 
     #[test]
@@ -198,6 +210,12 @@ mod tests {
         assert!(proof.compress_starks.iter().all(|c| c.stark.is_empty()));
         assert_eq!(proof.leaf_digest, leaf);
         assert_eq!(proof.layer_digests[0], root);
-        assert!(verify_fri_mmcs_path_proof(&row, &[sibling], 0, &root, &proof));
+        assert!(verify_fri_mmcs_path_proof(
+            &row,
+            &[sibling],
+            0,
+            &root,
+            &proof
+        ));
     }
 }

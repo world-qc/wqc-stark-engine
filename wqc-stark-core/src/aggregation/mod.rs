@@ -253,6 +253,47 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
             s.deep_ro,
             s.ood,
         );
+        for (i, cert) in bundle.certs.iter().enumerate() {
+            let g = &cert.mmcs_groups;
+            let fmt = |label: &str, gs: &[crate::plonky3_stark::recursion::MmcsGroupFoldProof]| {
+                if gs.is_empty() {
+                    return;
+                }
+                let sizes: Vec<String> = gs
+                    .iter()
+                    .map(|x| {
+                        format!(
+                            "n={} d={} w={} stark={}",
+                            x.path_count(),
+                            x.depth(),
+                            x.leaf_width(),
+                            x.group_stark_len()
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "[M4c size]   cert{i} {label}: {} group(s) [{}]",
+                    gs.len(),
+                    sizes.join("; ")
+                );
+            };
+            fmt("val_trace", &g.val_trace);
+            fmt("val_quot", &g.val_quot);
+            fmt("val_quot_batch", &g.val_quot_batch);
+            fmt("chal_first_layer", &g.chal_first_layer);
+            fmt("chal_commit", &g.chal_commit);
+            let xs = &cert.fri_fold_groups.fold_xs_by_log_h;
+            eprintln!(
+                "[M4c size]   cert{i} fri_fold: y={} xs={} (log_h={:?})",
+                cert.fri_fold_groups
+                    .fold_ys
+                    .as_ref()
+                    .map(|y| y.group_stark.len())
+                    .unwrap_or(0),
+                xs.iter().map(|x| x.group_stark.len()).sum::<usize>(),
+                xs.iter().map(|x| x.log_folded_height).collect::<Vec<_>>(),
+            );
+        }
     } else if pcs.agg_cert.is_some() {
         eprintln!("[M4c size] compose {side} agg PCS present (nested)");
     } else {

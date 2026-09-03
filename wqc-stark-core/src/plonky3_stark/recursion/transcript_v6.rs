@@ -18,19 +18,19 @@ use super::fri_fold_bind::{
     AGG_FRI_MAX_FOLD_YS, AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES, LEAF_FRI_MAX_ROUNDS,
     LEAF_FRI_PROVEN_QUERIES,
 };
-use super::fri_fold_group::{FriFoldGroupProof, FRI_FOLD_GROUP_MAX_STEPS};
+use super::fri_fold_group::{FriFoldGroupProof, FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_YX};
 use super::fri_fold_m4c::{LeafFriFoldGroups, LEAF_FRI_FOLD_V};
 use super::fri_mmcs_bind::{FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof};
 use super::fri_mmcs_group_m4b::KeccakGroupFoldProof;
 use super::fri_mmcs_m4c::{LeafMmcsFoldGroups, LEAF_MMCS_FOLD_V};
-use super::mmcs_group_fold::{MmcsGroupFoldProof, MmcsGroupHashKind};
-use super::poseidon2_group_m4b::PoseidonGroupFoldProof;
 use super::fri_mmcs_path::{FriMmcsPathProof, FRI_MMCS_MAX_DEPTH};
 use super::keccak256_air::Keccak256StarkProof;
 use super::leaf_pcs_cert::{LeafPcsBundle, LeafPcsCertificate};
+use super::mmcs_group_fold::{MmcsGroupFoldProof, MmcsGroupHashKind};
 use super::ood_air::{OodAirKind, OodStepProof, OOD_MAX_TRACE_WIDTH};
 use super::opening_cert::{AggPcsCertificate, AGG_PCS_MAX_SIBLINGS, LEAF_PCS_MAX_SIBLINGS};
 use super::pcs_geom::{LeafKind, LEAF_DEEP_RO_MAX_WIDTH, MAX_QUOT_BATCH_LEAF_ROWS};
+use super::poseidon2_group_m4b::PoseidonGroupFoldProof;
 use super::STARK_DIGEST_LEN;
 
 pub const V6_REC_AGG_INNER_MARKER: &[u8] = b"_WQC_REC_AGG_V6_";
@@ -175,11 +175,7 @@ fn decode_fri_folds(
 }
 
 /// Omit residual FriFold limbs from the wire when group STARKs already cover them.
-fn encode_fri_folds_maybe_omit(
-    out: &mut Vec<u8>,
-    folds: &[FriFoldStepProof],
-    omit: bool,
-) {
+fn encode_fri_folds_maybe_omit(out: &mut Vec<u8>, folds: &[FriFoldStepProof], omit: bool) {
     if omit {
         out.extend_from_slice(&0u32.to_le_bytes());
     } else {
@@ -554,10 +550,7 @@ fn encode_mmcs_group_fold(out: &mut Vec<u8>, g: &MmcsGroupFoldProof) {
     }
 }
 
-fn decode_group_fold_body(
-    proof: &[u8],
-    offset: usize,
-) -> Option<(u32, u32, u32, Vec<u8>, usize)> {
+fn decode_group_fold_body(proof: &[u8], offset: usize) -> Option<(u32, u32, u32, Vec<u8>, usize)> {
     let (path_count, cursor) = read_u32_le(proof, offset)?;
     let (depth, cursor) = read_u32_le(proof, cursor)?;
     let (leaf_width, cursor) = read_u32_le(proof, cursor)?;
@@ -1141,7 +1134,11 @@ fn encode_leaf_cert(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
     encode_fri_folds_maybe_omit(
         out,
         &c.fri_folds,
-        !c.fri_fold_groups.fold_xs_by_log_h.is_empty(),
+        !c.fri_fold_groups.fold_xs_by_log_h.is_empty()
+            || c.fri_fold_groups
+                .fold_ys
+                .as_ref()
+                .is_some_and(|g| g.kind == FRI_FOLD_KIND_YX),
     );
     encode_deep_ros(out, &c.deep_ros);
     encode_deep_ro_leaf_traces(out, &c.deep_ro_traces);
@@ -1438,7 +1435,11 @@ fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
     encode_fri_folds_maybe_omit(
         out,
         &c.fri_folds,
-        !c.fri_fold_groups.fold_xs_by_log_h.is_empty(),
+        !c.fri_fold_groups.fold_xs_by_log_h.is_empty()
+            || c.fri_fold_groups
+                .fold_ys
+                .as_ref()
+                .is_some_and(|g| g.kind == FRI_FOLD_KIND_YX),
     );
     encode_deep_ros(out, &c.deep_ros);
     encode_deep_ro_traces(out, &c.deep_ro_traces);
@@ -2050,8 +2051,7 @@ mod tests {
         let mut out = Vec::new();
         encode_mmcs_groups(&mut out, &groups);
         assert_eq!(out[4], MMCS_GROUP_HASH_POSEIDON);
-        let (decoded, end) =
-            decode_mmcs_groups(&out, 0, LEAF_MMCS_FOLD_V).expect("decode groups");
+        let (decoded, end) = decode_mmcs_groups(&out, 0, LEAF_MMCS_FOLD_V).expect("decode groups");
         assert_eq!(end, out.len());
         assert_eq!(decoded, groups);
     }

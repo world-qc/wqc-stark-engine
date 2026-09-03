@@ -2,11 +2,13 @@
 //!
 //! Replaces Keccak sponge segments (width ~1657) with width-16 Poseidon2 perm traces (width 21).
 //!
-//! Public values (depth-packed, no intermediate layer digests):
-//! `path_count | depth | ×path { leaf_row[W] | leaf_digest[8] | root[8]
-//!   | index_bits[depth] | siblings[depth×8] }`.
+//! Public values (`depth` = max path depth; unused high slots are zero):
+//! `path_count | max_depth | [shared_root[8]]`
+//! `×path { leaf_row[W] | leaf_digest[8] | [root[8]] | depth_onehot[max_depth]
+//!   | index_bits[max_depth] | siblings[max_depth×8] }`.
+//! `depth_onehot[i]` is boolean, sums to 1, and means `path_depth == i+1`.
 //! Intermediate Merkle digests chain via segment-boundary transitions; the final
-//! compress output binds to `root`.
+//! compress output binds to `root` at segment `n_leaf + d - 1` when `onehot[d-1]`.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -32,13 +34,13 @@ use super::merkle_poseidon2::{
     merkle_root_from_path_poseidon, poseidon_compress_perm_input, poseidon_leaf_perm_count,
     poseidon_m4b_width_eligible,
 };
-use super::poseidon2_spike::POSEIDON2_WIDTH;
-use crate::plonky3_stark::config_poseidon::POSEIDON_RATE;
 use super::poseidon2_perm_air::{
     build_perm_trace, constrain_external, constrain_internal, constrain_mds_only,
     selector_for_step, POSEIDON2_LIVE_COL, POSEIDON2_PERM_ROWS, POSEIDON2_PERM_STEPS,
     POSEIDON2_PERM_WIDTH, POSEIDON2_STEP_BITS, POSEIDON2_STEP_COL,
 };
+use super::poseidon2_spike::POSEIDON2_WIDTH;
+use crate::plonky3_stark::config_poseidon::POSEIDON_RATE;
 
 pub const POSEIDON2_SEG_ROWS: usize = POSEIDON2_PERM_ROWS;
 
@@ -51,7 +53,7 @@ pub const POSEIDON2_GROUP_WIDTH: usize =
 
 const DIGEST_LIMBS: usize = 8;
 
-/// Homogeneous group proof using Poseidon2 perm segments (prototype).
+/// Poseidon2 Mmcs group proof (homogeneous or mixed depth ≤ `depth` = max_depth).
 ///
 /// Leaf and layer digests are **not** carried: the verifier recomputes them from the
 /// path statements it already holds.
@@ -85,18 +87,13 @@ fn pv_shared_root_off() -> usize {
     2
 }
 
-/// Per-path PV stride: leaf | leaf_digest | [root] | index_bits[depth] | siblings[depth×8].
+/// Per-path PV stride: leaf | leaf_digest | [root] | onehot[D] | index_bits[D] | siblings[D×8].
 fn p2_path_stride(leaf_width: usize, depth: usize, shared_root: bool) -> usize {
     let root_limbs = if shared_root { 0 } else { DIGEST_LIMBS };
-    leaf_width + DIGEST_LIMBS + root_limbs + depth + depth * DIGEST_LIMBS
+    leaf_width + DIGEST_LIMBS + root_limbs + depth + depth + depth * DIGEST_LIMBS
 }
 
-fn p2_num_public(
-    leaf_width: usize,
-    depth: usize,
-    path_count: usize,
-    shared_root: bool,
-) -> usize {
+fn p2_num_public(leaf_width: usize, depth: usize, path_count: usize, shared_root: bool) -> usize {
     p2_header_len(shared_root) + path_count * p2_path_stride(leaf_width, depth, shared_root)
 }
 
@@ -114,9 +111,12 @@ fn pv_root_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) 
         pv_leaf_digest_off(path, leaf_width, depth, shared_root) + DIGEST_LIMBS
     }
 }
-fn pv_index_bits_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+fn pv_onehot_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
     let root_limbs = if shared_root { 0 } else { DIGEST_LIMBS };
     pv_leaf_digest_off(path, leaf_width, depth, shared_root) + DIGEST_LIMBS + root_limbs
+}
+fn pv_index_bits_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+    pv_onehot_off(path, leaf_width, depth, shared_root) + depth
 }
 fn pv_siblings_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
     pv_index_bits_off(path, leaf_width, depth, shared_root) + depth
@@ -172,7 +172,6 @@ fn digest_bytes_to_limbs(d: [u8; 32]) -> [Mersenne31; DIGEST_LIMBS] {
     })
 }
 
-
 fn compress_state(left: [u8; 32], right: [u8; 32]) -> [Mersenne31; POSEIDON2_WIDTH] {
     poseidon_compress_perm_input(left, right)
 }
@@ -215,7 +214,8 @@ fn build_group_matrix(
         }
     }
     let active_rows = values.len() / POSEIDON2_GROUP_WIDTH;
-    let mut matrix = pad_air_matrix_for_uni_stark(RowMajorMatrix::new(values, POSEIDON2_GROUP_WIDTH));
+    let mut matrix =
+        pad_air_matrix_for_uni_stark(RowMajorMatrix::new(values, POSEIDON2_GROUP_WIDTH));
     for r in active_rows..matrix.height() {
         matrix.values[r * POSEIDON2_GROUP_WIDTH + POSEIDON2_LIVE_COL] = Mersenne31::ZERO;
     }
@@ -314,8 +314,30 @@ where
             let row_base = pv_path_base(p, leaf_width, depth, shared);
             let leaf_d_base = pv_leaf_digest_off(p, leaf_width, depth, shared);
             let root_base = pv_root_off(p, leaf_width, depth, shared);
+            let oh_base = pv_onehot_off(p, leaf_width, depth, shared);
             let idx_bits_base = pv_index_bits_off(p, leaf_width, depth, shared);
             let sib_base = pv_siblings_off(p, leaf_width, depth, shared);
+
+            let mut oh_sum = AB::Expr::ZERO;
+            for i in 0..depth {
+                let bit = pv[oh_base + i].clone();
+                builder.assert_zero(bit.clone() * (bit.clone() - one.clone()));
+                oh_sum += bit;
+            }
+            builder.assert_zero(oh_sum - one.clone());
+            for layer in 0..depth {
+                let mut layer_active = AB::Expr::ZERO;
+                for i in layer..depth {
+                    layer_active += pv[oh_base + i].clone();
+                }
+                let unused = one.clone() - layer_active;
+                builder.assert_zero(unused.clone() * pv[idx_bits_base + layer].clone());
+                for limb in 0..DIGEST_LIMBS {
+                    builder.assert_zero(
+                        unused.clone() * pv[sib_base + layer * DIGEST_LIMBS + limb].clone(),
+                    );
+                }
+            }
 
             // Leaf sponge segment starts (RATE=8 overwrite absorb + capacity carry).
             for k in 0..n_leaf {
@@ -359,10 +381,16 @@ where
             }
 
             // Compress layer 0 start: left‖right from leaf_digest PV + sibling[0].
+            // Enabled when depth ≥ 1 (`sum onehot[i] for i≥0`).
             {
+                let mut layer_active = AB::Expr::ZERO;
+                for i in 0..depth {
+                    layer_active += pv[oh_base + i].clone();
+                }
                 let start = seg_start_c.clone()
                     * eq_bits_const::<AB>(&seg_bits_c, n_leaf as u32)
-                    * path_sel.clone();
+                    * path_sel.clone()
+                    * layer_active;
                 let bit = pv[idx_bits_base].clone();
                 let not_bit = one.clone() - bit.clone();
                 for limb in 0..DIGEST_LIMBS {
@@ -370,23 +398,26 @@ where
                     let sib = pv[sib_base + limb].clone();
                     let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
                     let right = bit.clone() * prev + not_bit.clone() * sib;
+                    builder.assert_zero(start.clone() * (AB::Expr::from(curr_state[limb]) - left));
                     builder.assert_zero(
-                        start.clone() * (AB::Expr::from(curr_state[limb]) - left),
-                    );
-                    builder.assert_zero(
-                        start.clone()
-                            * (AB::Expr::from(curr_state[DIGEST_LIMBS + limb]) - right),
+                        start.clone() * (AB::Expr::from(curr_state[DIGEST_LIMBS + limb]) - right),
                     );
                 }
             }
 
             // Compress layers L>0: chain digest from previous segment output on the
             // boundary transition (prev = curr_state[0..8]), siblings/bits from PV.
+            // Layer L is live iff path_depth > L (`sum_{i=L}^{max-1} onehot[i]`).
             for layer in 1..depth {
+                let mut layer_active = AB::Expr::ZERO;
+                for i in layer..depth {
+                    layer_active += pv[oh_base + i].clone();
+                }
                 let start_next = is_tr.clone()
                     * seg_start_n.clone()
                     * eq_bits_const::<AB>(&seg_bits_n, (n_leaf + layer) as u32)
-                    * path_sel_n.clone();
+                    * path_sel_n.clone()
+                    * layer_active;
                 let bit = pv[idx_bits_base + layer].clone();
                 let not_bit = one.clone() - bit.clone();
                 for limb in 0..DIGEST_LIMBS {
@@ -416,15 +447,19 @@ where
                         * (AB::Expr::from(curr_state[limb]) - pv[leaf_d_base + limb].clone()),
                 );
             }
-            // Final compress output binds to claimed Merkle root (no intermediate layer PVs).
-            let root_out = bind_out
-                * eq_bits_const::<AB>(&seg_bits_c, (n_leaf + depth - 1) as u32)
-                * path_sel.clone();
-            for limb in 0..DIGEST_LIMBS {
-                builder.assert_zero(
-                    root_out.clone()
-                        * (AB::Expr::from(curr_state[limb]) - pv[root_base + limb].clone()),
-                );
+            // Final compress output binds to claimed Merkle root at segment
+            // `n_leaf + d - 1` when `onehot[d-1]` (path_depth == d).
+            for d in 1..=depth {
+                let root_out = bind_out.clone()
+                    * eq_bits_const::<AB>(&seg_bits_c, (n_leaf + d - 1) as u32)
+                    * path_sel.clone()
+                    * pv[oh_base + d - 1].clone();
+                for limb in 0..DIGEST_LIMBS {
+                    builder.assert_zero(
+                        root_out.clone()
+                            * (AB::Expr::from(curr_state[limb]) - pv[root_base + limb].clone()),
+                    );
+                }
             }
         }
 
@@ -445,11 +480,11 @@ where
         let path_val_n = bits_value_expr::<AB>(&path_bits_n);
         let new_path = seg_start_n.clone() * eq_bits_const::<AB>(&seg_bits_n, 0);
         builder.assert_zero(
-            is_tr.clone() * (one.clone() - new_path.clone()) * (path_val_n.clone() - path_val_c.clone()),
+            is_tr.clone()
+                * (one.clone() - new_path.clone())
+                * (path_val_n.clone() - path_val_c.clone()),
         );
-        builder.assert_zero(
-            is_tr * new_path * (path_val_n - path_val_c.clone() - one.clone()),
-        );
+        builder.assert_zero(is_tr * new_path * (path_val_n - path_val_c.clone() - one.clone()));
     }
 }
 
@@ -488,7 +523,8 @@ fn build_public_values(
         if rows[p].len() != leaf_width {
             return Err("inhomogeneous leaf_width".into());
         }
-        if siblings[p].len() != depth {
+        let actual_depth = siblings[p].len();
+        if actual_depth == 0 || actual_depth > depth {
             return Err("siblings length mismatch".into());
         }
         pv.extend_from_slice(&rows[p]);
@@ -497,10 +533,21 @@ fn build_public_values(
             pv.extend_from_slice(&digest_bytes_to_limbs(roots[p]));
         }
         for i in 0..depth {
-            pv.push(Mersenne31::from_u32((indices[p] >> i) & 1));
+            pv.push(bool_m31(actual_depth == i + 1));
         }
         for i in 0..depth {
-            pv.extend_from_slice(&digest_bytes_to_limbs(siblings[p][i]));
+            if i < actual_depth {
+                pv.push(Mersenne31::from_u32((indices[p] >> i) & 1));
+            } else {
+                pv.push(Mersenne31::ZERO);
+            }
+        }
+        for i in 0..depth {
+            if i < actual_depth {
+                pv.extend_from_slice(&digest_bytes_to_limbs(siblings[p][i]));
+            } else {
+                pv.extend_from_slice(&digest_bytes_to_limbs([0u8; 32]));
+            }
         }
     }
     debug_assert_eq!(
@@ -566,13 +613,19 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
             "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
         ));
     }
-    let depth = statements[0].siblings.len();
     let leaf_width = statements[0].row.len();
+    let depth = statements
+        .iter()
+        .map(|s| s.siblings.len())
+        .max()
+        .unwrap_or(0);
     if depth == 0 || depth > FRI_MMCS_MAX_DEPTH {
-        return Err(format!("unsupported depth {depth}"));
+        return Err(format!("unsupported max_depth {depth}"));
     }
     if !poseidon_m4b_width_eligible(leaf_width) {
-        return Err(format!("leaf_width {leaf_width} not M4b-eligible for Poseidon group"));
+        return Err(format!(
+            "leaf_width {leaf_width} not M4b-eligible for Poseidon group"
+        ));
     }
 
     let mut rows = Vec::with_capacity(path_count);
@@ -583,8 +636,12 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
     let mut siblings = Vec::with_capacity(path_count);
 
     for (p, stmt) in statements.iter().enumerate() {
-        if stmt.siblings.len() != depth || stmt.row.len() != leaf_width {
-            return Err(format!("path {p}: inhomogeneous shape"));
+        if stmt.row.len() != leaf_width {
+            return Err(format!("path {p}: inhomogeneous leaf_width"));
+        }
+        let d = stmt.siblings.len();
+        if d == 0 || d > depth {
+            return Err(format!("path {p}: unsupported depth {d}"));
         }
         let (leaf_d, _layers, compress) =
             fold_path_witness(&stmt.row, &stmt.siblings, stmt.index, &stmt.root)?;
@@ -665,9 +722,14 @@ pub fn verify_poseidon_group_fold_proof(
     let mut indices = Vec::with_capacity(path_count);
     let mut siblings = Vec::with_capacity(path_count);
 
+    let mut saw_max = false;
     for (p, stmt) in statements.iter().enumerate() {
-        if stmt.row.len() != leaf_width || stmt.siblings.len() != depth {
+        let d = stmt.siblings.len();
+        if stmt.row.len() != leaf_width || d == 0 || d > depth {
             return false;
+        }
+        if d == depth {
+            saw_max = true;
         }
         // Digests are recomputed from the statement, not carried on the wire.
         let leaf_digest = hash_val_leaf_poseidon(&stmt.row);
@@ -681,6 +743,10 @@ pub fn verify_poseidon_group_fold_proof(
         roots.push(stmt.root);
         indices.push(stmt.index as u32);
         siblings.push(stmt.siblings.clone());
+    }
+    if !saw_max {
+        eprintln!("[PoseidonM4b] Failed: max_depth mismatch");
+        return false;
     }
 
     let pv = match build_public_values(
@@ -726,12 +792,12 @@ pub fn verify_poseidon_group_fold_proof(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::fri_mmcs_group_m4b::{
         generate_keccak_group_fold_proof, verify_keccak_group_fold_proof, MmcsPathStatement,
     };
-    use super::super::merkle_keccak::hash_val_leaf_keccak;
     use super::super::keccak_f_native::keccak256_compress;
+    use super::super::merkle_keccak::hash_val_leaf_keccak;
+    use super::*;
     use crate::plonky3_stark::config_poseidon::pack_digest;
     use p3_field::PrimeCharacteristicRing;
 
@@ -905,7 +971,12 @@ mod tests {
     }
 
     /// Two-layer Merkle path (depth=2) exercises compress chaining without layer PVs.
-    fn stmt_poseidon_w3_depth2(index: usize, sib0: [u8; 32], sib1: [u8; 32], seed: u32) -> MmcsPathStatement {
+    fn stmt_poseidon_w3_depth2(
+        index: usize,
+        sib0: [u8; 32],
+        sib1: [u8; 32],
+        seed: u32,
+    ) -> MmcsPathStatement {
         let row = vec![
             Mersenne31::from_u32(seed),
             Mersenne31::from_u32(seed + 1),
@@ -939,7 +1010,10 @@ mod tests {
         ];
         let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove d2");
         assert_eq!(proof.depth, 2);
-        assert_eq!(p2_num_public(3, 2, 2, false), 2 + 2 * (3 + 8 + 8 + 2 + 2 * 8));
+        assert_eq!(
+            p2_num_public(3, 2, 2, false),
+            2 + 2 * (3 + 8 + 8 + 2 + 2 + 2 * 8)
+        );
         assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
     }
 
@@ -961,11 +1035,24 @@ mod tests {
 
     #[test]
     fn poseidon_m4b_pv_stride_is_depth_packed() {
-        // Old MAX_DEPTH=20 stride for W=3 was 360; packed d=8 is 91.
-        assert_eq!(p2_path_stride(3, 8, false), 3 + 16 + 8 + 64);
-        assert_eq!(p2_num_public(3, 8, 40, false), 2 + 40 * 91);
+        // Packed d=8 W=3: leaf + digest + root + onehot + idx + sibs.
+        assert_eq!(p2_path_stride(3, 8, false), 3 + 8 + 8 + 8 + 8 + 64);
+        assert_eq!(p2_num_public(3, 8, 40, false), 2 + 40 * 99);
         // Shared root hoists 8 limbs into the header.
-        assert_eq!(p2_path_stride(3, 8, true), 3 + 8 + 8 + 64);
-        assert_eq!(p2_num_public(3, 8, 40, true), 10 + 40 * 83);
+        assert_eq!(p2_path_stride(3, 8, true), 3 + 8 + 8 + 8 + 64);
+        assert_eq!(p2_num_public(3, 8, 40, true), 10 + 40 * 91);
+    }
+
+    #[test]
+    fn poseidon_m4b_mixed_depth_1_and_2_roundtrip() {
+        let stmts = vec![
+            stmt_poseidon_w3(0, packed_sib(9), 1),
+            stmt_poseidon_w3_depth2(3, packed_sib(3), packed_sib(7), 10),
+        ];
+        let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove mixed");
+        assert_eq!(proof.depth, 2);
+        assert_eq!(proof.path_count, 2);
+        assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
+        assert!(!verify_poseidon_group_fold_proof(&stmts[..1], &proof));
     }
 }

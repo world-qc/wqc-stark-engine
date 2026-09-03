@@ -20,8 +20,8 @@ use core::marker::PhantomData;
 
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
-use p3_fri::FriParameters;
 use p3_field::extension::BinomialExtensionField;
+use p3_fri::FriParameters;
 use p3_keccak::Keccak256Hash;
 use p3_mersenne_31::{default_mersenne31_poseidon2_16, Mersenne31};
 use p3_uni_stark::StarkConfig;

@@ -99,10 +99,10 @@
       "fri_num_queries": 40,
       "nested_fri_num_queries": 8,
       "mmcs_group_chunk": 40,
-      "root_bytes": 783597,
-      "left_pcs_bytes": 344607,
-      "mmcs_groups_per_side": 176323,
-      "note": "outer 40q + nested 8q (fixtures/e5b/poseidon-compose-default-chunk40-nested8q.json); -65% vs nested=outer"
+      "root_bytes": 501883,
+      "left_pcs_bytes": 203750,
+      "mmcs_groups_per_side": 142228,
+      "note": "outer 40q + nested 8q (fixtures/e5b/poseidon-compose-default-chunk40-nested8q.json); PASS_SHRINK_GATE after chal merge + FriFold YX"
     }
   ],
   "best_knob_only": {
@@ -136,12 +136,12 @@
       "gap_to_gate_bytes": 635303
     },
     "chunk40_nested8q": {
-      "root_bytes": 588445,
-      "mmcs_groups_per_side": 176323,
-      "fri_fold_per_side": 23597,
-      "left_pcs_bytes": 247031,
-      "gap_to_gate_bytes": 76445,
-      "note": "after wire v6 + FriFold v2 meta strip"
+      "root_bytes": 501883,
+      "mmcs_groups_per_side": 142228,
+      "fri_fold_per_side": 14441,
+      "left_pcs_bytes": 203750,
+      "gap_to_gate_bytes": -10117,
+      "note": "PASS_SHRINK_GATE after mixed-depth chal Mmcs + FriFold YX"
     },
     "chunk40_nested4q": {
       "root_bytes": 406555,
@@ -153,17 +153,16 @@
     }
   },
   "next_levers": [
-    "Wire v6: omit Mmcs path/chal digests+stubs; FriFold v2: omit residual limbs when groups present",
-    "nested8q after meta strip: 588 445 B (gap 76 445); nested4q: 406 555 B PASS_SHRINK_GATE",
-    "Shrink tracking moved to nested4q (explicit; nested residual below outer low)",
-    "Production default remains nested=outer",
-    "Residual on nested8 toward gate: group_stark only (~176+24 KB/side) or accept nested4"
+    "Wire v6 + FriFold v2 + mixed-depth chal Mmcs + FriFold YX",
+    "nested8q: 501 883 B PASS_SHRINK_GATE (gap -10 117); nested4q: 406 555 B",
+    "Production default remains nested=outer (~2.13 MiB at chunk40)",
+    "Further nested=outer shrink needs mixed-width Mmcs AIR or fewer groups (val_trace w=21 vs quot w=48)"
   ],
   "shrink_tracking": {
-    "label": "poseidon/default/chunk40/nested4q",
-    "root_bytes": 406555,
+    "label": "poseidon/default/chunk40/nested8q",
+    "root_bytes": 501883,
     "vs_shrink_gate_bytes": 512000,
-    "gap_to_gate_bytes": -105445,
+    "gap_to_gate_bytes": -10117,
     "production_default": "nested_fri_num_queries == outer fri_num_queries",
     "prior_nested8q_root_bytes": 588445
   }
