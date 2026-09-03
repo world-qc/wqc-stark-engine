@@ -17,7 +17,7 @@ use super::fri_mmcs_bind::{
 };
 use super::fri_mmcs_group_m4b::{
     generate_keccak_group_fold_proof, generate_keccak_group_fold_proof_with_queries,
-    m4b_group_chunk, verify_keccak_group_fold_proof, MmcsPathStatement,
+    m4b_group_chunk, nested_fri_queries, verify_keccak_group_fold_proof, MmcsPathStatement,
 };
 use super::mmcs_group_fold::{
     mmcs_group_hash_kind, poseidon_group_width_supported, MmcsGroupFoldProof, MmcsGroupHashKind,
@@ -722,7 +722,8 @@ pub fn apply_leaf_mmcs_m4c_folds(
     bundle: &mut AggFriMmcsBundle,
 ) -> Result<LeafMmcsFoldGroups, String> {
     let mut groups = LeafMmcsFoldGroups::default();
-    let num_queries = fri_queries_from_proof(proof)?;
+    let outer_queries = fri_queries_from_proof(proof)?;
+    let num_queries = nested_fri_queries(outer_queries);
 
     let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
     let trace_groups = try_group_chunked(&trace_stmts, num_queries)?;

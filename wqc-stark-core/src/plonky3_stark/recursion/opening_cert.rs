@@ -35,6 +35,7 @@ use super::fri_mmcs_bind::{
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
 };
+use super::fri_mmcs_group_m4b::nested_fri_queries;
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_agg_ood_step;
@@ -195,8 +196,9 @@ pub fn build_agg_pcs_certificate(
     .map_err(|e| format!("R3-M3c3 DeepRo bundle bind failed: {e}"))?;
 
     let proven_queries = fri_queries_from_proof(&proof)?;
+    let nested_queries = nested_fri_queries(proven_queries);
     let fri_fold_groups =
-        apply_leaf_fri_fold_m4c_folds_with_queries(&mut fri_bundle, proven_queries)
+        apply_leaf_fri_fold_m4c_folds_with_queries(&mut fri_bundle, nested_queries)
             .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
     bind_fri_fold_with_groups(
         &proof,

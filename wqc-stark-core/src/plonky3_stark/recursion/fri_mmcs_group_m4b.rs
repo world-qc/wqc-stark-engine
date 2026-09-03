@@ -49,6 +49,14 @@ pub const M4B_GROUP_CHUNK_DEFAULT: usize = 24;
 /// User-facing env: max Merkle paths batched into one Mmcs group STARK during PCS prove.
 pub const PCS_MMCS_GROUP_CHUNK_ENV: &str = "WQC_PCS_MMCS_GROUP_CHUNK";
 
+/// User-facing env: FRI query count for nested Mmcs / FriFold group STARKs.
+///
+/// Defaults to the outer leaf/agg proof's query count. Setting a smaller value
+/// (still `1..=outer`) shrinks nested `group_stark` bytes independently of the
+/// outer FRI ladder — nested soundness is that of the attestation STARKs, not
+/// the outer query slots.
+pub const PCS_NESTED_FRI_QUERIES_ENV: &str = "WQC_PCS_NESTED_FRI_QUERIES";
+
 thread_local! {
     /// Session override for one PCS build (spill / gate). Nested guards restore.
     static M4B_CHUNK_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
@@ -93,6 +101,21 @@ pub fn m4b_group_chunk() -> usize {
         return o;
     }
     m4b_group_chunk_from_env()
+}
+
+/// Nested Mmcs / FriFold FRI query count for group STARKs.
+///
+/// Reads [`PCS_NESTED_FRI_QUERIES_ENV`] when set and in `1..=outer_queries`;
+/// otherwise returns `outer_queries` (match the leaf/agg proof).
+pub fn nested_fri_queries(outer_queries: usize) -> usize {
+    let outer = outer_queries.max(1).min(crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES);
+    match std::env::var(PCS_NESTED_FRI_QUERIES_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        Some(n) if (1..=outer).contains(&n) => n,
+        _ => outer,
+    }
 }
 pub const M4B_PATH_IDX_BITS: usize = 7;
 pub const M4B_PATH_IDX_COL: usize = M4A_SEG_IDX_COL + M4A_SEG_IDX_BITS;
@@ -1150,5 +1173,44 @@ mod tests {
             proof.group_stark.len(),
             separate
         );
+    }
+
+    #[test]
+    fn nested_fri_queries_defaults_to_outer_and_caps_env() {
+        let _guard = EnvGuard::clear(PCS_NESTED_FRI_QUERIES_ENV);
+        assert_eq!(nested_fri_queries(40), 40);
+        assert_eq!(nested_fri_queries(8), 8);
+
+        let _set = EnvGuard::set(PCS_NESTED_FRI_QUERIES_ENV, "8");
+        assert_eq!(nested_fri_queries(40), 8);
+        // Above outer is ignored.
+        let _set2 = EnvGuard::set(PCS_NESTED_FRI_QUERIES_ENV, "16");
+        assert_eq!(nested_fri_queries(8), 8);
+    }
+
+    /// RAII env var restore for unit tests (not thread-safe across parallel tests).
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+    impl EnvGuard {
+        fn clear(key: &'static str) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, prev }
+        }
+        fn set(key: &'static str, val: &str) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, val);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
     }
 }

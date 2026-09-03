@@ -81,6 +81,28 @@
       "left_pcs_bytes": 1071941,
       "mmcs_groups_per_side": 812009,
       "note": "Poseidon 40q/chunk40 with depth-packed PV + wire digest dedup (fixtures/e5b/poseidon-compose-default-chunk40.json); -79% vs Keccak default"
+    },
+    {
+      "label": "poseidon/default/chunk40/nested16q",
+      "security_level": "",
+      "fri_num_queries": 40,
+      "nested_fri_num_queries": 16,
+      "mmcs_group_chunk": 40,
+      "root_bytes": 1147303,
+      "left_pcs_bytes": 526460,
+      "mmcs_groups_per_side": 335264,
+      "note": "outer 40q + nested 16q (fixtures/e5b/poseidon-compose-default-chunk40-nested16q.json)"
+    },
+    {
+      "label": "poseidon/default/chunk40/nested8q",
+      "security_level": "",
+      "fri_num_queries": 40,
+      "nested_fri_num_queries": 8,
+      "mmcs_group_chunk": 40,
+      "root_bytes": 783597,
+      "left_pcs_bytes": 344607,
+      "mmcs_groups_per_side": 176323,
+      "note": "outer 40q + nested 8q (fixtures/e5b/poseidon-compose-default-chunk40-nested8q.json); -65% vs nested=outer"
     }
   ],
   "best_knob_only": {
@@ -106,13 +128,25 @@
       "mmcs_groups_per_side": 812009,
       "fri_fold_per_side": 115245,
       "gap_to_gate_bytes": 1726265
+    },
+    "chunk40_nested16q": {
+      "root_bytes": 1147303,
+      "mmcs_groups_per_side": 335264,
+      "fri_fold_per_side": 46509,
+      "gap_to_gate_bytes": 635303
+    },
+    "chunk40_nested8q": {
+      "root_bytes": 783597,
+      "mmcs_groups_per_side": 176323,
+      "fri_fold_per_side": 23597,
+      "gap_to_gate_bytes": 271597
     }
   },
   "next_levers": [
     "PASS at low/8q (411 736 B < 500 KB gate)",
-    "Group STARK bytes are FRI-commitment dominated: PV depth-pack / shared-root / FriFold pack gave ~0 delta on group_stark",
-    "Wire digest dedup (leaf+layer digests recomputed at verify) is where the metadata bytes came back: -17 KB/side at 40q",
-    "Close 40q gap: poseidon/default/chunk40 ~2.13 MiB still ~4.4x above gate; remaining mass is mmcs_groups group_stark (812 KB/side)",
-    "Next: fewer/larger group STARKs (batch openings, multi-height groups) or a smaller nested FRI config"
+    "New knob WQC_PCS_NESTED_FRI_QUERIES: default/chunk40/nested8q = 783 597 B (−65% vs nested=outer 2.24 MiB)",
+    "Still ~272 KB above 500 KB gate at outer40/nested8; mmcs_groups 176 KB/side + fri_fold 24 KB/side + leaf/meta",
+    "Nested-below-outer is an attestation-STARK soundness tradeoff (not outer FRI slots); document policy before defaulting",
+    "Next toward gate: further nested FRI config, residual PCS meta, or accept nested8 as the 40q production profile"
   ]
 }

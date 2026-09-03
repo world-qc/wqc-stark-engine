@@ -187,12 +187,14 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     let report = benchmark_idle_two_leaf_poseidon_compose(security_level)?;
     let profile = ShrinkComposeProfile::from_env().with_security_level(security_level);
     let fri_q = profile.fri_num_queries();
+    let nested_q = profile.nested_fri_num_queries();
     let chunk = profile.mmcs_group_chunk;
     let out = serde_json::json!({
         "benchmark": "idle_two_leaf_poseidon_compose",
         "security_level": report.security_level,
         "security_level_label": level_label,
         "fri_num_queries": fri_q,
+        "nested_fri_num_queries": nested_q,
         "mmcs_group_chunk": chunk,
         "root_bytes": report.compose.root_bytes,
         "left_leaf_bytes": report.compose.left_leaf_bytes,
@@ -212,12 +214,25 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     );
 
     let repo = stark_engine_repo_root();
-    let filename = match (security_level, chunk) {
-        ("low", 24) => "fixtures/e5b/poseidon-compose.json".to_string(),
-        ("", 24) => "fixtures/e5b/poseidon-compose-default.json".to_string(),
-        ("", c) => format!("fixtures/e5b/poseidon-compose-default-chunk{c}.json"),
-        (level, 24) => format!("fixtures/e5b/poseidon-compose-{level}.json"),
-        (level, c) => format!("fixtures/e5b/poseidon-compose-{level}-chunk{c}.json"),
+    let filename = if nested_q != fri_q {
+        format!(
+            "fixtures/e5b/poseidon-compose-{}-chunk{}-nested{}q.json",
+            if security_level.is_empty() {
+                "default"
+            } else {
+                security_level
+            },
+            chunk,
+            nested_q
+        )
+    } else {
+        match (security_level, chunk) {
+            ("low", 24) => "fixtures/e5b/poseidon-compose.json".to_string(),
+            ("", 24) => "fixtures/e5b/poseidon-compose-default.json".to_string(),
+            ("", c) => format!("fixtures/e5b/poseidon-compose-default-chunk{c}.json"),
+            (level, 24) => format!("fixtures/e5b/poseidon-compose-{level}.json"),
+            (level, c) => format!("fixtures/e5b/poseidon-compose-{level}-chunk{c}.json"),
+        }
     };
     let path = repo.join(&filename);
     if let Some(parent) = path.parent() {

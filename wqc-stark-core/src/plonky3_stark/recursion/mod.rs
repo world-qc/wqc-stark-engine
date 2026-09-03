@@ -109,7 +109,9 @@ pub use fri_mmcs_bind::{
 };
 pub use fri_mmcs_group_m4b::{
     generate_keccak_group_fold_proof, generate_keccak_group_fold_proof_with_queries,
-    verify_keccak_group_fold_proof, KeccakGroupFoldProof, MmcsGroupPathAir, MmcsPathStatement,
+    m4b_group_chunk, nested_fri_queries, verify_keccak_group_fold_proof, KeccakGroupFoldProof,
+    MmcsGroupPathAir, MmcsPathStatement, M4B_GROUP_CHUNK_DEFAULT, PCS_MMCS_GROUP_CHUNK_ENV,
+    PCS_NESTED_FRI_QUERIES_ENV,
 };
 pub use fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, benchmark_poseidon_mmcs_groups, collect_leaf_mmcs_group_statements,
