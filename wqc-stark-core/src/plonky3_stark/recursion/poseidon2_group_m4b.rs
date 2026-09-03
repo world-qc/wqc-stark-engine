@@ -22,7 +22,9 @@ use crate::plonky3_stark::config::{
     devnet_circle_config, devnet_circle_config_with_queries, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES,
 };
 
-use super::fri_mmcs_group_m4b::{MmcsPathStatement, M4B_MAX_PATHS, M4B_PATH_IDX_BITS};
+use super::fri_mmcs_group_m4b::{
+    roots_are_shared, MmcsPathStatement, M4B_MAX_PATHS, M4B_PATH_IDX_BITS,
+};
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
 use super::fri_mmcs_path_m4a::M4A_SEG_IDX_BITS;
 use super::merkle_poseidon2::{
@@ -50,13 +52,14 @@ pub const POSEIDON2_GROUP_WIDTH: usize =
 const DIGEST_LIMBS: usize = 8;
 
 /// Homogeneous group proof using Poseidon2 perm segments (prototype).
+///
+/// Leaf and layer digests are **not** carried: the verifier recomputes them from the
+/// path statements it already holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoseidonGroupFoldProof {
     pub path_count: u32,
     pub depth: u32,
     pub leaf_width: u32,
-    pub leaf_digests: Vec<[u8; 32]>,
-    pub layer_digests: Vec<Vec<[u8; 32]>>,
     pub group_stark: Vec<u8>,
 }
 
@@ -65,31 +68,58 @@ pub struct PoseidonMmcsGroupPathAir {
     pub leaf_width: usize,
     pub depth: usize,
     pub path_count: usize,
+    /// All paths open the same commitment: one `root[8]` in the header instead of per path.
+    pub shared_root: bool,
 }
 
-/// Per-path PV stride: leaf | leaf_digest | root | index_bits[depth] | siblings[depth×8].
-fn p2_path_stride(leaf_width: usize, depth: usize) -> usize {
-    leaf_width + DIGEST_LIMBS * 2 + depth + depth * DIGEST_LIMBS
+/// `path_count | depth` plus the shared `root[8]` when every path shares one root.
+fn p2_header_len(shared_root: bool) -> usize {
+    if shared_root {
+        2 + DIGEST_LIMBS
+    } else {
+        2
+    }
 }
 
-fn p2_num_public(leaf_width: usize, depth: usize, path_count: usize) -> usize {
-    2 + path_count * p2_path_stride(leaf_width, depth)
+fn pv_shared_root_off() -> usize {
+    2
 }
 
-fn pv_path_base(path: usize, leaf_width: usize, depth: usize) -> usize {
-    2 + path * p2_path_stride(leaf_width, depth)
+/// Per-path PV stride: leaf | leaf_digest | [root] | index_bits[depth] | siblings[depth×8].
+fn p2_path_stride(leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+    let root_limbs = if shared_root { 0 } else { DIGEST_LIMBS };
+    leaf_width + DIGEST_LIMBS + root_limbs + depth + depth * DIGEST_LIMBS
 }
-fn pv_leaf_digest_off(path: usize, leaf_width: usize, depth: usize) -> usize {
-    pv_path_base(path, leaf_width, depth) + leaf_width
+
+fn p2_num_public(
+    leaf_width: usize,
+    depth: usize,
+    path_count: usize,
+    shared_root: bool,
+) -> usize {
+    p2_header_len(shared_root) + path_count * p2_path_stride(leaf_width, depth, shared_root)
 }
-fn pv_root_off(path: usize, leaf_width: usize, depth: usize) -> usize {
-    pv_leaf_digest_off(path, leaf_width, depth) + DIGEST_LIMBS
+
+fn pv_path_base(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+    p2_header_len(shared_root) + path * p2_path_stride(leaf_width, depth, shared_root)
 }
-fn pv_index_bits_off(path: usize, leaf_width: usize, depth: usize) -> usize {
-    pv_root_off(path, leaf_width, depth) + DIGEST_LIMBS
+fn pv_leaf_digest_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+    pv_path_base(path, leaf_width, depth, shared_root) + leaf_width
 }
-fn pv_siblings_off(path: usize, leaf_width: usize, depth: usize) -> usize {
-    pv_index_bits_off(path, leaf_width, depth) + depth
+/// Per-path root slot; folds onto the header slot when `shared_root`.
+fn pv_root_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+    if shared_root {
+        pv_shared_root_off()
+    } else {
+        pv_leaf_digest_off(path, leaf_width, depth, shared_root) + DIGEST_LIMBS
+    }
+}
+fn pv_index_bits_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+    let root_limbs = if shared_root { 0 } else { DIGEST_LIMBS };
+    pv_leaf_digest_off(path, leaf_width, depth, shared_root) + DIGEST_LIMBS + root_limbs
+}
+fn pv_siblings_off(path: usize, leaf_width: usize, depth: usize, shared_root: bool) -> usize {
+    pv_index_bits_off(path, leaf_width, depth, shared_root) + depth
 }
 
 impl<F: Field> BaseAir<F> for PoseidonMmcsGroupPathAir {
@@ -102,7 +132,12 @@ impl<F: Field> BaseAir<F> for PoseidonMmcsGroupPathAir {
     }
 
     fn num_public_values(&self) -> usize {
-        p2_num_public(self.leaf_width, self.depth, self.path_count)
+        p2_num_public(
+            self.leaf_width,
+            self.depth,
+            self.path_count,
+            self.shared_root,
+        )
     }
 }
 
@@ -195,6 +230,7 @@ where
         let leaf_width = self.leaf_width;
         let depth = self.depth;
         let path_count = self.path_count;
+        let shared = self.shared_root;
         let main = builder.main();
         let local = main.current_slice();
         let next = main.next_slice();
@@ -275,11 +311,11 @@ where
         for p in 0..path_count {
             let path_sel = eq_bits_const::<AB>(&path_bits_c, p as u32);
             let path_sel_n = eq_bits_const::<AB>(&path_bits_n, p as u32);
-            let row_base = pv_path_base(p, leaf_width, depth);
-            let leaf_d_base = pv_leaf_digest_off(p, leaf_width, depth);
-            let root_base = pv_root_off(p, leaf_width, depth);
-            let idx_bits_base = pv_index_bits_off(p, leaf_width, depth);
-            let sib_base = pv_siblings_off(p, leaf_width, depth);
+            let row_base = pv_path_base(p, leaf_width, depth, shared);
+            let leaf_d_base = pv_leaf_digest_off(p, leaf_width, depth, shared);
+            let root_base = pv_root_off(p, leaf_width, depth, shared);
+            let idx_bits_base = pv_index_bits_off(p, leaf_width, depth, shared);
+            let sib_base = pv_siblings_off(p, leaf_width, depth, shared);
 
             // Leaf sponge segment starts (RATE=8 overwrite absorb + capacity carry).
             for k in 0..n_leaf {
@@ -441,9 +477,13 @@ fn build_public_values(
     indices: &[u32],
     siblings: &[Vec<[u8; 32]>],
 ) -> Result<Vec<Mersenne31>, String> {
-    let mut pv = Vec::with_capacity(p2_num_public(leaf_width, depth, path_count));
+    let shared = roots_are_shared(roots);
+    let mut pv = Vec::with_capacity(p2_num_public(leaf_width, depth, path_count, shared));
     pv.push(Mersenne31::from_u32(path_count as u32));
     pv.push(Mersenne31::from_u32(depth as u32));
+    if shared {
+        pv.extend_from_slice(&digest_bytes_to_limbs(roots[0]));
+    }
     for p in 0..path_count {
         if rows[p].len() != leaf_width {
             return Err("inhomogeneous leaf_width".into());
@@ -453,7 +493,9 @@ fn build_public_values(
         }
         pv.extend_from_slice(&rows[p]);
         pv.extend_from_slice(&digest_bytes_to_limbs(leaf_digests[p]));
-        pv.extend_from_slice(&digest_bytes_to_limbs(roots[p]));
+        if !shared {
+            pv.extend_from_slice(&digest_bytes_to_limbs(roots[p]));
+        }
         for i in 0..depth {
             pv.push(Mersenne31::from_u32((indices[p] >> i) & 1));
         }
@@ -461,6 +503,10 @@ fn build_public_values(
             pv.extend_from_slice(&digest_bytes_to_limbs(siblings[p][i]));
         }
     }
+    debug_assert_eq!(
+        pv.len(),
+        p2_num_public(leaf_width, depth, path_count, shared)
+    );
     Ok(pv)
 }
 
@@ -531,7 +577,6 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
 
     let mut rows = Vec::with_capacity(path_count);
     let mut leaf_digests = Vec::with_capacity(path_count);
-    let mut layer_digests = Vec::with_capacity(path_count);
     let mut compress_inputs = Vec::with_capacity(path_count);
     let mut roots = Vec::with_capacity(path_count);
     let mut indices = Vec::with_capacity(path_count);
@@ -541,11 +586,10 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
         if stmt.siblings.len() != depth || stmt.row.len() != leaf_width {
             return Err(format!("path {p}: inhomogeneous shape"));
         }
-        let (leaf_d, layers, compress) =
+        let (leaf_d, _layers, compress) =
             fold_path_witness(&stmt.row, &stmt.siblings, stmt.index, &stmt.root)?;
         rows.push(stmt.row.clone());
         leaf_digests.push(leaf_d);
-        layer_digests.push(layers);
         compress_inputs.push(compress);
         roots.push(stmt.root);
         indices.push(stmt.index as u32);
@@ -556,6 +600,7 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
         leaf_width,
         depth,
         path_count,
+        shared_root: roots_are_shared(&roots),
     };
     let matrix_paths: Vec<_> = rows
         .iter()
@@ -593,8 +638,6 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
         path_count: path_count as u32,
         depth: depth as u32,
         leaf_width: leaf_width as u32,
-        leaf_digests,
-        layer_digests,
         group_stark,
     })
 }
@@ -607,8 +650,6 @@ pub fn verify_poseidon_group_fold_proof(
     let depth = proof.depth as usize;
     let leaf_width = proof.leaf_width as usize;
     if statements.len() != path_count
-        || proof.leaf_digests.len() != path_count
-        || proof.layer_digests.len() != path_count
         || path_count == 0
         || depth == 0
         || depth > FRI_MMCS_MAX_DEPTH
@@ -619,6 +660,7 @@ pub fn verify_poseidon_group_fold_proof(
     }
 
     let mut rows = Vec::with_capacity(path_count);
+    let mut leaf_digests = Vec::with_capacity(path_count);
     let mut roots = Vec::with_capacity(path_count);
     let mut indices = Vec::with_capacity(path_count);
     let mut siblings = Vec::with_capacity(path_count);
@@ -627,19 +669,15 @@ pub fn verify_poseidon_group_fold_proof(
         if stmt.row.len() != leaf_width || stmt.siblings.len() != depth {
             return false;
         }
-        if proof.leaf_digests[p] != hash_val_leaf_poseidon(&stmt.row) {
-            eprintln!("[PoseidonM4b] Failed: leaf digest path {p}");
-            return false;
-        }
-        if proof.layer_digests[p].len() != depth {
-            return false;
-        }
-        let root = merkle_root_from_path_poseidon(proof.leaf_digests[p], &stmt.siblings, stmt.index);
+        // Digests are recomputed from the statement, not carried on the wire.
+        let leaf_digest = hash_val_leaf_poseidon(&stmt.row);
+        let root = merkle_root_from_path_poseidon(leaf_digest, &stmt.siblings, stmt.index);
         if root != stmt.root {
             eprintln!("[PoseidonM4b] Failed: root path {p}");
             return false;
         }
         rows.push(stmt.row.clone());
+        leaf_digests.push(leaf_digest);
         roots.push(stmt.root);
         indices.push(stmt.index as u32);
         siblings.push(stmt.siblings.clone());
@@ -650,7 +688,7 @@ pub fn verify_poseidon_group_fold_proof(
         depth,
         path_count,
         &rows,
-        &proof.leaf_digests,
+        &leaf_digests,
         &roots,
         &indices,
         &siblings,
@@ -666,6 +704,7 @@ pub fn verify_poseidon_group_fold_proof(
         leaf_width,
         depth,
         path_count,
+        shared_root: roots_are_shared(&roots),
     };
     let stark: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&proof.group_stark)
     {
@@ -900,17 +939,33 @@ mod tests {
         ];
         let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove d2");
         assert_eq!(proof.depth, 2);
-        assert_eq!(
-            p2_num_public(3, 2, 2),
-            2 + 2 * (3 + 8 + 8 + 2 + 2 * 8)
-        );
+        assert_eq!(p2_num_public(3, 2, 2, false), 2 + 2 * (3 + 8 + 8 + 2 + 2 * 8));
+        assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
+    }
+
+    /// Two paths under one commitment exercise the shared-root header.
+    #[test]
+    fn poseidon_m4b_shared_root_roundtrip() {
+        let sib = packed_sib(9);
+        let left = stmt_poseidon_w3(0, sib, 1);
+        let right = MmcsPathStatement {
+            row: left.row.clone(),
+            siblings: vec![sib],
+            index: 0,
+            root: left.root,
+        };
+        let stmts = vec![left, right];
+        let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove shared root");
         assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
     }
 
     #[test]
     fn poseidon_m4b_pv_stride_is_depth_packed() {
         // Old MAX_DEPTH=20 stride for W=3 was 360; packed d=8 is 91.
-        assert_eq!(p2_path_stride(3, 8), 3 + 16 + 8 + 64);
-        assert_eq!(p2_num_public(3, 8, 40), 2 + 40 * 91);
+        assert_eq!(p2_path_stride(3, 8, false), 3 + 16 + 8 + 64);
+        assert_eq!(p2_num_public(3, 8, 40, false), 2 + 40 * 91);
+        // Shared root hoists 8 limbs into the header.
+        assert_eq!(p2_path_stride(3, 8, true), 3 + 8 + 8 + 64);
+        assert_eq!(p2_num_public(3, 8, 40, true), 10 + 40 * 83);
     }
 }

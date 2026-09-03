@@ -35,13 +35,12 @@ use super::merkle_keccak::{compress_digests, hash_val_leaf};
 /// v2: adds `val_quot_batch` + `chal_first_layer` equal-height / single-matrix batch folds.
 /// v3: each homogeneous category holds a `Vec` of chunked group STARKs (peak-RAM
 ///     tunable via `WQC_PCS_MMCS_GROUP_CHUNK`) instead of a single optional group.
-pub const LEAF_MMCS_FOLD_V: u8 = 3;
+/// v5: per-group `hash_tag` byte (Keccak / Poseidon); leaf/layer digests dropped
+///     from the wire and recomputed from the path statements at verify time.
+pub const LEAF_MMCS_FOLD_V: u8 = 5;
 
 const EF_DIM: usize = 3;
 const CHAL_LEAF_WIDTH: usize = 6;
-
-/// v4: per-group `hash_tag` byte (Keccak / Poseidon) before each group body.
-pub const LEAF_MMCS_FOLD_V4: u8 = 4;
 
 /// Collected Mmcs path statements per category (pre-chunk), for benchmarks / replay.
 #[derive(Debug, Clone, Default)]
@@ -1559,16 +1558,12 @@ mod tests {
                 path_count: 1,
                 depth: 1,
                 leaf_width: 3,
-                leaf_digests: vec![[0u8; 32]],
-                layer_digests: vec![vec![[0u8; 32]]],
                 group_stark: vec![1],
             })],
             val_quot: vec![MmcsGroupFoldProof::Keccak(KeccakGroupFoldProof {
                 path_count: 1,
                 depth: 1,
                 leaf_width: 3,
-                leaf_digests: vec![[0u8; 32]],
-                layer_digests: vec![vec![[0u8; 32]]],
                 group_stark: vec![1],
             })],
             ..Default::default()
@@ -1630,16 +1625,12 @@ mod tests {
                 path_count: 1,
                 depth: 2,
                 leaf_width: 6,
-                leaf_digests: vec![[0u8; 32]],
-                layer_digests: vec![vec![[0u8; 32], [0u8; 32]]],
                 group_stark: vec![1],
             })],
             chal_commit: vec![MmcsGroupFoldProof::Keccak(KeccakGroupFoldProof {
                 path_count: 1,
                 depth: 1,
                 leaf_width: 6,
-                leaf_digests: vec![[0u8; 32]],
-                layer_digests: vec![vec![[0u8; 32]]],
                 group_stark: vec![1],
             })],
             ..Default::default()

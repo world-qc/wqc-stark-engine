@@ -18,8 +18,7 @@ use super::ef_limbs::{
     ef_add_limbs, ef_assert_eq, ef_halve_limbs, ef_mul_limbs, ef_scale_by_base, ef_sub_limbs,
 };
 use super::fri_fold_air::{
-    verify_fri_fold_x_native, verify_fri_fold_y_native, FriFoldStepProof, FRI_FOLD_NUM_PUBLIC,
-    FRI_FOLD_WIDTH,
+    verify_fri_fold_x_native, verify_fri_fold_y_native, FriFoldStepProof, FRI_FOLD_WIDTH,
 };
 
 /// Soft cap on steps packed into one group STARK (idle unitary ≈ 80–160).
@@ -43,16 +42,42 @@ pub struct FriFoldGroupProof {
 #[derive(Copy, Clone, Debug)]
 pub struct FriFoldGroupAir {
     pub step_count: usize,
+    /// Every step folds with the same FRI challenge: one `beta[3]` in the header.
+    pub shared_beta: bool,
 }
 
+/// Per-step publics actually constrained by the fold equation:
+/// `t_inv | [beta[3] unless shared] | v0[3] | v1[3] | out[3]`.
+/// `index` / `log_folded_height` stay off the publics — the host binds those
+/// positionally against the FRI transcript.
+const FRI_FOLD_GROUP_STEP_PUBLIC: usize = 1 + 3 + 3 + 3;
+const EF_LIMBS: usize = 3;
+
 impl FriFoldGroupAir {
-    pub fn num_public(step_count: usize) -> usize {
-        1 + step_count * FRI_FOLD_NUM_PUBLIC
+    pub fn num_public(step_count: usize, shared_beta: bool) -> usize {
+        Self::header_len(shared_beta) + step_count * Self::pv_stride(shared_beta)
     }
 
-    fn pv_stride() -> usize {
-        FRI_FOLD_NUM_PUBLIC
+    const fn header_len(shared_beta: bool) -> usize {
+        if shared_beta {
+            1 + EF_LIMBS
+        } else {
+            1
+        }
     }
+
+    const fn pv_stride(shared_beta: bool) -> usize {
+        if shared_beta {
+            FRI_FOLD_GROUP_STEP_PUBLIC
+        } else {
+            FRI_FOLD_GROUP_STEP_PUBLIC + EF_LIMBS
+        }
+    }
+}
+
+/// True when every step in the group shares one FRI fold challenge.
+fn betas_are_shared(steps: &[FriFoldStepProof]) -> bool {
+    steps.len() > 1 && steps.iter().all(|s| s.beta_limbs == steps[0].beta_limbs)
 }
 
 impl<F: Field> BaseAir<F> for FriFoldGroupAir {
@@ -65,7 +90,7 @@ impl<F: Field> BaseAir<F> for FriFoldGroupAir {
     }
 
     fn num_public_values(&self) -> usize {
-        Self::num_public(self.step_count)
+        Self::num_public(self.step_count, self.shared_beta)
     }
 }
 
@@ -94,30 +119,33 @@ where
 
         builder.assert_zero(pv[0].clone() - AB::Expr::from_u32(self.step_count as u32));
 
-        let stride = Self::pv_stride();
+        let shared = self.shared_beta;
+        let stride = Self::pv_stride(shared);
         for i in 0..self.step_count {
-            let base = 1 + i * stride;
-            // Layout per step: index | log_h | t_inv | beta[3] | v0[3] | v1[3] | out[3]
-            let t = pv[base + 2].clone();
+            let base = Self::header_len(shared) + i * stride;
+            // Per step: t_inv | [beta[3] unless shared] | v0[3] | v1[3] | out[3]
+            let t = pv[base].clone();
+            let beta_base = if shared { 1 } else { base + 1 };
             let beta = [
-                pv[base + 3].clone(),
-                pv[base + 4].clone(),
-                pv[base + 5].clone(),
+                pv[beta_base].clone(),
+                pv[beta_base + 1].clone(),
+                pv[beta_base + 2].clone(),
             ];
+            let vals_base = if shared { base + 1 } else { base + 1 + EF_LIMBS };
             let v0 = [
-                pv[base + 6].clone(),
-                pv[base + 7].clone(),
-                pv[base + 8].clone(),
+                pv[vals_base].clone(),
+                pv[vals_base + 1].clone(),
+                pv[vals_base + 2].clone(),
             ];
             let v1 = [
-                pv[base + 9].clone(),
-                pv[base + 10].clone(),
-                pv[base + 11].clone(),
+                pv[vals_base + 3].clone(),
+                pv[vals_base + 4].clone(),
+                pv[vals_base + 5].clone(),
             ];
             let out = [
-                pv[base + 12].clone(),
-                pv[base + 13].clone(),
-                pv[base + 14].clone(),
+                pv[vals_base + 6].clone(),
+                pv[vals_base + 7].clone(),
+                pv[vals_base + 8].clone(),
             ];
 
             let sum = ef_add_limbs::<AB>(&v0, &v1);
@@ -132,17 +160,22 @@ where
 }
 
 fn build_group_public_values(steps: &[FriFoldStepProof]) -> Vec<Mersenne31> {
-    let mut pv = Vec::with_capacity(FriFoldGroupAir::num_public(steps.len()));
+    let shared = betas_are_shared(steps);
+    let mut pv = Vec::with_capacity(FriFoldGroupAir::num_public(steps.len(), shared));
     pv.push(Mersenne31::from_u32(steps.len() as u32));
+    if shared {
+        pv.extend_from_slice(&steps[0].beta_limbs);
+    }
     for s in steps {
-        pv.push(Mersenne31::from_u32(s.index));
-        pv.push(Mersenne31::from_u32(s.log_folded_height));
         pv.push(s.t_inv);
-        pv.extend_from_slice(&s.beta_limbs);
+        if !shared {
+            pv.extend_from_slice(&s.beta_limbs);
+        }
         pv.extend_from_slice(&s.v0_limbs);
         pv.extend_from_slice(&s.v1_limbs);
         pv.extend_from_slice(&s.out_limbs);
     }
+    debug_assert_eq!(pv.len(), FriFoldGroupAir::num_public(steps.len(), shared));
     pv
 }
 
@@ -210,6 +243,7 @@ pub fn generate_fri_fold_group_proof_with_queries(
 
     let air = FriFoldGroupAir {
         step_count: steps.len(),
+        shared_beta: betas_are_shared(steps),
     };
     let pv = build_group_public_values(steps);
     let matrix = pad_air_matrix_for_uni_stark(build_group_matrix(steps.len()));
@@ -258,6 +292,7 @@ pub fn verify_fri_fold_group_proof(steps: &[FriFoldStepProof], proof: &FriFoldGr
 
     let air = FriFoldGroupAir {
         step_count: steps.len(),
+        shared_beta: betas_are_shared(steps),
     };
     let pv = build_group_public_values(steps);
     let stark: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&proof.group_stark)

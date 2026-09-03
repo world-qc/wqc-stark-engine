@@ -6,8 +6,12 @@
 //!    nested Mmcs/FriFold STARKs now match this count
 //! 2. **`WQC_PCS_MMCS_GROUP_CHUNK`** → fewer/larger group STARKs (sublinear wire savings;
 //!    chunk40 helps when fri_num_queries > chunk)
-//! 3. Group AIR / public-value shrink — Poseidon PV is depth-packed (no MAX_DEPTH pad,
-//!    no unused index, no intermediate layer digests; compress chain via transitions)
+//! 3. Group AIR / public-value shrink — both Mmcs group AIRs pack publics by actual
+//!    depth with a shared-root header and chain layer digests through segment
+//!    transitions; FriFold groups hoist a shared `beta`. These cut publics ~4x but
+//!    barely move `group_stark`, which is dominated by nested FRI commitments.
+//! 4. Wire dedup — leaf/layer digests are recomputed from path statements at verify
+//!    time instead of shipped (mmcs fold wire v5); this is where PCS metadata shrank.
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

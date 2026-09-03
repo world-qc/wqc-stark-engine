@@ -57,10 +57,10 @@
       "security_level": "low",
       "fri_num_queries": 8,
       "mmcs_group_chunk": 24,
-      "root_bytes": 418626,
-      "left_pcs_bytes": 198162,
-      "mmcs_groups_per_side": 141858,
-      "note": "PASS_SHRINK_GATE: PV depth-packed + nested 8q (fixtures/e5b/poseidon-compose.json); −92% vs Keccak low"
+      "root_bytes": 411736,
+      "left_pcs_bytes": 194717,
+      "mmcs_groups_per_side": 141900,
+      "note": "PASS_SHRINK_GATE: depth-packed PV + shared-root header + wire digest dedup (fixtures/e5b/poseidon-compose.json); -92% vs Keccak low"
     },
     {
       "label": "poseidon/default/chunk24",
@@ -77,10 +77,10 @@
       "security_level": "",
       "fri_num_queries": 40,
       "mmcs_group_chunk": 40,
-      "root_bytes": 2273253,
-      "left_pcs_bytes": 1089435,
-      "mmcs_groups_per_side": 812191,
-      "note": "Poseidon 40q/chunk40 PV depth-packed (fixtures/e5b/poseidon-compose-default-chunk40.json); −79% vs Keccak default"
+      "root_bytes": 2238265,
+      "left_pcs_bytes": 1071941,
+      "mmcs_groups_per_side": 812009,
+      "note": "Poseidon 40q/chunk40 with depth-packed PV + wire digest dedup (fixtures/e5b/poseidon-compose-default-chunk40.json); -79% vs Keccak default"
     }
   ],
   "best_knob_only": {
@@ -90,10 +90,10 @@
   },
   "best_poseidon": {
     "label": "poseidon/low/chunk24",
-    "root_bytes": 418626,
+    "root_bytes": 411736,
     "vs_keccak_low_pct": 92,
     "vs_shrink_gate_bytes": 512000,
-    "gap_to_gate_bytes": -93374,
+    "gap_to_gate_bytes": -100264,
     "status": "PASS_SHRINK_GATE"
   },
   "poseidon_default_40q": {
@@ -102,16 +102,17 @@
       "mmcs_groups_per_side": 1465045
     },
     "chunk40": {
-      "root_bytes": 2273253,
-      "mmcs_groups_per_side": 812191,
+      "root_bytes": 2238265,
+      "mmcs_groups_per_side": 812009,
       "fri_fold_per_side": 115245,
-      "gap_to_gate_bytes": 1761253
+      "gap_to_gate_bytes": 1726265
     }
   },
   "next_levers": [
-    "PASS at low/8q (418 626 B < 500 KB gate) via nested FRI query match + PV depth-pack",
-    "PV depth-pack (drop index/layer_digests, depth-only pad) structurally correct but STARK proof size dominated by FRI commitments — negligible root delta",
-    "Close 40q gap: poseidon/default/chunk40 ≈ 2.17 MiB still ~4.4x above gate",
-    "Next levers: wire layer_digests/leaf_digests dedup, Keccak group PV parity, FriFold PV pack, shared-root header"
+    "PASS at low/8q (411 736 B < 500 KB gate)",
+    "Group STARK bytes are FRI-commitment dominated: PV depth-pack / shared-root / FriFold pack gave ~0 delta on group_stark",
+    "Wire digest dedup (leaf+layer digests recomputed at verify) is where the metadata bytes came back: -17 KB/side at 40q",
+    "Close 40q gap: poseidon/default/chunk40 ~2.13 MiB still ~4.4x above gate; remaining mass is mmcs_groups group_stark (812 KB/side)",
+    "Next: fewer/larger group STARKs (batch openings, multi-height groups) or a smaller nested FRI config"
   ]
 }

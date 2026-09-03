@@ -108,13 +108,14 @@ pub struct MmcsPathStatement {
 }
 
 /// All paths of a homogeneous group as one outer Plonky3 STARK.
+///
+/// Leaf and layer digests are **not** carried: the verifier recomputes them from the
+/// path statements it already holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeccakGroupFoldProof {
     pub path_count: u32,
     pub depth: u32,
     pub leaf_width: u32,
-    pub leaf_digests: Vec<[u8; 32]>,
-    pub layer_digests: Vec<Vec<[u8; 32]>>,
     pub group_stark: Vec<u8>,
 }
 
@@ -123,43 +124,85 @@ pub struct MmcsGroupPathAir {
     pub leaf_msg_len: usize,
     pub depth: usize,
     pub path_count: usize,
+    /// All paths open the same commitment: one `root[32]` in the header instead of per path.
+    pub shared_root: bool,
 }
 
-/// Public layout:
-/// `path_count | depth | { leaf_msg[L] | leaf_digest[32] | root[32] | index
-///   | index_bits[MAX] | siblings[MAX*32] | layer_digests[MAX*32] } × path_count`
-pub fn m4b_path_stride(leaf_msg_len: usize) -> usize {
-    leaf_msg_len + 65 + FRI_MMCS_MAX_DEPTH + FRI_MMCS_MAX_DEPTH * 64
+/// Public layout (depth-packed, parity with the Poseidon group):
+/// `path_count | depth | [root[32] when shared]
+///   | { leaf_msg[L] | leaf_digest[32] | [root[32] unless shared]
+///       | index_bits[depth] | siblings[depth*32] } × path_count`
+///
+/// Intermediate Merkle digests are not public: compress segments chain their input
+/// from the previous segment's output row, and the last layer binds to `root`.
+pub fn m4b_path_stride(leaf_msg_len: usize, depth: usize, shared_root: bool) -> usize {
+    let root_len = if shared_root { 0 } else { 32 };
+    leaf_msg_len + 32 + root_len + depth + depth * 32
 }
 
-pub fn m4b_num_public(leaf_msg_len: usize, path_count: usize) -> usize {
-    2 + path_count * m4b_path_stride(leaf_msg_len)
+pub fn m4b_num_public(
+    leaf_msg_len: usize,
+    depth: usize,
+    path_count: usize,
+    shared_root: bool,
+) -> usize {
+    m4b_header_len(shared_root) + path_count * m4b_path_stride(leaf_msg_len, depth, shared_root)
 }
 
-const fn pv_path_base(path: usize, leaf_msg_len: usize) -> usize {
-    2 + path * (leaf_msg_len + 65 + FRI_MMCS_MAX_DEPTH + FRI_MMCS_MAX_DEPTH * 64)
+/// `path_count | depth` plus the shared `root[32]` when every path shares one root.
+const fn m4b_header_len(shared_root: bool) -> usize {
+    if shared_root {
+        2 + 32
+    } else {
+        2
+    }
 }
-const fn pv_leaf_digest_off(path: usize, leaf_msg_len: usize) -> usize {
-    pv_path_base(path, leaf_msg_len) + leaf_msg_len
+
+const fn pv_shared_root_off() -> usize {
+    2
 }
-const fn pv_root_off(path: usize, leaf_msg_len: usize) -> usize {
-    pv_path_base(path, leaf_msg_len) + leaf_msg_len + 32
+
+const fn pv_path_base(
+    path: usize,
+    leaf_msg_len: usize,
+    depth: usize,
+    shared_root: bool,
+) -> usize {
+    let root_len = if shared_root { 0 } else { 32 };
+    m4b_header_len(shared_root) + path * (leaf_msg_len + 32 + root_len + depth + depth * 32)
 }
-const fn pv_index_off(path: usize, leaf_msg_len: usize) -> usize {
-    pv_path_base(path, leaf_msg_len) + leaf_msg_len + 64
+const fn pv_leaf_digest_off(
+    path: usize,
+    leaf_msg_len: usize,
+    depth: usize,
+    shared_root: bool,
+) -> usize {
+    pv_path_base(path, leaf_msg_len, depth, shared_root) + leaf_msg_len
 }
-const fn pv_index_bits_off(path: usize, leaf_msg_len: usize) -> usize {
-    pv_path_base(path, leaf_msg_len) + leaf_msg_len + 65
+/// Per-path root slot; only valid when `!shared_root` (see [`pv_shared_root_off`]).
+const fn pv_root_off(path: usize, leaf_msg_len: usize, depth: usize, shared_root: bool) -> usize {
+    if shared_root {
+        pv_shared_root_off()
+    } else {
+        pv_leaf_digest_off(path, leaf_msg_len, depth, shared_root) + 32
+    }
 }
-const fn pv_siblings_off(path: usize, leaf_msg_len: usize) -> usize {
-    pv_path_base(path, leaf_msg_len) + leaf_msg_len + 65 + FRI_MMCS_MAX_DEPTH
+const fn pv_index_bits_off(
+    path: usize,
+    leaf_msg_len: usize,
+    depth: usize,
+    shared_root: bool,
+) -> usize {
+    let root_len = if shared_root { 0 } else { 32 };
+    pv_leaf_digest_off(path, leaf_msg_len, depth, shared_root) + 32 + root_len
 }
-const fn pv_layers_off(path: usize, leaf_msg_len: usize) -> usize {
-    pv_path_base(path, leaf_msg_len)
-        + leaf_msg_len
-        + 65
-        + FRI_MMCS_MAX_DEPTH
-        + FRI_MMCS_MAX_DEPTH * 32
+const fn pv_siblings_off(
+    path: usize,
+    leaf_msg_len: usize,
+    depth: usize,
+    shared_root: bool,
+) -> usize {
+    pv_index_bits_off(path, leaf_msg_len, depth, shared_root) + depth
 }
 
 impl<F: Field> BaseAir<F> for MmcsGroupPathAir {
@@ -172,7 +215,12 @@ impl<F: Field> BaseAir<F> for MmcsGroupPathAir {
     }
 
     fn num_public_values(&self) -> usize {
-        m4b_num_public(self.leaf_msg_len, self.path_count)
+        m4b_num_public(
+            self.leaf_msg_len,
+            self.depth,
+            self.path_count,
+            self.shared_root,
+        )
     }
 }
 
@@ -326,6 +374,7 @@ where
         let l = self.leaf_msg_len;
         let depth = self.depth;
         let path_count = self.path_count;
+        let shared = self.shared_root;
 
         for i in 0..M4B_GROUP_WIDTH {
             let b: AB::Expr = curr[i].into();
@@ -429,12 +478,12 @@ where
 
         for p in 0..path_count {
             let path_sel = eq_bits_const::<AB>(path_bits_c, p as u32);
-            let msg_base = pv_path_base(p, l);
-            let leaf_d_base = pv_leaf_digest_off(p, l);
-            let sib_base = pv_siblings_off(p, l);
-            let layer_base = pv_layers_off(p, l);
-            let idx_bits_base = pv_index_bits_off(p, l);
-            let root_base = pv_root_off(p, l);
+            let path_sel_n = eq_bits_const::<AB>(path_bits_n, p as u32);
+            let msg_base = pv_path_base(p, l, depth, shared);
+            let leaf_d_base = pv_leaf_digest_off(p, l, depth, shared);
+            let sib_base = pv_siblings_off(p, l, depth, shared);
+            let idx_bits_base = pv_index_bits_off(p, l, depth, shared);
+            let root_base = pv_root_off(p, l, depth, shared);
 
             let leaf_start =
                 seg_start_c.clone() * eq_bits_const::<AB>(seg_bits_c, 0) * path_sel.clone();
@@ -487,23 +536,48 @@ where
                 let start = seg_start_c.clone()
                     * eq_bits_const::<AB>(seg_bits_c, (layer + 1) as u32)
                     * path_sel.clone();
-                let bit = pv[idx_bits_base + layer].clone();
-                let not_bit = one.clone() - bit.clone();
-                for byte_i in 0..32 {
-                    let prev = if layer == 0 {
-                        pv[leaf_d_base + byte_i].clone()
-                    } else {
-                        pv[layer_base + (layer - 1) * 32 + byte_i].clone()
-                    };
-                    let sib = pv[sib_base + layer * 32 + byte_i].clone();
-                    let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
-                    let right = bit.clone() * prev + not_bit.clone() * sib;
-                    let packed_l =
-                        pack_byte_from_state_bits::<AB>(&curr[..KECCAK_STATE_BITS], byte_i);
-                    let packed_r =
-                        pack_byte_from_state_bits::<AB>(&curr[..KECCAK_STATE_BITS], 32 + byte_i);
-                    builder.assert_zero(start.clone() * (packed_l - left));
-                    builder.assert_zero(start.clone() * (packed_r - right));
+                // Layer 0 seeds left‖right from the public leaf digest; deeper layers
+                // chain from the previous segment's output on the boundary transition.
+                if layer == 0 {
+                    let bit = pv[idx_bits_base].clone();
+                    let not_bit = one.clone() - bit.clone();
+                    for byte_i in 0..32 {
+                        let prev = pv[leaf_d_base + byte_i].clone();
+                        let sib = pv[sib_base + byte_i].clone();
+                        let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
+                        let right = bit.clone() * prev + not_bit.clone() * sib;
+                        let packed_l =
+                            pack_byte_from_state_bits::<AB>(&curr[..KECCAK_STATE_BITS], byte_i);
+                        let packed_r = pack_byte_from_state_bits::<AB>(
+                            &curr[..KECCAK_STATE_BITS],
+                            32 + byte_i,
+                        );
+                        builder.assert_zero(start.clone() * (packed_l - left));
+                        builder.assert_zero(start.clone() * (packed_r - right));
+                    }
+                } else {
+                    let start_next = is_tr.clone()
+                        * seg_start_n.clone()
+                        * eq_bits_const::<AB>(seg_bits_n, (layer + 1) as u32)
+                        * path_sel_n.clone();
+                    let bit = pv[idx_bits_base + layer].clone();
+                    let not_bit = one.clone() - bit.clone();
+                    for byte_i in 0..32 {
+                        // Previous segment ends on an idle row holding its digest.
+                        let prev =
+                            pack_byte_from_state_bits::<AB>(&curr[..KECCAK_STATE_BITS], byte_i);
+                        let sib = pv[sib_base + layer * 32 + byte_i].clone();
+                        let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
+                        let right = bit.clone() * prev + not_bit.clone() * sib;
+                        let packed_l =
+                            pack_byte_from_state_bits::<AB>(&next[..KECCAK_STATE_BITS], byte_i);
+                        let packed_r = pack_byte_from_state_bits::<AB>(
+                            &next[..KECCAK_STATE_BITS],
+                            32 + byte_i,
+                        );
+                        builder.assert_zero(start_next.clone() * (packed_l - left));
+                        builder.assert_zero(start_next.clone() * (packed_r - right));
+                    }
                 }
                 for byte_i in COMPRESS_MSG_LEN..KECCAK_RATE {
                     let packed =
@@ -531,39 +605,15 @@ where
                 builder
                     .assert_zero(leaf_idle.clone() * (packed - pv[leaf_d_base + byte_i].clone()));
             }
-            for layer in 0..depth {
-                let layer_idle = idle.clone()
-                    * eq_bits_const::<AB>(seg_bits_c, (layer + 1) as u32)
-                    * path_sel.clone();
-                for byte_i in 0..KECCAK256_OUT {
-                    let packed =
-                        pack_byte_from_state_bits::<AB>(&curr[..KECCAK_STATE_BITS], byte_i);
-                    builder.assert_zero(
-                        layer_idle.clone()
-                            * (packed - pv[layer_base + layer * 32 + byte_i].clone()),
-                    );
-                }
+            // Last compress segment settles on the claimed Merkle root; intermediate
+            // layer digests stay witness-only (chained above).
+            let root_idle =
+                idle.clone() * eq_bits_const::<AB>(seg_bits_c, depth as u32) * path_sel.clone();
+            for byte_i in 0..KECCAK256_OUT {
+                let packed = pack_byte_from_state_bits::<AB>(&curr[..KECCAK_STATE_BITS], byte_i);
+                builder
+                    .assert_zero(root_idle.clone() * (packed - pv[root_base + byte_i].clone()));
             }
-
-            let last = depth - 1;
-            for byte_i in 0..32 {
-                builder.assert_zero(
-                    pv[layer_base + last * 32 + byte_i].clone() - pv[root_base + byte_i].clone(),
-                );
-            }
-
-            let mut acc = AB::Expr::ZERO;
-            let mut pow = one.clone();
-            for i in 0..FRI_MMCS_MAX_DEPTH {
-                let bit = pv[idx_bits_base + i].clone();
-                if i < depth {
-                    acc += bit * pow.clone();
-                } else {
-                    builder.assert_zero(bit);
-                }
-                pow *= two.clone();
-            }
-            builder.assert_zero(acc - pv[pv_index_off(p, l)].clone());
         }
 
         builder
@@ -703,7 +753,11 @@ fn fold_path_witness(
     Ok((leaf_msg, leaf_digest, layer_digests, compress_msgs))
 }
 
-#[allow(clippy::too_many_arguments)]
+/// True when every path in the group opens the same Merkle root.
+pub(crate) fn roots_are_shared(roots: &[[u8; 32]]) -> bool {
+    roots.len() > 1 && roots.iter().all(|r| r == &roots[0])
+}
+
 fn build_public_values(
     leaf_msg_len: usize,
     depth: usize,
@@ -713,7 +767,6 @@ fn build_public_values(
     roots: &[[u8; 32]],
     indices: &[u32],
     siblings: &[Vec<[u8; 32]>],
-    layer_digests: &[Vec<[u8; 32]>],
 ) -> Result<Vec<Mersenne31>, String> {
     if path_count == 0 || path_count > M4B_MAX_PATHS {
         return Err(format!("path_count {path_count} out of range"));
@@ -721,15 +774,21 @@ fn build_public_values(
     if depth == 0 || depth > FRI_MMCS_MAX_DEPTH {
         return Err(format!("depth {depth} out of range"));
     }
-    let mut pv = Vec::with_capacity(m4b_num_public(leaf_msg_len, path_count));
+    let shared = roots_are_shared(roots);
+    let mut pv = Vec::with_capacity(m4b_num_public(leaf_msg_len, depth, path_count, shared));
     pv.push(Mersenne31::from_u32(path_count as u32));
     pv.push(Mersenne31::from_u32(depth as u32));
+    if shared {
+        for &b in &roots[0] {
+            pv.push(Mersenne31::from_u32(b as u32));
+        }
+    }
     for p in 0..path_count {
         if leaf_msgs[p].len() != leaf_msg_len {
             return Err("inhomogeneous leaf_msg_len".into());
         }
-        if siblings[p].len() != depth || layer_digests[p].len() != depth {
-            return Err("siblings/layer_digests length mismatch".into());
+        if siblings[p].len() != depth {
+            return Err("siblings length mismatch".into());
         }
         for &b in &leaf_msgs[p] {
             pv.push(Mersenne31::from_u32(b as u32));
@@ -737,32 +796,24 @@ fn build_public_values(
         for &b in &leaf_digests[p] {
             pv.push(Mersenne31::from_u32(b as u32));
         }
-        for &b in &roots[p] {
-            pv.push(Mersenne31::from_u32(b as u32));
-        }
-        pv.push(Mersenne31::from_u32(indices[p]));
-        for i in 0..FRI_MMCS_MAX_DEPTH {
-            let bit = if i < depth { (indices[p] >> i) & 1 } else { 0 };
-            pv.push(Mersenne31::from_u32(bit));
-        }
-        for i in 0..FRI_MMCS_MAX_DEPTH {
-            let s = if i < depth { siblings[p][i] } else { [0u8; 32] };
-            for &b in &s {
+        if !shared {
+            for &b in &roots[p] {
                 pv.push(Mersenne31::from_u32(b as u32));
             }
         }
-        for i in 0..FRI_MMCS_MAX_DEPTH {
-            let d = if i < depth {
-                layer_digests[p][i]
-            } else {
-                [0u8; 32]
-            };
-            for &b in &d {
+        for i in 0..depth {
+            pv.push(Mersenne31::from_u32((indices[p] >> i) & 1));
+        }
+        for i in 0..depth {
+            for &b in &siblings[p][i] {
                 pv.push(Mersenne31::from_u32(b as u32));
             }
         }
     }
-    debug_assert_eq!(pv.len(), m4b_num_public(leaf_msg_len, path_count));
+    debug_assert_eq!(
+        pv.len(),
+        m4b_num_public(leaf_msg_len, depth, path_count, shared)
+    );
     Ok(pv)
 }
 
@@ -797,7 +848,6 @@ pub fn generate_keccak_group_fold_proof_with_queries(
 
     let mut leaf_msgs = Vec::with_capacity(path_count);
     let mut leaf_digests = Vec::with_capacity(path_count);
-    let mut layer_digests = Vec::with_capacity(path_count);
     let mut compress_per_path = Vec::with_capacity(path_count);
     let mut roots = Vec::with_capacity(path_count);
     let mut indices = Vec::with_capacity(path_count);
@@ -810,11 +860,10 @@ pub fn generate_keccak_group_fold_proof_with_queries(
         if stmt.row.len() != leaf_width {
             return Err(format!("path {p}: inhomogeneous leaf_width"));
         }
-        let (leaf_msg, leaf_digest, layers, compress_msgs) =
+        let (leaf_msg, leaf_digest, _layers, compress_msgs) =
             fold_path_witness(&stmt.row, &stmt.siblings, stmt.index, &stmt.root)?;
         leaf_msgs.push(leaf_msg);
         leaf_digests.push(leaf_digest);
-        layer_digests.push(layers);
         compress_per_path.push(compress_msgs);
         roots.push(stmt.root);
         indices.push(stmt.index as u32);
@@ -826,6 +875,7 @@ pub fn generate_keccak_group_fold_proof_with_queries(
         leaf_msg_len,
         depth,
         path_count,
+        shared_root: roots_are_shared(&roots),
     };
     // Build the AIR matrix, then free compress witnesses before prove.
     let matrix = {
@@ -847,7 +897,6 @@ pub fn generate_keccak_group_fold_proof_with_queries(
         &roots,
         &indices,
         &siblings,
-        &layer_digests,
     )?;
     // Wire result keeps digests only; free msg/index/sibling copies before prove.
     drop(leaf_msgs);
@@ -868,8 +917,6 @@ pub fn generate_keccak_group_fold_proof_with_queries(
         path_count: path_count as u32,
         depth: depth as u32,
         leaf_width: leaf_width as u32,
-        leaf_digests,
-        layer_digests,
         group_stark,
     })
 }
@@ -881,8 +928,6 @@ pub fn verify_keccak_group_fold_proof(
     let path_count = proof.path_count as usize;
     let depth = proof.depth as usize;
     if statements.len() != path_count
-        || proof.leaf_digests.len() != path_count
-        || proof.layer_digests.len() != path_count
         || path_count == 0
         || path_count > M4B_MAX_PATHS
         || depth == 0
@@ -894,6 +939,7 @@ pub fn verify_keccak_group_fold_proof(
 
     let leaf_width = proof.leaf_width as usize;
     let mut leaf_msgs = Vec::with_capacity(path_count);
+    let mut leaf_digests = Vec::with_capacity(path_count);
     let mut roots = Vec::with_capacity(path_count);
     let mut indices = Vec::with_capacity(path_count);
     let mut siblings = Vec::with_capacity(path_count);
@@ -903,32 +949,21 @@ pub fn verify_keccak_group_fold_proof(
             eprintln!("[M4bGroup] Failed: path {p} shape");
             return false;
         }
-        if proof.layer_digests[p].len() != depth {
-            eprintln!("[M4bGroup] Failed: path {p} layers");
-            return false;
-        }
         let leaf_msg = val_row_to_bytes(&stmt.row);
         if leaf_msg.len() != leaf_width * 4 {
             return false;
         }
-        if proof.leaf_digests[p] != keccak256_val_leaf(&stmt.row) {
-            eprintln!("[M4bGroup] Failed: path {p} leaf digest");
-            return false;
-        }
-        let mut digest = proof.leaf_digests[p];
+        // Leaf and layer digests are recomputed from the statement, not carried on the wire.
+        let leaf_digest = keccak256_val_leaf(&stmt.row);
+        let mut digest = leaf_digest;
         let mut idx = stmt.index;
-        for (i, sib) in stmt.siblings.iter().enumerate() {
+        for sib in &stmt.siblings {
             let (left, right) = if idx.is_multiple_of(2) {
                 (digest, *sib)
             } else {
                 (*sib, digest)
             };
-            let next_d = keccak256_compress(left, right);
-            if next_d != proof.layer_digests[p][i] {
-                eprintln!("[M4bGroup] Failed: path {p} layer {i}");
-                return false;
-            }
-            digest = next_d;
+            digest = keccak256_compress(left, right);
             idx /= 2;
         }
         if digest != stmt.root {
@@ -936,6 +971,7 @@ pub fn verify_keccak_group_fold_proof(
             return false;
         }
         leaf_msgs.push(leaf_msg);
+        leaf_digests.push(leaf_digest);
         roots.push(stmt.root);
         indices.push(stmt.index as u32);
         siblings.push(stmt.siblings.clone());
@@ -946,17 +982,17 @@ pub fn verify_keccak_group_fold_proof(
         leaf_msg_len,
         depth,
         path_count,
+        shared_root: roots_are_shared(&roots),
     };
     let pv = match build_public_values(
         leaf_msg_len,
         depth,
         path_count,
         &leaf_msgs,
-        &proof.leaf_digests,
+        &leaf_digests,
         &roots,
         &indices,
         &siblings,
-        &proof.layer_digests,
     ) {
         Ok(pv) => pv,
         Err(_) => return false,

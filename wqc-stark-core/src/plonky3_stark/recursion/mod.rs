@@ -117,7 +117,7 @@ pub use fri_mmcs_m4c::{
     hydrate_val_mmcs_siblings_from_proof, mmcs_sibling_strip_enabled,
     strip_chal_mmcs_siblings_for_groups, strip_val_mmcs_siblings_for_groups,
     val_mmcs_sibling_wire_bytes, LeafMmcsFoldGroups, LeafMmcsGroupStatements,
-    PCS_STRIP_MMCS_SIBLINGS_ENV, PoseidonMmcsBenchmarkReport, LEAF_MMCS_FOLD_V, LEAF_MMCS_FOLD_V4,
+    PCS_STRIP_MMCS_SIBLINGS_ENV, PoseidonMmcsBenchmarkReport, LEAF_MMCS_FOLD_V,
 };
 pub use fri_mmcs_path::{
     generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
