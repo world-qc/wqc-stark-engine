@@ -25,7 +25,7 @@ use super::fri_fold_bind::{
     AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
 };
 use super::fri_fold_m4c::{
-    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups,
+    apply_leaf_fri_fold_m4c_folds_with_queries, bind_fri_fold_with_groups, LeafFriFoldGroups,
 };
 use super::fri_fs_replay::fri_queries_from_proof;
 use super::fri_mmcs_bind::{
@@ -194,8 +194,10 @@ pub fn build_agg_pcs_certificate(
     )
     .map_err(|e| format!("R3-M3c3 DeepRo bundle bind failed: {e}"))?;
 
-    let fri_fold_groups = apply_leaf_fri_fold_m4c_folds(&mut fri_bundle)
-        .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
+    let proven_queries = fri_queries_from_proof(&proof)?;
+    let fri_fold_groups =
+        apply_leaf_fri_fold_m4c_folds_with_queries(&mut fri_bundle, proven_queries)
+            .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
     bind_fri_fold_with_groups(
         &proof,
         &fri_bundle.fold_ys,
@@ -207,7 +209,6 @@ pub fn build_agg_pcs_certificate(
 
     let mut mmcs_bundle = fri_mmcs_bundle_from_agg_proof_drop_nested(&proof)
         .map_err(|e| format!("R3-M3d FRI Mmcs prove failed: {e}"))?;
-    let proven_queries = fri_queries_from_proof(&proof)?;
     if mmcs_bundle.val.len() != proven_queries || mmcs_bundle.chal.len() != proven_queries {
         return Err(format!(
             "unexpected FRI Mmcs counts: val={}, chal={}, want {proven_queries}",

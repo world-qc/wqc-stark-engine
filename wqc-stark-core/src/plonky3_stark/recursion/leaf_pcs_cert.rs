@@ -32,7 +32,7 @@ use super::deep_ro_leaf_trace_air::{verify_deep_ro_leaf_trace_proof, DeepRoLeafT
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::fri_fold_bundle_from_proof;
 use super::fri_fold_m4c::{
-    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups,
+    apply_leaf_fri_fold_m4c_folds_with_queries, bind_fri_fold_with_groups, LeafFriFoldGroups,
 };
 use super::fri_fs_replay::fri_queries_from_proof;
 use super::fri_mmcs_bind::{
@@ -326,7 +326,8 @@ pub fn build_leaf_pcs_certificate(
         deep_ro_traces = Vec::new();
     }
 
-    let fri_fold_groups = apply_leaf_fri_fold_m4c_folds(&mut fri_bundle)
+    let proven_queries = fri_queries_from_proof(proof)?;
+    let fri_fold_groups = apply_leaf_fri_fold_m4c_folds_with_queries(&mut fri_bundle, proven_queries)
         .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
     bind_fri_fold_with_groups(
         proof,
@@ -340,7 +341,6 @@ pub fn build_leaf_pcs_certificate(
     // Query-streaming Mmcs: drop nested Keccak STARKs after each path self-check.
     let mut mmcs_bundle = fri_mmcs_bundle_from_proof_drop_nested(proof, trace_width)
         .map_err(|e| format!("R3-M3e FRI Mmcs prove failed: {e}"))?;
-    let proven_queries = fri_queries_from_proof(proof)?;
     if mmcs_bundle.val.len() != proven_queries || mmcs_bundle.chal.len() != proven_queries {
         return Err(format!(
             "unexpected FRI Mmcs counts: val={}, chal={}, want {proven_queries}",

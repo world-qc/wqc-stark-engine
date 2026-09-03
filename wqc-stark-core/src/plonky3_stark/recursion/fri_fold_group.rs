@@ -10,7 +10,9 @@ use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
 use crate::air::pad_air_matrix_for_uni_stark;
-use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    devnet_circle_config, devnet_circle_config_with_queries, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES,
+};
 
 use super::ef_limbs::{
     ef_add_limbs, ef_assert_eq, ef_halve_limbs, ef_mul_limbs, ef_scale_by_base, ef_sub_limbs,
@@ -165,6 +167,21 @@ pub fn generate_fri_fold_group_proof(
     steps: &[FriFoldStepProof],
     log_folded_height: Option<u32>,
 ) -> Result<FriFoldGroupProof, String> {
+    generate_fri_fold_group_proof_with_queries(
+        kind,
+        steps,
+        log_folded_height,
+        DEVNET_FRI_NUM_QUERIES,
+    )
+}
+
+/// Like [`generate_fri_fold_group_proof`], with explicit nested FRI query count.
+pub fn generate_fri_fold_group_proof_with_queries(
+    kind: u8,
+    steps: &[FriFoldStepProof],
+    log_folded_height: Option<u32>,
+    num_queries: usize,
+) -> Result<FriFoldGroupProof, String> {
     if steps.is_empty() {
         return Err("FriFold group requires at least one step".into());
     }
@@ -172,6 +189,11 @@ pub fn generate_fri_fold_group_proof(
         return Err(format!(
             "FriFold group too large: {} > {FRI_FOLD_GROUP_MAX_STEPS}",
             steps.len()
+        ));
+    }
+    if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
+        return Err(format!(
+            "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
         ));
     }
     if kind != FRI_FOLD_KIND_Y && kind != FRI_FOLD_KIND_X {
@@ -192,7 +214,11 @@ pub fn generate_fri_fold_group_proof(
     let pv = build_group_public_values(steps);
     let matrix = pad_air_matrix_for_uni_stark(build_group_matrix(steps.len()));
     p3_air::check_constraints(&air, &matrix, &pv);
-    let config = devnet_circle_config();
+    let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
+        devnet_circle_config()
+    } else {
+        devnet_circle_config_with_queries(num_queries)
+    };
     let proof = prove(&config, &air, matrix, &pv);
     let group_stark = super::prove_workspace::encode_stark_and_drop(proof, "fri fold group")?;
 
@@ -242,7 +268,13 @@ pub fn verify_fri_fold_group_proof(steps: &[FriFoldStepProof], proof: &FriFoldGr
             return false;
         }
     };
-    let config = devnet_circle_config();
+    let config = match super::fri_fs_replay::circle_config_matching_proof(&stark) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[FriFoldGroup] config: {e}");
+            return false;
+        }
+    };
     match verify(&config, &air, &stark, &pv) {
         Ok(()) => true,
         Err(e) => {

@@ -57,10 +57,10 @@
       "security_level": "low",
       "fri_num_queries": 8,
       "mmcs_group_chunk": 24,
-      "root_bytes": 1466946,
-      "left_pcs_bytes": 722222,
-      "mmcs_groups_per_side": 624573,
-      "note": "Poseidon2 ValMmcs + Poseidon Mmcs groups (fixtures/e5b/poseidon-compose.json); −71% vs Keccak low/chunk24"
+      "root_bytes": 418514,
+      "left_pcs_bytes": 198106,
+      "mmcs_groups_per_side": 141802,
+      "note": "PASS_SHRINK_GATE: nested Mmcs/FriFold STARKs match outer 8q (fixtures/e5b/poseidon-compose.json); −92% vs Keccak low"
     },
     {
       "label": "poseidon/default/chunk24",
@@ -70,7 +70,17 @@
       "root_bytes": 3579161,
       "left_pcs_bytes": 1742389,
       "mmcs_groups_per_side": 1465045,
-      "note": "Poseidon compose at devnet 40q (fixtures/e5b/poseidon-compose-default.json); −29% vs Keccak low/chunk24 ref, −67% vs Keccak default/chunk24"
+      "note": "Poseidon compose at 40q/chunk24 (fixtures/e5b/poseidon-compose-default.json)"
+    },
+    {
+      "label": "poseidon/default/chunk40",
+      "security_level": "",
+      "fri_num_queries": 40,
+      "mmcs_group_chunk": 40,
+      "root_bytes": 2272927,
+      "left_pcs_bytes": 1089272,
+      "mmcs_groups_per_side": 812028,
+      "note": "Poseidon 40q/chunk40 (fixtures/e5b/poseidon-compose-default-chunk40.json); −36% vs chunk24, −79% vs Keccak default"
     }
   ],
   "best_knob_only": {
@@ -80,24 +90,28 @@
   },
   "best_poseidon": {
     "label": "poseidon/low/chunk24",
-    "root_bytes": 1466946,
-    "vs_keccak_low_pct": 71,
+    "root_bytes": 418514,
+    "vs_keccak_low_pct": 92,
     "vs_shrink_gate_bytes": 512000,
-    "gap_to_gate_bytes": 954946
+    "gap_to_gate_bytes": -93486,
+    "status": "PASS_SHRINK_GATE"
   },
   "poseidon_default_40q": {
-    "label": "poseidon/default/chunk24",
-    "root_bytes": 3579161,
-    "vs_keccak_default_pct": 67,
-    "vs_shrink_gate_bytes": 512000,
-    "gap_to_gate_bytes": 3067161,
-    "mmcs_groups_per_side": 1465045,
-    "fri_fold_per_side": 115245
+    "chunk24": {
+      "root_bytes": 3579161,
+      "mmcs_groups_per_side": 1465045
+    },
+    "chunk40": {
+      "root_bytes": 2272927,
+      "mmcs_groups_per_side": 812028,
+      "fri_fold_per_side": 115245,
+      "gap_to_gate_bytes": 1760927
+    }
   },
   "next_levers": [
-    "Mmcs groups still dominate at 40q (~1.40 MiB/side); next: group AIR shrink / chunk40 at 40q",
-    "FRI fold ~115 KiB/side at 40q (linear in queries)",
-    "RecAgg tail + leaf meta (~16 KiB/leaf) negligible vs PCS",
-    "Target 500 KB gate: need ~7× further shrink from poseidon/default (3.58 MiB)"
+    "PASS at low/8q (418 514 B < 500 KB gate) via nested FRI query match",
+    "Close 40q gap: poseidon/default/chunk40 ≈ 2.17 MiB still ~4.4× above gate",
+    "Scale nested-query win + chunk40 + group AIR shrink toward 40q gate",
+    "Remeasure poseidon/default/chunk40 after nested-query match (same 40q nested — expect little change)"
   ]
 }

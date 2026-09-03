@@ -10,7 +10,7 @@ use super::fri_fold_air::{
 };
 use super::fri_fold_bind::{bind_fri_fold_bundle_to_proof_width, AggFriFoldBundle};
 use super::fri_fold_group::{
-    generate_fri_fold_group_proof, verify_fri_fold_group_proof, FriFoldGroupProof,
+    generate_fri_fold_group_proof_with_queries, verify_fri_fold_group_proof, FriFoldGroupProof,
     FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y,
 };
 
@@ -34,7 +34,10 @@ fn strip_fold_starks(steps: &mut [FriFoldStepProof]) {
 
 /// Prove one FriFold-X group per distinct height, sequentially (C10′: do not
 /// clone every height's steps into a map at once).
-fn group_fold_xs_by_log_h(fold_xs: &[FriFoldStepProof]) -> Result<Vec<FriFoldGroupProof>, String> {
+fn group_fold_xs_by_log_h(
+    fold_xs: &[FriFoldStepProof],
+    num_queries: usize,
+) -> Result<Vec<FriFoldGroupProof>, String> {
     let mut heights: Vec<u32> = fold_xs.iter().map(|s| s.log_folded_height).collect();
     heights.sort_unstable();
     heights.dedup();
@@ -51,7 +54,12 @@ fn group_fold_xs_by_log_h(fold_xs: &[FriFoldStepProof]) -> Result<Vec<FriFoldGro
                 steps.len()
             ));
         }
-        let g = generate_fri_fold_group_proof(FRI_FOLD_KIND_X, &steps, Some(log_h))?;
+        let g = generate_fri_fold_group_proof_with_queries(
+            FRI_FOLD_KIND_X,
+            &steps,
+            Some(log_h),
+            num_queries,
+        )?;
         drop(steps);
         out.push(g);
     }
@@ -63,23 +71,35 @@ fn group_fold_xs_by_log_h(fold_xs: &[FriFoldStepProof]) -> Result<Vec<FriFoldGro
 pub fn apply_leaf_fri_fold_m4c_folds(
     bundle: &mut AggFriFoldBundle,
 ) -> Result<LeafFriFoldGroups, String> {
+    apply_leaf_fri_fold_m4c_folds_with_queries(
+        bundle,
+        crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES,
+    )
+}
+
+/// Like [`apply_leaf_fri_fold_m4c_folds`], matching nested FRI queries to the outer proof.
+pub fn apply_leaf_fri_fold_m4c_folds_with_queries(
+    bundle: &mut AggFriFoldBundle,
+    num_queries: usize,
+) -> Result<LeafFriFoldGroups, String> {
     let fold_ys = if bundle.fold_ys.is_empty() {
         None
     } else {
         if bundle.fold_ys.len() > FRI_FOLD_GROUP_MAX_STEPS {
             return Err(format!("fold_y group too large: {}", bundle.fold_ys.len()));
         }
-        Some(generate_fri_fold_group_proof(
+        Some(generate_fri_fold_group_proof_with_queries(
             FRI_FOLD_KIND_Y,
             &bundle.fold_ys,
             None,
+            num_queries,
         )?)
     };
 
     let fold_xs_by_log_h = if bundle.fold_xs.is_empty() {
         Vec::new()
     } else {
-        group_fold_xs_by_log_h(&bundle.fold_xs)?
+        group_fold_xs_by_log_h(&bundle.fold_xs, num_queries)?
     };
 
     strip_fold_starks(&mut bundle.fold_ys);

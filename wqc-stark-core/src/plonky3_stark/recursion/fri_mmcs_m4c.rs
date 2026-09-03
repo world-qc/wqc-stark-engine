@@ -16,14 +16,15 @@ use super::fri_mmcs_bind::{
     AggFriMmcsBundle, FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
 use super::fri_mmcs_group_m4b::{
-    generate_keccak_group_fold_proof, m4b_group_chunk, verify_keccak_group_fold_proof,
-    MmcsPathStatement,
+    generate_keccak_group_fold_proof, generate_keccak_group_fold_proof_with_queries,
+    m4b_group_chunk, verify_keccak_group_fold_proof, MmcsPathStatement,
 };
 use super::mmcs_group_fold::{
     mmcs_group_hash_kind, poseidon_group_width_supported, MmcsGroupFoldProof, MmcsGroupHashKind,
 };
 use super::poseidon2_group_m4b::{
-    generate_poseidon_group_fold_proof, verify_poseidon_group_fold_proof,
+    generate_poseidon_group_fold_proof, generate_poseidon_group_fold_proof_with_queries,
+    verify_poseidon_group_fold_proof,
 };
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::fri_ro::{decode_input_proof, reconstruct_query_ro};
@@ -357,7 +358,10 @@ fn group_eligible(stmts: &[MmcsPathStatement]) -> bool {
 }
 
 /// Fold eligible paths into one group STARK per chunk (hash from [`mmcs_group_hash_kind`]).
-fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldProof>, String> {
+fn try_group_chunked(
+    stmts: &[MmcsPathStatement],
+    num_queries: usize,
+) -> Result<Vec<MmcsGroupFoldProof>, String> {
     if !group_eligible(stmts) {
         return Ok(Vec::new());
     }
@@ -366,9 +370,9 @@ fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldPro
     let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
     for c in stmts.chunks(chunk) {
         let g = match kind {
-            MmcsGroupHashKind::Keccak => {
-                MmcsGroupFoldProof::Keccak(generate_keccak_group_fold_proof(c)?)
-            }
+            MmcsGroupHashKind::Keccak => MmcsGroupFoldProof::Keccak(
+                generate_keccak_group_fold_proof_with_queries(c, num_queries)?,
+            ),
             MmcsGroupHashKind::Poseidon => {
                 if !c.iter().all(|s| poseidon_group_width_supported(s.row.len())) {
                     return Err(format!(
@@ -376,7 +380,9 @@ fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldPro
                         c.iter().map(|s| s.row.len()).max().unwrap_or(0)
                     ));
                 }
-                MmcsGroupFoldProof::Poseidon(generate_poseidon_group_fold_proof(c)?)
+                MmcsGroupFoldProof::Poseidon(
+                    generate_poseidon_group_fold_proof_with_queries(c, num_queries)?,
+                )
             }
         };
         groups.push(g);
@@ -413,7 +419,10 @@ fn sum_keccak_group_bytes(groups: &[MmcsGroupFoldProof]) -> u64 {
         .sum()
 }
 
-fn try_poseidon_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGroupFoldProof>, String> {
+fn try_poseidon_group_chunked(
+    stmts: &[MmcsPathStatement],
+    num_queries: usize,
+) -> Result<Vec<MmcsGroupFoldProof>, String> {
     if !group_eligible(stmts) || !stmts.iter().all(|s| poseidon_group_width_supported(s.row.len())) {
         return Ok(Vec::new());
     }
@@ -421,7 +430,7 @@ fn try_poseidon_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<MmcsGro
     let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
     for c in stmts.chunks(chunk) {
         groups.push(MmcsGroupFoldProof::Poseidon(
-            generate_poseidon_group_fold_proof(c)?,
+            generate_poseidon_group_fold_proof_with_queries(c, num_queries)?,
         ));
     }
     groups.shrink_to_fit();
@@ -458,7 +467,7 @@ fn benchmark_category(
         return Ok(());
     }
     if stmts.iter().all(|s| poseidon_group_width_supported(s.row.len())) {
-        let p_groups = try_poseidon_group_chunked(stmts)?;
+        let p_groups = try_poseidon_group_chunked(stmts, crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES)?;
         let bytes = sum_group_fold_bytes(&p_groups);
         report.poseidon_measured += bytes;
         report.poseidon_groups_measured += p_groups.len() as u32;
@@ -714,9 +723,10 @@ pub fn apply_leaf_mmcs_m4c_folds(
     bundle: &mut AggFriMmcsBundle,
 ) -> Result<LeafMmcsFoldGroups, String> {
     let mut groups = LeafMmcsFoldGroups::default();
+    let num_queries = fri_queries_from_proof(proof)?;
 
     let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
-    let trace_groups = try_group_chunked(&trace_stmts)?;
+    let trace_groups = try_group_chunked(&trace_stmts, num_queries)?;
     if !trace_groups.is_empty() {
         for qp in &mut bundle.val {
             strip_fri_mmcs_path_starks(&mut qp.trace_path);
@@ -725,7 +735,7 @@ pub fn apply_leaf_mmcs_m4c_folds(
     }
 
     if let Some(quot_stmts) = collect_val_quot_stmts(proof, trace_width, &bundle.val)? {
-        let quot_groups = try_group_chunked(&quot_stmts)?;
+        let quot_groups = try_group_chunked(&quot_stmts, num_queries)?;
         if !quot_groups.is_empty() {
             for qp in &mut bundle.val {
                 strip_fri_mmcs_path_starks(&mut qp.quot_path);
@@ -740,7 +750,7 @@ pub fn apply_leaf_mmcs_m4c_folds(
             }
         }
         if let Some(batch_stmts) = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)? {
-            let batch_groups = try_group_chunked(&batch_stmts)?;
+            let batch_groups = try_group_chunked(&batch_stmts, num_queries)?;
             if !batch_groups.is_empty() {
                 for qp in &mut bundle.val {
                     if let Some(ref mut batch) = qp.quot_batch {
@@ -753,7 +763,7 @@ pub fn apply_leaf_mmcs_m4c_folds(
     }
 
     if let Some(fl_stmts) = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)? {
-        let fl_groups = try_group_chunked(&fl_stmts)?;
+        let fl_groups = try_group_chunked(&fl_stmts, num_queries)?;
         if !fl_groups.is_empty() {
             for qp in &mut bundle.chal {
                 strip_chal_batch_starks(&mut qp.first_layer);
@@ -771,7 +781,7 @@ pub fn apply_leaf_mmcs_m4c_folds(
 
     let chal_by_depth = collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?;
     for (depth, stmts) in chal_by_depth {
-        let depth_groups = try_group_chunked(&stmts)?;
+        let depth_groups = try_group_chunked(&stmts, num_queries)?;
         if !depth_groups.is_empty() {
             for qp in &mut bundle.chal {
                 for path in &mut qp.commit_paths {

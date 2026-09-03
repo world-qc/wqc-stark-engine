@@ -13,7 +13,9 @@ use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
 use crate::air::pad_air_matrix_for_uni_stark;
-use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    devnet_circle_config, devnet_circle_config_with_queries, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES,
+};
 
 use super::fri_mmcs_group_m4b::{MmcsPathStatement, M4B_MAX_PATHS, M4B_PATH_IDX_BITS};
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
@@ -503,9 +505,23 @@ fn fold_path_witness(
 pub fn generate_poseidon_group_fold_proof(
     statements: &[MmcsPathStatement],
 ) -> Result<PoseidonGroupFoldProof, String> {
+    generate_poseidon_group_fold_proof_with_queries(statements, DEVNET_FRI_NUM_QUERIES)
+}
+
+/// Like [`generate_poseidon_group_fold_proof`], with explicit nested FRI query count
+/// (typically matching the outer leaf/agg proof).
+pub fn generate_poseidon_group_fold_proof_with_queries(
+    statements: &[MmcsPathStatement],
+    num_queries: usize,
+) -> Result<PoseidonGroupFoldProof, String> {
     let path_count = statements.len();
     if path_count == 0 || path_count > M4B_MAX_PATHS {
         return Err(format!("path_count {path_count} out of range"));
+    }
+    if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
+        return Err(format!(
+            "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
+        ));
     }
     let depth = statements[0].siblings.len();
     let leaf_width = statements[0].row.len();
@@ -569,7 +585,11 @@ pub fn generate_poseidon_group_fold_proof(
     drop(siblings);
 
     p3_air::check_constraints(&air, &matrix, &pv);
-    let config = devnet_circle_config();
+    let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
+        devnet_circle_config()
+    } else {
+        devnet_circle_config_with_queries(num_queries)
+    };
     let proof = prove(&config, &air, matrix, &pv);
     let group_stark = super::prove_workspace::encode_stark_and_drop(proof, "poseidon m4b group")?;
 
@@ -660,7 +680,14 @@ pub fn verify_poseidon_group_fold_proof(
             return false;
         }
     };
-    verify(&devnet_circle_config(), &air, &stark, &pv).is_ok()
+    let config = match super::fri_fs_replay::circle_config_matching_proof(&stark) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[PoseidonM4b] config: {e}");
+            return false;
+        }
+    };
+    verify(&config, &air, &stark, &pv).is_ok()
 }
 
 #[cfg(test)]

@@ -1,10 +1,12 @@
 //! E5b shrink optimization profiles — knobs that affect R3/PCS wire size.
 //!
-//! Dominant cost today: Keccak M4b `mmcs_groups` (~97% of leaf PCS nested STARK bytes).
+//! Dominant cost today: Poseidon2 M4b `mmcs_groups` (~90% of leaf PCS nested STARK bytes).
 //! Levers (see README Roadmap):
-//! 1. **`security_level`** → outer FRI query count (8/16/32/40) — linear on Mmcs paths
-//! 2. **`WQC_PCS_MMCS_GROUP_CHUNK`** → fewer/larger group STARKs (sublinear wire savings)
-//! 3. Poseidon2 / recursion-friendly hash in fold AIRs (future — largest long-term win)
+//! 1. **`security_level`** → outer FRI query count (8/16/32/40) — linear on Mmcs paths;
+//!    nested Mmcs/FriFold STARKs now match this count
+//! 2. **`WQC_PCS_MMCS_GROUP_CHUNK`** → fewer/larger group STARKs (sublinear wire savings;
+//!    chunk40 helps when fri_num_queries > chunk)
+//! 3. Group AIR / public-value shrink (still the long-term size lever toward 500 KB)
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

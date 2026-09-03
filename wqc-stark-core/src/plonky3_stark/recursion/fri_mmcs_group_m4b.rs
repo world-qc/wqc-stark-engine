@@ -21,7 +21,9 @@ use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
 use crate::air::pad_air_matrix_for_uni_stark;
-use crate::plonky3_stark::config::{keccak_circle_config, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    keccak_circle_config, keccak_circle_config_with_queries, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES,
+};
 
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
 use super::fri_mmcs_path_m4a::{
@@ -768,10 +770,23 @@ fn build_public_values(
 pub fn generate_keccak_group_fold_proof(
     statements: &[MmcsPathStatement],
 ) -> Result<KeccakGroupFoldProof, String> {
+    generate_keccak_group_fold_proof_with_queries(statements, DEVNET_FRI_NUM_QUERIES)
+}
+
+/// Like [`generate_keccak_group_fold_proof`], with explicit nested FRI query count.
+pub fn generate_keccak_group_fold_proof_with_queries(
+    statements: &[MmcsPathStatement],
+    num_queries: usize,
+) -> Result<KeccakGroupFoldProof, String> {
     let path_count = statements.len();
     if path_count == 0 || path_count > M4B_MAX_PATHS {
         return Err(format!(
             "path_count {path_count} out of range 1..={M4B_MAX_PATHS}"
+        ));
+    }
+    if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
+        return Err(format!(
+            "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
         ));
     }
     let depth = statements[0].siblings.len();
@@ -841,7 +856,11 @@ pub fn generate_keccak_group_fold_proof(
     drop(siblings);
 
     p3_air::check_constraints(&air, &matrix, &pv);
-    let config = keccak_circle_config();
+    let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
+        keccak_circle_config()
+    } else {
+        keccak_circle_config_with_queries(num_queries)
+    };
     let proof = prove(&config, &air, matrix, &pv);
     let group_stark = super::prove_workspace::encode_stark_and_drop(proof, "m4b group")?;
 
@@ -950,7 +969,13 @@ pub fn verify_keccak_group_fold_proof(
             return false;
         }
     };
-    let config = keccak_circle_config();
+    let config = match super::fri_fs_replay::fri_queries_from_proof(&stark) {
+        Ok(n) => keccak_circle_config_with_queries(n),
+        Err(e) => {
+            eprintln!("[M4bGroup] config: {e}");
+            return false;
+        }
+    };
     match verify(&config, &air, &stark, &pv) {
         Ok(()) => true,
         Err(e) => {

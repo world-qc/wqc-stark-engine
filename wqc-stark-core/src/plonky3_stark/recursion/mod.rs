@@ -87,11 +87,13 @@ pub use fri_fold_bind::{
     LEAF_FRI_PROVEN_QUERIES, MAX_FRI_PROVEN_QUERIES,
 };
 pub use fri_fold_group::{
-    generate_fri_fold_group_proof, verify_fri_fold_group_proof, FriFoldGroupAir, FriFoldGroupProof,
-    FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y,
+    generate_fri_fold_group_proof, generate_fri_fold_group_proof_with_queries,
+    verify_fri_fold_group_proof, FriFoldGroupAir, FriFoldGroupProof, FRI_FOLD_GROUP_MAX_STEPS,
+    FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y,
 };
 pub use fri_fold_m4c::{
-    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups, LEAF_FRI_FOLD_V,
+    apply_leaf_fri_fold_m4c_folds, apply_leaf_fri_fold_m4c_folds_with_queries,
+    bind_fri_fold_with_groups, LeafFriFoldGroups, LEAF_FRI_FOLD_V,
 };
 pub use fri_fs_replay::{
     circle_config_matching_proof, fri_queries_from_proof, replay_agg_fri_challenges,
@@ -106,8 +108,8 @@ pub use fri_mmcs_bind::{
     FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
 pub use fri_mmcs_group_m4b::{
-    generate_keccak_group_fold_proof, verify_keccak_group_fold_proof, KeccakGroupFoldProof,
-    MmcsGroupPathAir, MmcsPathStatement,
+    generate_keccak_group_fold_proof, generate_keccak_group_fold_proof_with_queries,
+    verify_keccak_group_fold_proof, KeccakGroupFoldProof, MmcsGroupPathAir, MmcsPathStatement,
 };
 pub use fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, benchmark_poseidon_mmcs_groups, collect_leaf_mmcs_group_statements,
@@ -179,8 +181,8 @@ pub use poseidon2_perm_air::{
     POSEIDON2_PERM_ROWS, POSEIDON2_PERM_WIDTH,
 };
 pub use poseidon2_group_m4b::{
-    generate_poseidon_group_fold_proof, verify_poseidon_group_fold_proof, PoseidonGroupFoldProof,
-    PoseidonMmcsGroupPathAir,
+    generate_poseidon_group_fold_proof, generate_poseidon_group_fold_proof_with_queries,
+    verify_poseidon_group_fold_proof, PoseidonGroupFoldProof, PoseidonMmcsGroupPathAir,
 };
 pub use poseidon_merkle_migration::{
     mmcs_merkle_mode, poseidon_group_spike_active, poseidon_native_mmcs_active, MmcsMerkleMode,

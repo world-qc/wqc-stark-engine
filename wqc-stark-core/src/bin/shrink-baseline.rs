@@ -185,14 +185,15 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
         "E5b Poseidon compose: idle two-leaf RecAgg (security_level={level_label})…"
     );
     let report = benchmark_idle_two_leaf_poseidon_compose(security_level)?;
-    let fri_q = wqc_stark_core::shrink::ShrinkComposeProfile::default()
-        .with_security_level(security_level)
-        .fri_num_queries();
+    let profile = ShrinkComposeProfile::from_env().with_security_level(security_level);
+    let fri_q = profile.fri_num_queries();
+    let chunk = profile.mmcs_group_chunk;
     let out = serde_json::json!({
         "benchmark": "idle_two_leaf_poseidon_compose",
         "security_level": report.security_level,
         "security_level_label": level_label,
         "fri_num_queries": fri_q,
+        "mmcs_group_chunk": chunk,
         "root_bytes": report.compose.root_bytes,
         "left_leaf_bytes": report.compose.left_leaf_bytes,
         "right_leaf_bytes": report.compose.right_leaf_bytes,
@@ -211,15 +212,12 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     );
 
     let repo = stark_engine_repo_root();
-    let filename = if security_level.is_empty() || security_level == "low" {
-        // Keep historical path for the primary low compose fixture.
-        if security_level == "low" {
-            "fixtures/e5b/poseidon-compose.json".to_string()
-        } else {
-            "fixtures/e5b/poseidon-compose-default.json".to_string()
-        }
-    } else {
-        format!("fixtures/e5b/poseidon-compose-{level_label}.json")
+    let filename = match (security_level, chunk) {
+        ("low", 24) => "fixtures/e5b/poseidon-compose.json".to_string(),
+        ("", 24) => "fixtures/e5b/poseidon-compose-default.json".to_string(),
+        ("", c) => format!("fixtures/e5b/poseidon-compose-default-chunk{c}.json"),
+        (level, 24) => format!("fixtures/e5b/poseidon-compose-{level}.json"),
+        (level, c) => format!("fixtures/e5b/poseidon-compose-{level}-chunk{c}.json"),
     };
     let path = repo.join(&filename);
     if let Some(parent) = path.parent() {

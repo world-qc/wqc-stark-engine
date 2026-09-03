@@ -75,9 +75,26 @@ mod tests {
             best.root_bytes,
             default.root_bytes
         );
+        // Poseidon/low now passes the 500 KB gate; Keccak knob-only remains above.
+        let keccak_best = sweep
+            .rows
+            .iter()
+            .filter(|r| !r.label.starts_with("poseidon/"))
+            .min_by_key(|r| r.root_bytes)
+            .expect("keccak row");
         assert!(
-            best.root_bytes > SHRINK_GATE_BYTES,
-            "knob-only sweep still above shrink gate"
+            keccak_best.root_bytes > SHRINK_GATE_BYTES,
+            "Keccak knob-only still above shrink gate"
+        );
+        let poseidon_low = sweep
+            .rows
+            .iter()
+            .find(|r| r.label == "poseidon/low/chunk24")
+            .expect("poseidon low row");
+        assert!(
+            poseidon_low.root_bytes <= SHRINK_GATE_BYTES,
+            "poseidon/low should pass shrink gate (got {})",
+            poseidon_low.root_bytes
         );
     }
 }

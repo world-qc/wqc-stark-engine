@@ -148,7 +148,7 @@ outcome dimension K≤21 (AIR width W≤68). Protocol details:
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** idle two-leaf RecAgg V6 root ≈ **10.2 MiB** at devnet default (40 FRI queries, `WQC_PCS_MMCS_GROUP_CHUNK=24`); recorded in `fixtures/e5b/baseline.json`. **Knob sweep** (`fixtures/e5b/sweep.json`): best Keccak knob **`low`/chunk24 ≈ 4.8 MiB**; **Poseidon compose** **`low`/8q ≈ 1.40 MiB** (`1_466_946` B, −71% vs Keccak low); **Poseidon `default`/40q ≈ 3.41 MiB** (`3_579_161` B, −67% vs Keccak default, `fixtures/e5b/poseidon-compose-default.json`). E5b shrink gate: **500 KB** (still ~7× above at 40q). Production `WqcStarkConfig` ValMmcs/ChallengeMmcs = packed Poseidon2 (`config_poseidon`). **Prove:** `--features plonky3-stark,poseidon-mmcs`; Mmcs groups default Poseidon. **Wire shrink:** Val + Chal Mmcs siblings stripped post-bind.
+- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`low`/8q ≈ 409 KiB** (`418_514` B) — **PASS_SHRINK_GATE** (≤500 KB); **`default`/40q/chunk40 ≈ 2.17 MiB** (`2_272_927` B, −79% vs Keccak default). Nested Mmcs/FriFold STARKs match outer FRI query count (was always 40q). Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.
 - Prove-time witness oracles in-circuit
