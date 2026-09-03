@@ -8,14 +8,17 @@ use super::fri_fold_air::{
     verify_fri_fold_proof, verify_fri_fold_x_native, verify_fri_fold_y_native,
     verify_fri_fold_y_proof, FriFoldStepProof,
 };
-use super::fri_fold_bind::{bind_fri_fold_bundle_to_proof_width, AggFriFoldBundle};
+use super::fri_fold_bind::{bind_fri_fold_bundle_to_proof_width, fri_fold_bundle_from_proof, AggFriFoldBundle};
 use super::fri_fold_group::{
     generate_fri_fold_group_proof_with_queries, verify_fri_fold_group_proof, FriFoldGroupProof,
     FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y,
 };
 
 /// Leaf/Agg PCS FriFold wire version (after Mmcs fold version in V6 cert).
-pub const LEAF_FRI_FOLD_V: u8 = 1;
+///
+/// v2: when group folds are present, residual step limbs are omitted from the wire
+/// and rebuilt from the parent FRI proof at verify.
+pub const LEAF_FRI_FOLD_V: u8 = 2;
 
 /// Group folds attached to a PCS certificate (FriFold B5).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -29,6 +32,26 @@ pub struct LeafFriFoldGroups {
 fn strip_fold_starks(steps: &mut [FriFoldStepProof]) {
     for s in steps {
         s.fold_stark.clear();
+    }
+}
+
+/// Rebuild residual FriFold limbs from the parent proof when the wire omitted them (v2).
+pub fn resolve_fri_fold_steps_for_groups(
+    proof: &Proof<WqcStarkConfig>,
+    fold_ys: &[FriFoldStepProof],
+    fold_xs: &[FriFoldStepProof],
+    groups: &LeafFriFoldGroups,
+    trace_width: usize,
+) -> Result<(Vec<FriFoldStepProof>, Vec<FriFoldStepProof>), String> {
+    if (fold_ys.is_empty() && groups.fold_ys.is_some())
+        || (fold_xs.is_empty() && !groups.fold_xs_by_log_h.is_empty())
+    {
+        let mut bundle = fri_fold_bundle_from_proof(proof, trace_width)?;
+        strip_fold_starks(&mut bundle.fold_ys);
+        strip_fold_starks(&mut bundle.fold_xs);
+        Ok((bundle.fold_ys, bundle.fold_xs))
+    } else {
+        Ok((fold_ys.to_vec(), fold_xs.to_vec()))
     }
 }
 
@@ -131,6 +154,9 @@ fn collect_xs_for_group<'a>(
 }
 
 /// Verify FriFold groups when present; otherwise fall back to per-step STARKs.
+///
+/// When residual limbs were omitted from the wire (FriFold v2) but groups are present,
+/// rebuild step limbs from the parent proof before bind.
 pub fn bind_fri_fold_with_groups(
     proof: &Proof<WqcStarkConfig>,
     fold_ys: &[FriFoldStepProof],
@@ -138,6 +164,11 @@ pub fn bind_fri_fold_with_groups(
     groups: &LeafFriFoldGroups,
     trace_width: usize,
 ) -> Result<(), String> {
+    let (fold_ys_owned, fold_xs_owned) =
+        resolve_fri_fold_steps_for_groups(proof, fold_ys, fold_xs, groups, trace_width)?;
+    let fold_ys = fold_ys_owned.as_slice();
+    let fold_xs = fold_xs_owned.as_slice();
+
     bind_fri_fold_bundle_to_proof_width(proof, fold_ys, fold_xs, trace_width)?;
 
     if let Some(gy) = &groups.fold_ys {

@@ -71,7 +71,7 @@ select outer FRI query count from the same task-level `security_level` (PCS `n` 
 **Nested Mmcs / FriFold policy** (see [zk-STARK.md §5.1](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md#51-securitylevel--fri-query-ladder)):
 
 - **Production default:** nested FRI `num_queries` = outer `n` (weakest attestation link matches the task tier).
-- **Shrink / experiment:** `WQC_PCS_NESTED_FRI_QUERIES` ∈ `{1,…,n}` (e.g. outer 40 + nested 8 → ~765 KiB idle Poseidon root). Not a silent `security_level` downgrade.
+- **Shrink / experiment:** `WQC_PCS_NESTED_FRI_QUERIES` ∈ `{1,…,n}` (e.g. outer 40 + nested 4 → ~397 KiB idle Poseidon root, PASS ≤500 KB). Not a silent `security_level` downgrade.
 - Nested DeepRo uni-STARKs still use the fixed 40-query Circle config.
 
 ## Build
@@ -150,7 +150,7 @@ outcome dimension K≤21 (AIR width W≤68). Protocol details:
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`low`/8q ≈ 402 KiB** (`411_736` B) — **PASS_SHRINK_GATE** (≤500 KB); **`default`/40q/chunk40 ≈ 2.13 MiB** (`2_238_265` B); **nested8q ≈ 765 KiB** (`783_597` B, −65% vs nested=outer). Mmcs group PV is depth-packed with a shared-root header; leaf/layer digests are recomputed at verify instead of shipped (mmcs fold wire v5). Nested Mmcs/FriFold FRI queries default to the outer count and can be lowered via `WQC_PCS_NESTED_FRI_QUERIES` (e.g. outer 40q + nested 8q → `783_597` B). Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
+- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`low`/8q ≈ 402 KiB** (`411_736` B) — **PASS_SHRINK_GATE** (≤500 KB); **`default`/40q/chunk40 ≈ 2.13 MiB** (`2_238_265` B); **nested8q ≈ 575 KiB** (`588_445` B); **nested4q ≈ 397 KiB** (`406_555` B, PASS). Mmcs path/chal digests omitted on wire v6; FriFold residual limbs omitted when groups present (v2). Nested Mmcs/FriFold FRI queries default to the outer count and can be lowered via `WQC_PCS_NESTED_FRI_QUERIES`. Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.
 - Prove-time witness oracles in-circuit

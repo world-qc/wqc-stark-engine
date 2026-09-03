@@ -37,7 +37,8 @@ use super::merkle_keccak::{compress_digests, hash_val_leaf};
 ///     tunable via `WQC_PCS_MMCS_GROUP_CHUNK`) instead of a single optional group.
 /// v5: per-group `hash_tag` byte (Keccak / Poseidon); leaf/layer digests dropped
 ///     from the wire and recomputed from the path statements at verify time.
-pub const LEAF_MMCS_FOLD_V: u8 = 5;
+/// Wire v6: Mmcs path / chal-batch digests + empty Keccak stubs omitted (recomputed at verify).
+pub const LEAF_MMCS_FOLD_V: u8 = 6;
 
 const EF_DIM: usize = 3;
 const CHAL_LEAF_WIDTH: usize = 6;
@@ -134,7 +135,15 @@ pub fn path_starks_stripped(path: &FriMmcsPathProof) -> bool {
         && path.compress_starks.iter().all(|c| c.stark.is_empty())
 }
 
+/// True when leaf/layer digests were omitted from the PCS wire (v6+).
+pub fn path_digests_stripped(path: &FriMmcsPathProof) -> bool {
+    path.layer_digests.is_empty() && path.compress_starks.is_empty()
+}
+
 /// Native digest binding without nested STARKs (used when path is grouped).
+///
+/// When digests are omitted (`path_digests_stripped`), only the Merkle root is checked
+/// against `row` + `siblings` (wire v6). Otherwise intermediate digests are cross-checked.
 pub fn verify_fri_mmcs_path_digests(
     row: &[Mersenne31],
     siblings: &[[u8; 32]],
@@ -143,15 +152,16 @@ pub fn verify_fri_mmcs_path_digests(
     path: &FriMmcsPathProof,
 ) -> bool {
     let depth = path.depth as usize;
-    if siblings.len() != depth
-        || path.layer_digests.len() != depth
-        || path.compress_starks.len() != depth
-        || row.len() as u32 != path.leaf_width
-        || depth == 0
-    {
+    if siblings.len() != depth || row.len() as u32 != path.leaf_width || depth == 0 {
         return false;
     }
     let leaf = hash_val_leaf(row);
+    if path_digests_stripped(path) {
+        return super::merkle_keccak::merkle_root_from_path(leaf, siblings, index) == *expected_root;
+    }
+    if path.layer_digests.len() != depth || path.compress_starks.len() != depth {
+        return false;
+    }
     if leaf != path.leaf_digest || leaf != path.leaf_keccak.digest {
         return false;
     }

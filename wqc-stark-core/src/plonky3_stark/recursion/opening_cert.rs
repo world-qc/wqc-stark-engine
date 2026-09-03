@@ -449,11 +449,24 @@ fn verify_agg_pcs_certificate_fri_bound(
         eprintln!("[AggPcsCertificate] Failed: FRI fold bind/groups: {e}");
         return false;
     }
+    let (fold_ys_for_deep, _) = match super::fri_fold_m4c::resolve_fri_fold_steps_for_groups(
+        &proof,
+        &cert.fri_fold_ys,
+        &cert.fri_folds,
+        &cert.fri_fold_groups,
+        AGG_WIDTH,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[AggPcsCertificate] Failed: FRI fold resolve: {e}");
+            return false;
+        }
+    };
     if let Err(e) = bind_deep_ro_bundle_to_proof(
         &proof,
         &cert.deep_ros,
         &cert.deep_ro_traces,
-        &cert.fri_fold_ys,
+        &fold_ys_for_deep,
     ) {
         eprintln!("[AggPcsCertificate] Failed: DeepRo bundle bind: {e}");
         return false;

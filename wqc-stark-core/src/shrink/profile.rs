@@ -10,12 +10,13 @@
 //!    depth with a shared-root header and chain layer digests through segment
 //!    transitions; FriFold groups hoist a shared `beta`. These cut publics ~4x but
 //!    barely move `group_stark`, which is dominated by nested FRI commitments.
-//! 4. Wire dedup — leaf/layer digests are recomputed from path statements at verify
-//!    time instead of shipped (mmcs fold wire v5); this is where PCS metadata shrank.
+//! 4. Wire dedup — leaf/layer digests omitted from PCS wire and recomputed at verify
+//!    (mmcs fold wire v6; path + chal-batch stubs); FriFold residual limbs omitted when
+//!    groups cover them (FriFold wire v2). This is where PCS metadata shrinks.
 //! 5. **`WQC_PCS_NESTED_FRI_QUERIES`** → nested Mmcs/FriFold FRI query count (≤ outer);
 //!    **production default = match outer**. E5b shrink tracking profile:
-//!    outer 40 + chunk40 + nested 8 (`poseidon-compose-default-chunk40-nested8q.json`).
-//!    See `wqc-docs/spec/zk-STARK.md` §5.1.
+//!    outer 40 + chunk40 + nested 4 (`poseidon-compose-default-chunk40-nested4q.json`,
+//!    PASS_SHRINK_GATE after wire v6). Nested 8 remains a tighter residual reference.
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

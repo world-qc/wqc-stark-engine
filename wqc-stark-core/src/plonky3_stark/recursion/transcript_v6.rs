@@ -76,6 +76,7 @@ fn read_m31_row(proof: &[u8], offset: usize, len: usize) -> Option<(Vec<Mersenne
     Some((row, offset + need))
 }
 
+#[allow(dead_code)] // kept for legacy nested-STARK blobs if reintroduced
 fn encode_keccak256_stark(out: &mut Vec<u8>, proof: &Keccak256StarkProof) {
     out.extend_from_slice(&proof.msg_len.to_le_bytes());
     out.extend_from_slice(&proof.digest);
@@ -83,6 +84,7 @@ fn encode_keccak256_stark(out: &mut Vec<u8>, proof: &Keccak256StarkProof) {
     out.extend_from_slice(&proof.stark);
 }
 
+#[allow(dead_code)] // kept for legacy nested-STARK blobs if reintroduced
 fn decode_keccak256_stark(proof: &[u8], offset: usize) -> Option<(Keccak256StarkProof, usize)> {
     let (msg_len, cursor) = read_u32_le(proof, offset)?;
     let (digest, cursor) = read_fixed::<32>(proof, cursor)?;
@@ -158,7 +160,8 @@ fn decode_fri_folds(
     max: usize,
 ) -> Option<(Vec<FriFoldStepProof>, usize)> {
     let (len, cursor) = read_u32_le(proof, offset)?;
-    if len as usize == 0 || len as usize > max {
+    // v2: empty residual limbs when FriFold groups cover all steps.
+    if len as usize > max {
         return None;
     }
     let mut folds = Vec::with_capacity(len as usize);
@@ -169,6 +172,19 @@ fn decode_fri_folds(
         cursor = next;
     }
     Some((folds, cursor))
+}
+
+/// Omit residual FriFold limbs from the wire when group STARKs already cover them.
+fn encode_fri_folds_maybe_omit(
+    out: &mut Vec<u8>,
+    folds: &[FriFoldStepProof],
+    omit: bool,
+) {
+    if omit {
+        out.extend_from_slice(&0u32.to_le_bytes());
+    } else {
+        encode_fri_folds(out, folds);
+    }
 }
 
 fn encode_ood(out: &mut Vec<u8>, ood: &OodStepProof) {
@@ -478,20 +494,38 @@ fn decode_deep_ro_traces(
 }
 
 fn encode_fri_mmcs_path(out: &mut Vec<u8>, path: &FriMmcsPathProof) {
+    // Wire v6: omit leaf/layer digests and empty Keccak stubs (recomputed at verify).
     out.extend_from_slice(&path.depth.to_le_bytes());
     out.extend_from_slice(&path.leaf_width.to_le_bytes());
-    out.extend_from_slice(&path.leaf_digest);
-    out.extend_from_slice(&(path.layer_digests.len() as u32).to_le_bytes());
-    for d in &path.layer_digests {
-        out.extend_from_slice(d);
-    }
     out.extend_from_slice(&(path.fold_stark.len() as u32).to_le_bytes());
     out.extend_from_slice(&path.fold_stark);
-    encode_keccak256_stark(out, &path.leaf_keccak);
-    out.extend_from_slice(&(path.compress_starks.len() as u32).to_le_bytes());
-    for c in &path.compress_starks {
-        encode_keccak256_stark(out, c);
+}
+
+fn decode_fri_mmcs_path(proof: &[u8], offset: usize) -> Option<(FriMmcsPathProof, usize)> {
+    let (depth, cursor) = read_u32_le(proof, offset)?;
+    let (leaf_width, cursor) = read_u32_le(proof, cursor)?;
+    if depth == 0 || depth as usize > FRI_MMCS_MAX_DEPTH {
+        return None;
     }
+    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
+    let end = cursor + stark_len as usize;
+    let fold_stark = proof.get(cursor..end)?.to_vec();
+    Some((
+        FriMmcsPathProof {
+            depth,
+            leaf_width,
+            leaf_digest: [0u8; 32],
+            layer_digests: Vec::new(),
+            fold_stark,
+            leaf_keccak: Keccak256StarkProof {
+                msg_len: 0,
+                digest: [0u8; 32],
+                stark: Vec::new(),
+            },
+            compress_starks: Vec::new(),
+        },
+        end,
+    ))
 }
 
 fn encode_group_fold_body(
@@ -708,50 +742,6 @@ fn decode_fri_fold_groups(proof: &[u8], offset: usize) -> Option<(LeafFriFoldGro
     ))
 }
 
-fn decode_fri_mmcs_path(proof: &[u8], offset: usize) -> Option<(FriMmcsPathProof, usize)> {
-    let (depth, cursor) = read_u32_le(proof, offset)?;
-    let (leaf_width, cursor) = read_u32_le(proof, cursor)?;
-    let (leaf_digest, cursor) = read_fixed::<32>(proof, cursor)?;
-    let (layer_len, cursor) = read_u32_le(proof, cursor)?;
-    if layer_len as usize != depth as usize || depth == 0 || depth as usize > FRI_MMCS_MAX_DEPTH {
-        return None;
-    }
-    let mut layer_digests = Vec::with_capacity(layer_len as usize);
-    let mut cursor = cursor;
-    for _ in 0..layer_len {
-        let (d, next) = read_fixed::<32>(proof, cursor)?;
-        layer_digests.push(d);
-        cursor = next;
-    }
-    let (stark_len, cursor) = read_u32_le(proof, cursor)?;
-    let end = cursor + stark_len as usize;
-    let fold_stark = proof.get(cursor..end)?.to_vec();
-    let (leaf_keccak, cursor) = decode_keccak256_stark(proof, end)?;
-    let (comp_len, cursor) = read_u32_le(proof, cursor)?;
-    if comp_len != layer_len {
-        return None;
-    }
-    let mut compress_starks = Vec::with_capacity(comp_len as usize);
-    let mut cursor = cursor;
-    for _ in 0..comp_len {
-        let (c, next) = decode_keccak256_stark(proof, cursor)?;
-        compress_starks.push(c);
-        cursor = next;
-    }
-    Some((
-        FriMmcsPathProof {
-            depth,
-            leaf_width,
-            leaf_digest,
-            layer_digests,
-            fold_stark,
-            leaf_keccak,
-            compress_starks,
-        },
-        cursor,
-    ))
-}
-
 fn encode_siblings(out: &mut Vec<u8>, siblings: &[[u8; 32]]) {
     out.extend_from_slice(&(siblings.len() as u32).to_le_bytes());
     for s in siblings {
@@ -845,36 +835,13 @@ fn decode_fri_val_mmcs(proof: &[u8], offset: usize) -> Option<(Vec<FriValMmcsQue
 }
 
 fn encode_chal_batch(out: &mut Vec<u8>, b: &FriChalBatchPathProof) {
+    // Wire v6: ship leaf rows + inject indices only; digests/stubs recomputed at verify.
     out.extend_from_slice(&b.index.to_le_bytes());
     encode_siblings(out, &b.siblings);
     out.extend_from_slice(&(b.leaf_rows.len() as u32).to_le_bytes());
     for row in &b.leaf_rows {
         out.extend_from_slice(&(row.len() as u32).to_le_bytes());
         write_m31_row(out, row);
-    }
-    out.extend_from_slice(&(b.leaf_keccs.len() as u32).to_le_bytes());
-    for k in &b.leaf_keccs {
-        encode_keccak256_stark(out, k);
-    }
-    out.extend_from_slice(&(b.leaf_digests.len() as u32).to_le_bytes());
-    for d in &b.leaf_digests {
-        out.extend_from_slice(d);
-    }
-    out.extend_from_slice(&(b.sib_compresses.len() as u32).to_le_bytes());
-    for c in &b.sib_compresses {
-        encode_keccak256_stark(out, c);
-    }
-    out.extend_from_slice(&(b.sib_layer_digests.len() as u32).to_le_bytes());
-    for d in &b.sib_layer_digests {
-        out.extend_from_slice(d);
-    }
-    out.extend_from_slice(&(b.inject_compresses.len() as u32).to_le_bytes());
-    for c in &b.inject_compresses {
-        encode_keccak256_stark(out, c);
-    }
-    out.extend_from_slice(&(b.inject_digests.len() as u32).to_le_bytes());
-    for d in &b.inject_digests {
-        out.extend_from_slice(d);
     }
     out.extend_from_slice(&(b.inject_leaf_indices.len() as u32).to_le_bytes());
     for i in &b.inject_leaf_indices {
@@ -900,79 +867,8 @@ fn decode_chal_batch(proof: &[u8], offset: usize) -> Option<(FriChalBatchPathPro
         leaf_rows.push(row);
         cursor = next;
     }
-    let (n_keccs, cursor) = read_u32_le(proof, cursor)?;
-    if n_keccs as usize != leaf_rows.len() {
-        return None;
-    }
-    let mut leaf_keccs = Vec::with_capacity(n_keccs as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_keccs {
-        let (k, next) = decode_keccak256_stark(proof, cursor)?;
-        leaf_keccs.push(k);
-        cursor = next;
-    }
-    let (n_dig, cursor) = read_u32_le(proof, cursor)?;
-    if n_dig as usize != leaf_rows.len() {
-        return None;
-    }
-    let mut leaf_digests = Vec::with_capacity(n_dig as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_dig {
-        let (d, next) = read_fixed::<32>(proof, cursor)?;
-        leaf_digests.push(d);
-        cursor = next;
-    }
-    let (n_sib_c, cursor) = read_u32_le(proof, cursor)?;
-    if n_sib_c as usize > FRI_MMCS_MAX_DEPTH {
-        return None;
-    }
-    // Post-bind sibling strip may clear `siblings` while retaining layer digests /
-    // empty compress stubs for host digest replay after hydrate.
-    if !siblings.is_empty() && n_sib_c as usize != siblings.len() {
-        return None;
-    }
-    let mut sib_compresses = Vec::with_capacity(n_sib_c as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_sib_c {
-        let (c, next) = decode_keccak256_stark(proof, cursor)?;
-        sib_compresses.push(c);
-        cursor = next;
-    }
-    let (n_sib_d, cursor) = read_u32_le(proof, cursor)?;
-    if n_sib_d != n_sib_c {
-        return None;
-    }
-    let mut sib_layer_digests = Vec::with_capacity(n_sib_d as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_sib_d {
-        let (d, next) = read_fixed::<32>(proof, cursor)?;
-        sib_layer_digests.push(d);
-        cursor = next;
-    }
-    let (n_inj_c, cursor) = read_u32_le(proof, cursor)?;
-    if n_inj_c as usize > FRI_MMCS_MAX_DEPTH {
-        return None;
-    }
-    let mut inject_compresses = Vec::with_capacity(n_inj_c as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_inj_c {
-        let (c, next) = decode_keccak256_stark(proof, cursor)?;
-        inject_compresses.push(c);
-        cursor = next;
-    }
-    let (n_inj_d, cursor) = read_u32_le(proof, cursor)?;
-    if n_inj_d != n_inj_c {
-        return None;
-    }
-    let mut inject_digests = Vec::with_capacity(n_inj_d as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_inj_d {
-        let (d, next) = read_fixed::<32>(proof, cursor)?;
-        inject_digests.push(d);
-        cursor = next;
-    }
     let (n_inj_i, cursor) = read_u32_le(proof, cursor)?;
-    if n_inj_i != n_inj_c {
+    if n_inj_i as usize > FRI_MMCS_MAX_DEPTH {
         return None;
     }
     let mut inject_leaf_indices = Vec::with_capacity(n_inj_i as usize);
@@ -987,12 +883,12 @@ fn decode_chal_batch(proof: &[u8], offset: usize) -> Option<(FriChalBatchPathPro
             index,
             siblings,
             leaf_rows,
-            leaf_keccs,
-            leaf_digests,
-            sib_compresses,
-            sib_layer_digests,
-            inject_compresses,
-            inject_digests,
+            leaf_keccs: Vec::new(),
+            leaf_digests: Vec::new(),
+            sib_compresses: Vec::new(),
+            sib_layer_digests: Vec::new(),
+            inject_compresses: Vec::new(),
+            inject_digests: Vec::new(),
             inject_leaf_indices,
         },
         cursor,
@@ -1241,8 +1137,12 @@ fn encode_leaf_cert(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
         out.extend_from_slice(sib);
     }
     encode_fri_mmcs_path(out, &c.merkle_fold);
-    encode_fri_folds(out, &c.fri_fold_ys);
-    encode_fri_folds(out, &c.fri_folds);
+    encode_fri_folds_maybe_omit(out, &c.fri_fold_ys, c.fri_fold_groups.fold_ys.is_some());
+    encode_fri_folds_maybe_omit(
+        out,
+        &c.fri_folds,
+        !c.fri_fold_groups.fold_xs_by_log_h.is_empty(),
+    );
     encode_deep_ros(out, &c.deep_ros);
     encode_deep_ro_leaf_traces(out, &c.deep_ro_traces);
     encode_ood(out, &c.ood);
@@ -1534,8 +1434,12 @@ fn encode_agg_cert(out: &mut Vec<u8>, c: &AggPcsCertificate) {
     out.push(LEAF_FRI_FOLD_V);
     encode_fri_fold_groups(out, &c.fri_fold_groups);
     encode_fri_mmcs_path(out, &c.merkle_fold);
-    encode_fri_folds(out, &c.fri_fold_ys);
-    encode_fri_folds(out, &c.fri_folds);
+    encode_fri_folds_maybe_omit(out, &c.fri_fold_ys, c.fri_fold_groups.fold_ys.is_some());
+    encode_fri_folds_maybe_omit(
+        out,
+        &c.fri_folds,
+        !c.fri_fold_groups.fold_xs_by_log_h.is_empty(),
+    );
     encode_deep_ros(out, &c.deep_ros);
     encode_deep_ro_traces(out, &c.deep_ro_traces);
     encode_ood(out, &c.ood);

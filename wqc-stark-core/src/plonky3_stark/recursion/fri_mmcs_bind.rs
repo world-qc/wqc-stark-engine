@@ -459,6 +459,9 @@ pub(crate) fn verify_chal_batch_path_replay(
 }
 
 /// Native digest replay for a batch path (no nested uni-STARK verify).
+///
+/// Wire v6 may omit `leaf_digests` / layer stubs; when empty, digests are recomputed
+/// from `leaf_rows` + siblings during the Merkle walk.
 pub(crate) fn verify_chal_batch_path_digests(
     opened_vals: &[Vec<Mersenne31>],
     dimensions: &[Dimensions],
@@ -475,14 +478,23 @@ pub(crate) fn verify_chal_batch_path_digests(
     };
     let mut order: Vec<usize> = (0..dimensions.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(dimensions[i].height));
-    if proof.leaf_keccs.len() < dimensions.len() || proof.leaf_digests.len() < dimensions.len() {
+    let digests_on_wire = !proof.leaf_digests.is_empty();
+    if digests_on_wire
+        && (proof.leaf_keccs.len() < dimensions.len() || proof.leaf_digests.len() < dimensions.len())
+    {
+        return false;
+    }
+    if proof.leaf_rows.len() < dimensions.len() {
         return false;
     }
     for (i, &oi) in order.iter().enumerate() {
-        if i >= proof.leaf_rows.len()
-            || proof.leaf_rows[i].as_slice() != opened_vals[oi].as_slice()
-            || hash_val_leaf(&proof.leaf_rows[i]) != proof.leaf_digests[i]
-            || proof.leaf_keccs[i].digest != proof.leaf_digests[i]
+        if proof.leaf_rows[i].as_slice() != opened_vals[oi].as_slice() {
+            eprintln!("[FriChalBatchDigests] leaf row {i}");
+            return false;
+        }
+        if digests_on_wire
+            && (hash_val_leaf(&proof.leaf_rows[i]) != proof.leaf_digests[i]
+                || proof.leaf_keccs[i].digest != proof.leaf_digests[i])
         {
             eprintln!("[FriChalBatchDigests] leaf {i}");
             return false;
@@ -504,26 +516,36 @@ pub(crate) fn verify_chal_batch_path_digests(
         }
     });
     let mut digest = if at_leaf.len() == 1 {
-        proof.leaf_digests[digest_of[at_leaf[0]]]
+        hash_val_leaf(&proof.leaf_rows[digest_of[at_leaf[0]]])
     } else {
         let mut concat = Vec::new();
         for &i in &at_leaf {
             concat.extend_from_slice(&opened_vals[i]);
         }
         let expect = hash_val_leaf(&concat);
-        let mut found = false;
-        for i in dimensions.len()..proof.leaf_rows.len() {
-            if proof.leaf_digests[i] == expect
-                && hash_val_leaf(&proof.leaf_rows[i]) == expect
-                && proof.leaf_keccs[i].digest == expect
-            {
-                found = true;
-                break;
+        if digests_on_wire {
+            let mut found = false;
+            for i in dimensions.len()..proof.leaf_rows.len() {
+                if proof.leaf_digests[i] == expect
+                    && hash_val_leaf(&proof.leaf_rows[i]) == expect
+                    && proof.leaf_keccs[i].digest == expect
+                {
+                    found = true;
+                    break;
+                }
             }
-        }
-        if !found {
-            eprintln!("[FriChalBatchDigests] multi leaf");
-            return false;
+            if !found {
+                eprintln!("[FriChalBatchDigests] multi leaf");
+                return false;
+            }
+        } else if !proof
+            .leaf_rows
+            .iter()
+            .skip(dimensions.len())
+            .any(|row| hash_val_leaf(row) == expect)
+            && proof.leaf_rows.len() > dimensions.len()
+        {
+            // Extra concat rows optional when digest stubs omitted; root walk still uses expect.
         }
         expect
     };
@@ -536,8 +558,12 @@ pub(crate) fn verify_chal_batch_path_digests(
         Err(_) => return false,
     };
     for _ in 0..steps {
-        if sib_i >= proof.siblings.len() || sib_i >= proof.sib_layer_digests.len() {
+        if sib_i >= proof.siblings.len() {
             eprintln!("[FriChalBatchDigests] sib overrun");
+            return false;
+        }
+        if digests_on_wire && sib_i >= proof.sib_layer_digests.len() {
+            eprintln!("[FriChalBatchDigests] sib digest overrun");
             return false;
         }
         let sib = proof.siblings[sib_i];
@@ -546,12 +572,12 @@ pub(crate) fn verify_chal_batch_path_digests(
         } else {
             (sib, digest)
         };
-        let expect = proof.sib_layer_digests[sib_i];
-        if compress_digests(left, right) != expect {
+        let next = compress_digests(left, right);
+        if digests_on_wire && next != proof.sib_layer_digests[sib_i] {
             eprintln!("[FriChalBatchDigests] sib compress {sib_i}");
             return false;
         }
-        digest = expect;
+        digest = next;
         sib_i += 1;
         index /= 2;
         curr_height /= 2;
@@ -564,7 +590,7 @@ pub(crate) fn verify_chal_batch_path_digests(
         if !inject_idxs.is_empty() {
             remaining.retain(|i| !inject_idxs.contains(i));
             let inj_digest = if inject_idxs.len() == 1 {
-                proof.leaf_digests[digest_of[inject_idxs[0]]]
+                hash_val_leaf(&proof.leaf_rows[digest_of[inject_idxs[0]]])
             } else {
                 let mut concat = Vec::new();
                 for &i in &inject_idxs {
@@ -572,21 +598,34 @@ pub(crate) fn verify_chal_batch_path_digests(
                 }
                 hash_val_leaf(&concat)
             };
-            if inj_i >= proof.inject_digests.len() {
-                eprintln!("[FriChalBatchDigests] inject overrun");
+            let next = compress_digests(digest, inj_digest);
+            if digests_on_wire {
+                if inj_i >= proof.inject_digests.len() {
+                    eprintln!("[FriChalBatchDigests] inject overrun");
+                    return false;
+                }
+                if next != proof.inject_digests[inj_i] {
+                    eprintln!("[FriChalBatchDigests] inject compress {inj_i}");
+                    return false;
+                }
+            } else if inj_i >= proof.inject_leaf_indices.len() {
+                eprintln!("[FriChalBatchDigests] inject index overrun");
                 return false;
             }
-            let expect = proof.inject_digests[inj_i];
-            if compress_digests(digest, inj_digest) != expect {
-                eprintln!("[FriChalBatchDigests] inject compress {inj_i}");
-                return false;
-            }
-            digest = expect;
+            digest = next;
             inj_i += 1;
         }
     }
     if sib_i != proof.siblings.len() || &digest != expected_root {
         eprintln!("[FriChalBatchDigests] final root/sib");
+        return false;
+    }
+    if digests_on_wire && inj_i != proof.inject_digests.len() {
+        eprintln!("[FriChalBatchDigests] inject count");
+        return false;
+    }
+    if !digests_on_wire && inj_i != proof.inject_leaf_indices.len() {
+        eprintln!("[FriChalBatchDigests] inject index count");
         return false;
     }
     true

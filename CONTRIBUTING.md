@@ -111,7 +111,7 @@ cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --rel
 #                                            production default = match outer)
 #
 # E5b shrink tracking profile (toward 500 KB gate; not production default):
-WQC_PCS_MMCS_GROUP_CHUNK=40 WQC_PCS_NESTED_FRI_QUERIES=8 \
+WQC_PCS_MMCS_GROUP_CHUNK=40 WQC_PCS_NESTED_FRI_QUERIES=4 \
 cargo run -p wqc-stark-core --bin shrink-baseline \
   --features plonky3-stark,poseidon-mmcs --release -- --poseidon-compose
 
@@ -121,7 +121,7 @@ cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --rel
 
 Baseline JSON lives at `fixtures/e5b/baseline.json`; the golden `idle_two_leaf_root.bin` is gitignored until generated locally.
 
-Poseidon compose fixtures: `fixtures/e5b/poseidon-compose.json` (low/8q PASS), `poseidon-compose-default-chunk40.json` (outer=nested=40), `poseidon-compose-default-chunk40-nested8q.json` (shrink tracking).
+Poseidon compose fixtures: `fixtures/e5b/poseidon-compose.json` (low/8q PASS), `poseidon-compose-default-chunk40.json` (outer=nested=40), `poseidon-compose-default-chunk40-nested4q.json` (shrink tracking PASS), `…-nested8q.json` (residual ref).
 
 ## Pull Request Guidelines
 

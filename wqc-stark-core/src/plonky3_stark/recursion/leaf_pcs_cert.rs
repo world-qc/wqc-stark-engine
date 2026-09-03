@@ -458,6 +458,19 @@ pub fn verify_leaf_pcs_certificate(
         eprintln!("[LeafPcsCertificate] Failed: FRI fold bind/groups: {e}");
         return false;
     }
+    let (fold_ys_for_deep, _) = match super::fri_fold_m4c::resolve_fri_fold_steps_for_groups(
+        proof,
+        &cert.fri_fold_ys,
+        &cert.fri_folds,
+        &cert.fri_fold_groups,
+        trace_width,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[LeafPcsCertificate] Failed: FRI fold resolve: {e}");
+            return false;
+        }
+    };
     let proven_queries = match fri_queries_from_proof(proof) {
         Ok(n) => n,
         Err(e) => {
@@ -536,7 +549,7 @@ pub fn verify_leaf_pcs_certificate(
             proof,
             &cert.deep_ros,
             &cert.deep_ro_traces,
-            &cert.fri_fold_ys,
+            &fold_ys_for_deep,
             trace_width,
         ) {
             eprintln!("[LeafPcsCertificate] Failed: DeepRo bind: {e}");
@@ -818,8 +831,27 @@ mod tests {
         let cert = build_leaf_pcs_certificate(&proof, kind, stmt).expect("cert");
         assert_eq!(cert.fri_val_mmcs.len(), 8);
         assert_eq!(cert.fri_chal_mmcs.len(), 8);
-        assert_eq!(cert.deep_ros.len(), 8);
+        // Idle unitary may ship multi-chunk quotients → DeepRo deferred (empty).
+        assert!(
+            cert.deep_ros.len() == 8 || cert.deep_ros.is_empty(),
+            "deep_ros len {}",
+            cert.deep_ros.len()
+        );
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
+        // Wire v6 / FriFold v2: digests + residual fold limbs omitted; decode must still verify.
+        let wire = crate::plonky3_stark::recursion::transcript_v6::encode_leaf_pcs_bundle_bytes(
+            &LeafPcsBundle {
+                certs: vec![cert.clone()],
+            },
+        );
+        let decoded =
+            crate::plonky3_stark::recursion::transcript_v6::decode_leaf_pcs_bundle_bytes(&wire)
+                .expect("decode leaf pcs bundle");
+        assert_eq!(decoded.certs.len(), 1);
+        if decoded.certs[0].fri_fold_groups.fold_ys.is_some() {
+            assert!(decoded.certs[0].fri_fold_ys.is_empty());
+        }
+        assert!(verify_leaf_pcs_certificate(&proof, &decoded.certs[0]));
     }
 
     #[test]
