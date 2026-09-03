@@ -8,7 +8,9 @@ use p3_uni_stark::{prove, verify};
 
 use crate::air::pad_air_matrix_for_uni_stark;
 use crate::plonky3_stark::aggregation_air::{AGG_LEFT_OK_COL, AGG_RIGHT_OK_COL, AGG_WIDTH};
-use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    devnet_circle_config, devnet_circle_config_with_queries, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES,
+};
 use crate::plonky3_stark::distribution_air::DistributionAir;
 use crate::plonky3_stark::shot_sampling_air::SHOT_SAMPLING_AIR_WIDTH;
 use crate::trace_spec::AIR_WIDTH;
@@ -356,17 +358,34 @@ impl OodStepProof {
 }
 
 pub fn generate_ood_proof(witness: &OodWitness) -> Result<OodStepProof, String> {
+    generate_ood_proof_with_queries(witness, DEVNET_FRI_NUM_QUERIES)
+}
+
+/// Like [`generate_ood_proof`], with explicit nested FRI query count.
+pub fn generate_ood_proof_with_queries(
+    witness: &OodWitness,
+    num_queries: usize,
+) -> Result<OodStepProof, String> {
     if witness.width as usize > OOD_MAX_TRACE_WIDTH {
         return Err(format!(
             "trace width {} > OOD_MAX_TRACE_WIDTH {}",
             witness.width, OOD_MAX_TRACE_WIDTH
         ));
     }
+    if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
+        return Err(format!(
+            "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
+        ));
+    }
     let pv = build_public_values(witness);
     let air = OodCheckAir::for_witness(witness);
     let matrix = pad_air_matrix_for_uni_stark(build_matrix());
     p3_air::check_constraints(&air, &matrix, &pv);
-    let config = devnet_circle_config();
+    let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
+        devnet_circle_config()
+    } else {
+        devnet_circle_config_with_queries(num_queries)
+    };
     let proof = prove(&config, &air, matrix, &pv);
     let ood_stark = super::prove_workspace::encode_stark_and_drop(proof, "ood_stark")?;
     Ok(OodStepProof::from_witness(witness, ood_stark))
@@ -389,7 +408,13 @@ pub fn verify_ood_proof(step: &OodStepProof) -> bool {
             return false;
         }
     };
-    let config = devnet_circle_config();
+    let config = match super::fri_fs_replay::circle_config_matching_proof(&stark) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[OodCheck] config: {e}");
+            return false;
+        }
+    };
     match verify(&config, &air, &stark, &pv) {
         Ok(()) => true,
         Err(e) => {

@@ -13,8 +13,8 @@
 //! 4. Wire dedup — leaf/layer digests omitted from PCS wire and recomputed at verify
 //!    (mmcs fold wire v6; path + chal-batch stubs); FriFold residual limbs omitted when
 //!    groups cover them (FriFold wire v2). This is where PCS metadata shrinks.
-//! 5. **`WQC_PCS_NESTED_FRI_QUERIES`** → nested Mmcs/FriFold FRI query count (≤ outer);
-//!    **production default = match outer**. E5b shrink tracking profile:
+//! 5. **`WQC_PCS_NESTED_FRI_QUERIES`** → nested Mmcs/FriFold/**OOD/DeepRo** FRI query count
+//!    (≤ outer); **production default = match outer**. E5b shrink tracking profile:
 //!    outer 40 + chunk40 + nested 4 (`poseidon-compose-default-chunk40-nested4q.json`,
 //!    PASS_SHRINK_GATE after wire v6). Nested 8 also PASSes after chal Mmcs merge
 //!    + FriFold YX (`poseidon-compose-default-chunk40-nested8q.json`).

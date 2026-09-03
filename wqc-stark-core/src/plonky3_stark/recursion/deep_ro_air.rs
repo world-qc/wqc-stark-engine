@@ -10,7 +10,10 @@ use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
 use crate::air::pad_air_matrix_for_uni_stark;
-use crate::plonky3_stark::config::{devnet_circle_config, Challenge, Val, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    devnet_circle_config, devnet_circle_config_with_queries, Challenge, Val, WqcStarkConfig,
+    DEVNET_FRI_NUM_QUERIES,
+};
 
 use super::deep_ro_native::deep_ro_w3_witness;
 use super::ef_limbs::{
@@ -225,13 +228,47 @@ pub fn generate_deep_ro_proof(
     log_n: usize,
     zeta: Challenge,
 ) -> Result<DeepRoStepProof, String> {
+    generate_deep_ro_proof_with_queries(
+        sx,
+        sy,
+        alpha,
+        px,
+        pz,
+        lambda,
+        log_n,
+        zeta,
+        DEVNET_FRI_NUM_QUERIES,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn generate_deep_ro_proof_with_queries(
+    sx: Val,
+    sy: Val,
+    alpha: Challenge,
+    px: [Val; 3],
+    pz: [Challenge; 3],
+    lambda: Challenge,
+    log_n: usize,
+    zeta: Challenge,
+    num_queries: usize,
+) -> Result<DeepRoStepProof, String> {
     if log_n == 0 || log_n > 16 {
         return Err("log_n out of range".into());
+    }
+    if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
+        return Err(format!(
+            "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
+        ));
     }
     let (pv, out) = build_public_values(sx, sy, alpha, px, pz, lambda, log_n, zeta);
     let matrix = pad_air_matrix_for_uni_stark(build_matrix());
     p3_air::check_constraints(&DeepRoAir, &matrix, &pv);
-    let config = devnet_circle_config();
+    let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
+        devnet_circle_config()
+    } else {
+        devnet_circle_config_with_queries(num_queries)
+    };
     let proof = prove(&config, &DeepRoAir, matrix, &pv);
     let deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro")?;
     Ok(DeepRoStepProof {
@@ -288,7 +325,13 @@ pub fn verify_deep_ro_proof(proof: &DeepRoStepProof) -> bool {
             return false;
         }
     };
-    let config = devnet_circle_config();
+    let config = match super::fri_fs_replay::circle_config_matching_proof(&stark) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[DeepRo] config: {e}");
+            return false;
+        }
+    };
     match verify(&config, &DeepRoAir, &stark, &pv) {
         Ok(()) => true,
         Err(e) => {

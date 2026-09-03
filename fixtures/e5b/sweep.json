@@ -99,10 +99,10 @@
       "fri_num_queries": 40,
       "nested_fri_num_queries": 8,
       "mmcs_group_chunk": 40,
-      "root_bytes": 501883,
-      "left_pcs_bytes": 203750,
+      "root_bytes": 478139,
+      "left_pcs_bytes": 191878,
       "mmcs_groups_per_side": 142228,
-      "note": "outer 40q + nested 8q (fixtures/e5b/poseidon-compose-default-chunk40-nested8q.json); PASS_SHRINK_GATE after chal merge + FriFold YX"
+      "note": "outer 40q + nested 8q; PASS after OOD/DeepRo nested queries (+ chal merge + FriFold YX)"
     }
   ],
   "best_knob_only": {
@@ -136,12 +136,13 @@
       "gap_to_gate_bytes": 635303
     },
     "chunk40_nested8q": {
-      "root_bytes": 501883,
+      "root_bytes": 478139,
       "mmcs_groups_per_side": 142228,
       "fri_fold_per_side": 14441,
-      "left_pcs_bytes": 203750,
-      "gap_to_gate_bytes": -10117,
-      "note": "PASS_SHRINK_GATE after mixed-depth chal Mmcs + FriFold YX"
+      "ood_per_side": 3288,
+      "left_pcs_bytes": 191878,
+      "gap_to_gate_bytes": -33861,
+      "note": "PASS_SHRINK_GATE after OOD/DeepRo on WQC_PCS_NESTED_FRI_QUERIES"
     },
     "chunk40_nested4q": {
       "root_bytes": 406555,
@@ -153,17 +154,17 @@
     }
   },
   "next_levers": [
-    "Wire v6 + FriFold v2 + mixed-depth chal Mmcs + FriFold YX",
-    "nested8q: 501 883 B PASS_SHRINK_GATE (gap -10 117); nested4q: 406 555 B",
+    "OOD/DeepRo now honor WQC_PCS_NESTED_FRI_QUERIES (idle OOD 15→3 KB/side)",
+    "nested8q: 478 139 B PASS (gap -33 861); nested4q: 406 555 B",
     "Production default remains nested=outer (~2.13 MiB at chunk40)",
-    "Further nested=outer shrink needs mixed-width Mmcs AIR or fewer groups (val_trace w=21 vs quot w=48)"
+    "Further nested=outer: mixed-width Mmcs AIR (val 21+quot 48) or nested FRI structure"
   ],
   "shrink_tracking": {
     "label": "poseidon/default/chunk40/nested8q",
-    "root_bytes": 501883,
+    "root_bytes": 478139,
     "vs_shrink_gate_bytes": 512000,
-    "gap_to_gate_bytes": -10117,
+    "gap_to_gate_bytes": -33861,
     "production_default": "nested_fri_num_queries == outer fri_num_queries",
-    "prior_nested8q_root_bytes": 588445
+    "prior_nested8q_root_bytes": 501883
   }
 }

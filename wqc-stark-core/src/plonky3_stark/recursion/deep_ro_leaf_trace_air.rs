@@ -10,7 +10,10 @@ use p3_mersenne_31::Mersenne31;
 use p3_uni_stark::{prove, verify};
 
 use crate::air::pad_air_matrix_for_uni_stark;
-use crate::plonky3_stark::config::{devnet_circle_config, Challenge, Val, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    devnet_circle_config, devnet_circle_config_with_queries, Challenge, Val, WqcStarkConfig,
+    DEVNET_FRI_NUM_QUERIES,
+};
 
 use super::deep_ro_native::deep_ro_leaf_trace_witness;
 use super::ef_limbs::{
@@ -514,8 +517,42 @@ pub fn generate_deep_ro_leaf_trace_proof(
     zeta: Challenge,
     zeta_next: Challenge,
 ) -> Result<DeepRoLeafTraceStepProof, String> {
+    generate_deep_ro_leaf_trace_proof_with_queries(
+        sx,
+        sy,
+        alpha,
+        px,
+        pz_local,
+        pz_next,
+        lambda,
+        log_n,
+        zeta,
+        zeta_next,
+        DEVNET_FRI_NUM_QUERIES,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn generate_deep_ro_leaf_trace_proof_with_queries(
+    sx: Val,
+    sy: Val,
+    alpha: Challenge,
+    px: &[Val],
+    pz_local: &[Challenge],
+    pz_next: &[Challenge],
+    lambda: Challenge,
+    log_n: usize,
+    zeta: Challenge,
+    zeta_next: Challenge,
+    num_queries: usize,
+) -> Result<DeepRoLeafTraceStepProof, String> {
     if log_n == 0 || log_n > 16 {
         return Err("log_n out of range".into());
+    }
+    if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
+        return Err(format!(
+            "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
+        ));
     }
     let width = px.len();
     let (pv, out) = build_public_values(
@@ -523,7 +560,11 @@ pub fn generate_deep_ro_leaf_trace_proof(
     )?;
     let matrix = pad_air_matrix_for_uni_stark(build_matrix());
     p3_air::check_constraints(&DeepRoLeafTraceAir, &matrix, &pv);
-    let config = devnet_circle_config();
+    let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
+        devnet_circle_config()
+    } else {
+        devnet_circle_config_with_queries(num_queries)
+    };
     let proof = prove(&config, &DeepRoLeafTraceAir, matrix, &pv);
     let deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro_leaf_trace")?;
     let pz_local_limbs: Vec<[Mersenne31; 3]> =
@@ -606,7 +647,13 @@ pub fn verify_deep_ro_leaf_trace_proof(proof: &DeepRoLeafTraceStepProof) -> bool
             return false;
         }
     };
-    let config = devnet_circle_config();
+    let config = match super::fri_fs_replay::circle_config_matching_proof(&stark) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[DeepRoLeafTrace] config: {e}");
+            return false;
+        }
+    };
     match verify(&config, &DeepRoLeafTraceAir, &stark, &pv) {
         Ok(()) => true,
         Err(e) => {

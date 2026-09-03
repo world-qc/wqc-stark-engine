@@ -27,7 +27,9 @@ use crate::plonky3_stark::{split_born_stark_tail, split_trajectory_stark_tail};
 use crate::trajectory::base_proof_without_aux_tails;
 
 use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
-use super::deep_ro_bind::{bind_deep_ro_leaf_bundle_to_proof, deep_ro_bundle_from_leaf_proof};
+use super::deep_ro_bind::{
+    bind_deep_ro_leaf_bundle_to_proof, deep_ro_bundle_from_leaf_proof_with_queries,
+};
 use super::deep_ro_leaf_trace_air::{verify_deep_ro_leaf_trace_proof, DeepRoLeafTraceStepProof};
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::fri_fold_bundle_from_proof;
@@ -47,7 +49,7 @@ use super::fri_mmcs_path::FriMmcsPathProof;
 use super::mmcs_group_fold::MmcsGroupFoldProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_leaf_ood_step;
-use super::ood_native::generate_leaf_ood_proof;
+use super::ood_native::generate_leaf_ood_proof_with_queries;
 use super::opening_cert::LEAF_PCS_MAX_SIBLINGS;
 use super::pcs_geom::{
     validate_born_recursion_width, LeafKind, LEAF_DEEP_RO_MAX_WIDTH, UNITARY_TRACE_WIDTH,
@@ -288,12 +290,15 @@ pub fn build_leaf_pcs_certificate(
     }
     let _chunk_guard = mem_plan.enter_chunk_override();
 
+    let proven_queries = fri_queries_from_proof(proof)?;
+    let nested_queries = nested_fri_queries(proven_queries);
+
     let ood_params = ood_params_for_kind(kind, proof)?;
     let num_outcomes = match ood_params {
         LeafOodParams::Distribution { num_outcomes } => num_outcomes,
         _ => 0,
     };
-    let ood = generate_leaf_ood_proof(proof, kind, num_outcomes)
+    let ood = generate_leaf_ood_proof_with_queries(proof, kind, num_outcomes, nested_queries)
         .map_err(|e| format!("R3-M3e leaf OOD prove failed: {e}"))?;
     if !verify_ood_proof(&ood) {
         return Err("R3-M3e leaf OOD self-check failed".into());
@@ -306,8 +311,9 @@ pub fn build_leaf_pcs_certificate(
     let deep_ros;
     let deep_ro_traces;
     if proof.opened_values.quotient_chunks.len() == 1 {
-        let deep_bundle = deep_ro_bundle_from_leaf_proof(proof, trace_width)
-            .map_err(|e| format!("R3-M3e DeepRo bundle prove failed: {e}"))?;
+        let deep_bundle =
+            deep_ro_bundle_from_leaf_proof_with_queries(proof, trace_width, nested_queries)
+                .map_err(|e| format!("R3-M3e DeepRo bundle prove failed: {e}"))?;
         // DeepRo self-checks run per-query inside deep_ro_bundle_from_leaf_proof.
         bind_deep_ro_leaf_bundle_to_proof(
             proof,
@@ -326,8 +332,6 @@ pub fn build_leaf_pcs_certificate(
         deep_ro_traces = Vec::new();
     }
 
-    let proven_queries = fri_queries_from_proof(proof)?;
-    let nested_queries = nested_fri_queries(proven_queries);
     let fri_fold_groups =
         apply_leaf_fri_fold_m4c_folds_with_queries(&mut fri_bundle, nested_queries)
             .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;

@@ -72,7 +72,7 @@ select outer FRI query count from the same task-level `security_level` (PCS `n` 
 
 - **Production default:** nested FRI `num_queries` = outer `n` (weakest attestation link matches the task tier).
 - **Shrink / experiment:** `WQC_PCS_NESTED_FRI_QUERIES` ∈ `{1,…,n}` (e.g. outer 40 + nested 4 → ~397 KiB idle Poseidon root, PASS ≤500 KB). Not a silent `security_level` downgrade.
-- Nested DeepRo uni-STARKs still use the fixed 40-query Circle config.
+- Nested Mmcs / FriFold / OOD / DeepRo uni-STARKs follow `WQC_PCS_NESTED_FRI_QUERIES` (default = outer).
 
 ## Build
 
@@ -150,7 +150,7 @@ outcome dimension K≤21 (AIR width W≤68). Protocol details:
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`low`/8q ≈ 402 KiB** (`411_736` B) — **PASS_SHRINK_GATE** (≤500 KB); **`default`/40q/chunk40 ≈ 2.13 MiB** (`2_238_265` B); **nested8q ≈ 490 KiB** (`501_883` B, PASS); **nested4q ≈ 397 KiB** (`406_555` B, PASS). Mmcs path/chal digests omitted on wire v6; chal first+commit merged; FriFold residual limbs omitted when groups present (v2) and Y+X packed into one group STARK. Nested Mmcs/FriFold FRI queries default to the outer count and can be lowered via `WQC_PCS_NESTED_FRI_QUERIES`. Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
+- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`low`/8q ≈ 402 KiB** (`411_736` B) — **PASS_SHRINK_GATE** (≤500 KB); **`default`/40q/chunk40 ≈ 2.13 MiB** (`2_238_265` B); **nested8q ≈ 467 KiB** (`478_139` B, PASS); **nested4q ≈ 397 KiB** (`406_555` B, PASS). Mmcs path/chal digests omitted on wire v6; chal first+commit merged; FriFold YX; OOD/DeepRo follow nested FRI queries. Nested Mmcs/FriFold/OOD/DeepRo FRI queries default to the outer count and can be lowered via `WQC_PCS_NESTED_FRI_QUERIES`. Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.
 - Prove-time witness oracles in-circuit

@@ -258,9 +258,24 @@ pub fn generate_ood_proof_from_witness(witness: &OodWitness) -> Result<OodStepPr
     super::ood_air::generate_ood_proof(witness)
 }
 
+pub fn generate_ood_proof_from_witness_with_queries(
+    witness: &OodWitness,
+    num_queries: usize,
+) -> Result<OodStepProof, String> {
+    super::ood_air::generate_ood_proof_with_queries(witness, num_queries)
+}
+
 pub fn generate_agg_ood_proof(proof: &Proof<WqcStarkConfig>) -> Result<OodStepProof, String> {
     let witness = extract_agg_ood_witness(proof)?;
     generate_ood_proof_from_witness(&witness)
+}
+
+pub fn generate_agg_ood_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    num_queries: usize,
+) -> Result<OodStepProof, String> {
+    let witness = extract_agg_ood_witness(proof)?;
+    generate_ood_proof_from_witness_with_queries(&witness, num_queries)
 }
 
 pub fn generate_leaf_ood_proof(
@@ -270,4 +285,14 @@ pub fn generate_leaf_ood_proof(
 ) -> Result<OodStepProof, String> {
     let witness = extract_leaf_ood_witness(proof, leaf_kind, num_outcomes)?;
     generate_ood_proof_from_witness(&witness)
+}
+
+pub fn generate_leaf_ood_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    leaf_kind: LeafKind,
+    num_outcomes: usize,
+    num_queries: usize,
+) -> Result<OodStepProof, String> {
+    let witness = extract_leaf_ood_witness(proof, leaf_kind, num_outcomes)?;
+    generate_ood_proof_from_witness_with_queries(&witness, num_queries)
 }
