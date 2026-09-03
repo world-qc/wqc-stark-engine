@@ -292,9 +292,13 @@ where
                             leaf_start.clone()
                                 * (AB::Expr::from(curr_state[i]) - pv[row_base + row_i].clone()),
                         );
-                    } else {
+                    } else if n_leaf == 1 {
+                        // Single-perm partial leaf: unused rate starts at zero.
                         builder.assert_zero(leaf_start.clone() * AB::Expr::from(curr_state[i]));
                     }
+                    // Multi-perm partial tail: remaining rate slots carry the
+                    // previous perm output (not zero); segment-boundary
+                    // constraints + perm trace witness enforce the sponge.
                 }
                 if k == 0 {
                     for i in POSEIDON_RATE..POSEIDON2_WIDTH {
@@ -767,6 +771,65 @@ mod tests {
             index,
             root,
         }
+    }
+
+    fn stmt_poseidon_w21(index: usize, sibling: [u8; 32], seed: u32) -> MmcsPathStatement {
+        let row: Vec<_> = (0..21)
+            .map(|i| Mersenne31::from_u32(seed + i as u32 * 5 + 7))
+            .collect();
+        let leaf = hash_val_leaf_poseidon(&row);
+        let root = if index.is_multiple_of(2) {
+            compress_digests_poseidon(leaf, sibling)
+        } else {
+            compress_digests_poseidon(sibling, leaf)
+        };
+        MmcsPathStatement {
+            row,
+            siblings: vec![sibling],
+            index,
+            root,
+        }
+    }
+
+    #[test]
+    fn poseidon_m4b_sponge_capacity_carry_width21() {
+        use crate::plonky3_stark::config_poseidon::poseidon_sponge_leaf_perm_inputs;
+        use p3_mersenne_31::default_mersenne31_poseidon2_16;
+        use p3_symmetric::Permutation;
+
+        let row: Vec<_> = (0..21)
+            .map(|i| Mersenne31::from_u32(i as u32 * 5 + 7))
+            .collect();
+        let inputs = poseidon_sponge_leaf_perm_inputs(&row);
+        let perm = default_mersenne31_poseidon2_16();
+        for (k, inp) in inputs.iter().enumerate() {
+            let mut native = *inp;
+            perm.permute_mut(&mut native);
+            let trace = build_perm_trace(*inp);
+            let last = &trace.values[(trace.height() - 1) * trace.width..][..POSEIDON2_WIDTH];
+            assert_eq!(last, native.as_slice(), "perm {k} output mismatch");
+            if k + 1 < inputs.len() {
+                for i in POSEIDON_RATE..POSEIDON2_WIDTH {
+                    assert_eq!(
+                        inputs[k + 1][i],
+                        native[i],
+                        "capacity carry {k}->{} slot {i}",
+                        k + 1
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn poseidon_m4b_two_paths_width21_depth1_roundtrip() {
+        let stmts = vec![
+            stmt_poseidon_w21(0, packed_sib(9), 100),
+            stmt_poseidon_w21(1, packed_sib(3), 200),
+        ];
+        let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove w21");
+        assert_eq!(proof.leaf_width, 21);
+        assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
     }
 
     #[test]

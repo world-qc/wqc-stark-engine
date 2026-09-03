@@ -119,7 +119,7 @@ pub use fri_mmcs_m4c::{
 };
 pub use fri_mmcs_path::{
     generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
-    verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
+    verify_fri_mmcs_path_proof, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
 };
 pub use fri_mmcs_path_m4a::{
     generate_fri_mmcs_batched_path_proof, verify_fri_mmcs_batched_path_proof,

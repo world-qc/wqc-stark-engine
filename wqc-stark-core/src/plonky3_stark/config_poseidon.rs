@@ -241,6 +241,26 @@ mod tests {
     }
 
     #[test]
+    fn sponge_witness_replays_p3_hash() {
+        let perm = default_mersenne31_poseidon2_16();
+        for width in [3usize, 8, 9, 12, 21, 48] {
+            let row: Vec<_> = (0..width)
+                .map(|i| Mersenne31::from_u32(i as u32 * 5 + 7))
+                .collect();
+            let expected = hash_val_leaf_poseidon_mmcs(&row);
+            let inputs = poseidon_sponge_leaf_perm_inputs(&row);
+            assert_eq!(inputs.len(), poseidon_leaf_perm_count(width));
+            let mut state = [Mersenne31::ZERO; 16];
+            for inp in &inputs {
+                state = *inp;
+                perm.permute_mut(&mut state);
+            }
+            let digest = pack_digest(state[..8].try_into().unwrap());
+            assert_eq!(digest, expected, "width {width}");
+        }
+    }
+
+    #[test]
     fn sponge_perm_count_matches_helper() {
         assert_eq!(poseidon_leaf_perm_count(3), 1);
         assert_eq!(poseidon_leaf_perm_count(8), 1);

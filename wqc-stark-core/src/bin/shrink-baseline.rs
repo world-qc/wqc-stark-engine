@@ -176,13 +176,23 @@ fn run_poseidon_benchmark(security_level: &str) -> Result<(), String> {
 fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     use wqc_stark_core::shrink::benchmark_idle_two_leaf_poseidon_compose;
 
+    let level_label = if security_level.is_empty() {
+        "default"
+    } else {
+        security_level
+    };
     eprintln!(
-        "E5b Poseidon compose: idle two-leaf RecAgg (security_level={security_level})…"
+        "E5b Poseidon compose: idle two-leaf RecAgg (security_level={level_label})…"
     );
     let report = benchmark_idle_two_leaf_poseidon_compose(security_level)?;
+    let fri_q = wqc_stark_core::shrink::ShrinkComposeProfile::default()
+        .with_security_level(security_level)
+        .fri_num_queries();
     let out = serde_json::json!({
         "benchmark": "idle_two_leaf_poseidon_compose",
         "security_level": report.security_level,
+        "security_level_label": level_label,
+        "fri_num_queries": fri_q,
         "root_bytes": report.compose.root_bytes,
         "left_leaf_bytes": report.compose.left_leaf_bytes,
         "right_leaf_bytes": report.compose.right_leaf_bytes,
@@ -192,6 +202,8 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
         "keccak_reference_root_bytes": report.keccak_reference_root_bytes,
         "root_saved_vs_keccak_ref": report.root_saved_vs_keccak_ref,
         "reference_sweep": SWEEP_REF_LABEL,
+        "shrink_gate_bytes": SHRINK_GATE_BYTES,
+        "vs_shrink_gate": (report.compose.root_bytes as i64) - (SHRINK_GATE_BYTES as i64),
     });
     println!(
         "{}",
@@ -199,7 +211,17 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     );
 
     let repo = stark_engine_repo_root();
-    let path = repo.join("fixtures/e5b/poseidon-compose.json");
+    let filename = if security_level.is_empty() || security_level == "low" {
+        // Keep historical path for the primary low compose fixture.
+        if security_level == "low" {
+            "fixtures/e5b/poseidon-compose.json".to_string()
+        } else {
+            "fixtures/e5b/poseidon-compose-default.json".to_string()
+        }
+    } else {
+        format!("fixtures/e5b/poseidon-compose-{level_label}.json")
+    };
+    let path = repo.join(&filename);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }

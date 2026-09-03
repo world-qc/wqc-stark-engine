@@ -1,0 +1,99 @@
+   Compiling wqc-stark-core v0.1.0 (/Users/yoshitaka/world-qc/wqc-stark-engine/wqc-stark-core)
+warning: type alias `FieldHash` is never used
+  --> wqc-stark-core/src/plonky3_stark/config.rs:37:10
+   |
+37 | pub type FieldHash = PoseidonPackedFieldHash;
+   |          ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: type alias `Compress` is never used
+  --> wqc-stark-core/src/plonky3_stark/config.rs:38:10
+   |
+38 | pub type Compress = PoseidonPackedCompress;
+   |          ^^^^^^^^
+
+warning: type alias `PoseidonFieldValMmcs` is never used
+   --> wqc-stark-core/src/plonky3_stark/config_poseidon.rs:102:10
+    |
+102 | pub type PoseidonFieldValMmcs = MerkleTreeMmcs<
+    |          ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `prove_val_leaf` is never used
+   --> wqc-stark-core/src/plonky3_stark/recursion/keccak256_air.rs:479:8
+    |
+479 | pub fn prove_val_leaf(row: &[Mersenne31]) -> Result<Keccak256StarkProof, String> {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `verify_val_leaf` is never used
+   --> wqc-stark-core/src/plonky3_stark/recursion/keccak256_air.rs:498:8
+    |
+498 | pub fn verify_val_leaf(row: &[Mersenne31], proof: &Keccak256StarkProof) -> bool {
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `verify_val_leaf_digest` is never used
+   --> wqc-stark-core/src/plonky3_stark/recursion/keccak256_air.rs:528:8
+    |
+528 | pub fn verify_val_leaf_digest(
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `merkle_root_from_path_keccak` is never used
+  --> wqc-stark-core/src/plonky3_stark/recursion/merkle_keccak.rs:79:8
+   |
+79 | pub fn merkle_root_from_path_keccak(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `POSEIDON2_PERM_STATE_COLS` is never used
+  --> wqc-stark-core/src/plonky3_stark/recursion/poseidon2_perm_air.rs:26:11
+   |
+26 | pub const POSEIDON2_PERM_STATE_COLS: usize = POSEIDON2_WIDTH;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `external_round` is never used
+   --> wqc-stark-core/src/plonky3_stark/recursion/poseidon2_perm_air.rs:142:4
+    |
+142 | fn external_round<R: PrimeCharacteristicRing>(state: &mut [R; POSEIDON2_WIDTH], rc: &[R; POSEIDON2_WIDTH]) {
+    |    ^^^^^^^^^^^^^^
+
+warning: constant `POSEIDON2_SEG_ROWS` is never used
+  --> wqc-stark-core/src/plonky3_stark/recursion/poseidon2_group_m4b.rs:34:11
+   |
+34 | pub const POSEIDON2_SEG_ROWS: usize = POSEIDON2_PERM_ROWS;
+   |           ^^^^^^^^^^^^^^^^^^
+
+warning: function `decode_keccak_group_fold` is never used
+   --> wqc-stark-core/src/plonky3_stark/recursion/transcript_v6.rs:618:4
+    |
+618 | fn decode_keccak_group_fold(proof: &[u8], offset: usize) -> Option<(KeccakGroupFoldProof, usize)> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `wqc-stark-core` (lib) generated 11 warnings
+    Finished `release` profile [optimized] target(s) in 54.67s
+     Running `/var/folders/kb/218_f3n52rz43dz9crbpfxs80000gn/T/cursor-sandbox-cache/d9594190ad6f51bcc99667745677ccf5/cargo-target/release/shrink-baseline --poseidon-compose`
+E5b Poseidon compose: idle two-leaf RecAgg (security_level=default)…
+[Aggregation] using prebuilt leaf PCS bundle (1742389 bytes)
+[Aggregation] using prebuilt leaf PCS bundle (1742389 bytes)
+[M4c size] compose left leaf PCS STARKs total=1595450 bytes (1.52 MiB); certs=1 mmcs_groups=1465045 fri_fold=115245 deep_ro=0 ood=15160
+[M4c size] compose right leaf PCS STARKs total=1595450 bytes (1.52 MiB); certs=1 mmcs_groups=1465045 fri_fold=115245 deep_ro=0 ood=15160
+[Aggregation] using embedded leaf PCS bundle from rec-agg proof (1 certs)
+[Aggregation] using embedded leaf PCS bundle from rec-agg proof (1 certs)
+[RecursiveAggregationAir] Verification success (R3-M2 compose=root)
+[Aggregation] Root proof verified (R3-M2 fast path) for task e5b-shrink-parent
+{
+  "benchmark": "idle_two_leaf_poseidon_compose",
+  "fri_num_queries": 40,
+  "has_rec_agg_tail": true,
+  "keccak_reference_root_bytes": 5022410,
+  "left_leaf_bytes": 16247,
+  "left_pcs_bytes": 1742389,
+  "reference_sweep": "low/chunk24",
+  "right_leaf_bytes": 16247,
+  "right_pcs_bytes": 1742389,
+  "root_bytes": 3579161,
+  "root_saved_vs_keccak_ref": 1443249,
+  "security_level": "",
+  "security_level_label": "default",
+  "shrink_gate_bytes": 512000,
+  "vs_shrink_gate": 3067161
+}
+wrote /Users/yoshitaka/world-qc/wqc-stark-engine/fixtures/e5b/poseidon-compose-default.json (ref low/chunk24)
