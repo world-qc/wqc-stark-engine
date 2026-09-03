@@ -57,10 +57,10 @@
       "security_level": "low",
       "fri_num_queries": 8,
       "mmcs_group_chunk": 24,
-      "root_bytes": 418514,
-      "left_pcs_bytes": 198106,
-      "mmcs_groups_per_side": 141802,
-      "note": "PASS_SHRINK_GATE: nested Mmcs/FriFold STARKs match outer 8q (fixtures/e5b/poseidon-compose.json); −92% vs Keccak low"
+      "root_bytes": 418626,
+      "left_pcs_bytes": 198162,
+      "mmcs_groups_per_side": 141858,
+      "note": "PASS_SHRINK_GATE: PV depth-packed + nested 8q (fixtures/e5b/poseidon-compose.json); −92% vs Keccak low"
     },
     {
       "label": "poseidon/default/chunk24",
@@ -77,10 +77,10 @@
       "security_level": "",
       "fri_num_queries": 40,
       "mmcs_group_chunk": 40,
-      "root_bytes": 2272927,
-      "left_pcs_bytes": 1089272,
-      "mmcs_groups_per_side": 812028,
-      "note": "Poseidon 40q/chunk40 (fixtures/e5b/poseidon-compose-default-chunk40.json); −36% vs chunk24, −79% vs Keccak default"
+      "root_bytes": 2273253,
+      "left_pcs_bytes": 1089435,
+      "mmcs_groups_per_side": 812191,
+      "note": "Poseidon 40q/chunk40 PV depth-packed (fixtures/e5b/poseidon-compose-default-chunk40.json); −79% vs Keccak default"
     }
   ],
   "best_knob_only": {
@@ -90,10 +90,10 @@
   },
   "best_poseidon": {
     "label": "poseidon/low/chunk24",
-    "root_bytes": 418514,
+    "root_bytes": 418626,
     "vs_keccak_low_pct": 92,
     "vs_shrink_gate_bytes": 512000,
-    "gap_to_gate_bytes": -93486,
+    "gap_to_gate_bytes": -93374,
     "status": "PASS_SHRINK_GATE"
   },
   "poseidon_default_40q": {
@@ -102,16 +102,16 @@
       "mmcs_groups_per_side": 1465045
     },
     "chunk40": {
-      "root_bytes": 2272927,
-      "mmcs_groups_per_side": 812028,
+      "root_bytes": 2273253,
+      "mmcs_groups_per_side": 812191,
       "fri_fold_per_side": 115245,
-      "gap_to_gate_bytes": 1760927
+      "gap_to_gate_bytes": 1761253
     }
   },
   "next_levers": [
-    "PASS at low/8q (418 514 B < 500 KB gate) via nested FRI query match",
-    "Close 40q gap: poseidon/default/chunk40 ≈ 2.17 MiB still ~4.4× above gate",
-    "Scale nested-query win + chunk40 + group AIR shrink toward 40q gate",
-    "Remeasure poseidon/default/chunk40 after nested-query match (same 40q nested — expect little change)"
+    "PASS at low/8q (418 626 B < 500 KB gate) via nested FRI query match + PV depth-pack",
+    "PV depth-pack (drop index/layer_digests, depth-only pad) structurally correct but STARK proof size dominated by FRI commitments — negligible root delta",
+    "Close 40q gap: poseidon/default/chunk40 ≈ 2.17 MiB still ~4.4x above gate",
+    "Next levers: wire layer_digests/leaf_digests dedup, Keccak group PV parity, FriFold PV pack, shared-root header"
   ]
 }

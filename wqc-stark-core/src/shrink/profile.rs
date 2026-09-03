@@ -6,7 +6,8 @@
 //!    nested Mmcs/FriFold STARKs now match this count
 //! 2. **`WQC_PCS_MMCS_GROUP_CHUNK`** → fewer/larger group STARKs (sublinear wire savings;
 //!    chunk40 helps when fri_num_queries > chunk)
-//! 3. Group AIR / public-value shrink (still the long-term size lever toward 500 KB)
+//! 3. Group AIR / public-value shrink — Poseidon PV is depth-packed (no MAX_DEPTH pad,
+//!    no unused index, no intermediate layer digests; compress chain via transitions)
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

@@ -1,7 +1,12 @@
 //! E5b prototype: Poseidon2 Mmcs group fold parallel to [`super::fri_mmcs_group_m4b`].
 //!
 //! Replaces Keccak sponge segments (width ~1657) with width-16 Poseidon2 perm traces (width 21).
-//! Wire format is **not** production-ready; size/constraint prototype only.
+//!
+//! Public values (depth-packed, no intermediate layer digests):
+//! `path_count | depth | ×path { leaf_row[W] | leaf_digest[8] | root[8]
+//!   | index_bits[depth] | siblings[depth×8] }`.
+//! Intermediate Merkle digests chain via segment-boundary transitions; the final
+//! compress output binds to `root`.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -62,34 +67,29 @@ pub struct PoseidonMmcsGroupPathAir {
     pub path_count: usize,
 }
 
-fn p2_path_stride(leaf_width: usize) -> usize {
-    leaf_width + DIGEST_LIMBS * 2 + 1 + FRI_MMCS_MAX_DEPTH + FRI_MMCS_MAX_DEPTH * DIGEST_LIMBS * 2
+/// Per-path PV stride: leaf | leaf_digest | root | index_bits[depth] | siblings[depth×8].
+fn p2_path_stride(leaf_width: usize, depth: usize) -> usize {
+    leaf_width + DIGEST_LIMBS * 2 + depth + depth * DIGEST_LIMBS
 }
 
-fn p2_num_public(leaf_width: usize, path_count: usize) -> usize {
-    2 + path_count * p2_path_stride(leaf_width)
+fn p2_num_public(leaf_width: usize, depth: usize, path_count: usize) -> usize {
+    2 + path_count * p2_path_stride(leaf_width, depth)
 }
 
-fn pv_path_base(path: usize, leaf_width: usize) -> usize {
-    2 + path * p2_path_stride(leaf_width)
+fn pv_path_base(path: usize, leaf_width: usize, depth: usize) -> usize {
+    2 + path * p2_path_stride(leaf_width, depth)
 }
-fn pv_leaf_digest_off(path: usize, leaf_width: usize) -> usize {
-    pv_path_base(path, leaf_width) + leaf_width
+fn pv_leaf_digest_off(path: usize, leaf_width: usize, depth: usize) -> usize {
+    pv_path_base(path, leaf_width, depth) + leaf_width
 }
-fn pv_root_off(path: usize, leaf_width: usize) -> usize {
-    pv_leaf_digest_off(path, leaf_width) + DIGEST_LIMBS
+fn pv_root_off(path: usize, leaf_width: usize, depth: usize) -> usize {
+    pv_leaf_digest_off(path, leaf_width, depth) + DIGEST_LIMBS
 }
-fn pv_index_off(path: usize, leaf_width: usize) -> usize {
-    pv_root_off(path, leaf_width) + DIGEST_LIMBS
+fn pv_index_bits_off(path: usize, leaf_width: usize, depth: usize) -> usize {
+    pv_root_off(path, leaf_width, depth) + DIGEST_LIMBS
 }
-fn pv_index_bits_off(path: usize, leaf_width: usize) -> usize {
-    pv_index_off(path, leaf_width) + 1
-}
-fn pv_siblings_off(path: usize, leaf_width: usize) -> usize {
-    pv_index_bits_off(path, leaf_width) + FRI_MMCS_MAX_DEPTH
-}
-fn pv_layers_off(path: usize, leaf_width: usize) -> usize {
-    pv_siblings_off(path, leaf_width) + FRI_MMCS_MAX_DEPTH * DIGEST_LIMBS
+fn pv_siblings_off(path: usize, leaf_width: usize, depth: usize) -> usize {
+    pv_index_bits_off(path, leaf_width, depth) + depth
 }
 
 impl<F: Field> BaseAir<F> for PoseidonMmcsGroupPathAir {
@@ -102,7 +102,7 @@ impl<F: Field> BaseAir<F> for PoseidonMmcsGroupPathAir {
     }
 
     fn num_public_values(&self) -> usize {
-        p2_num_public(self.leaf_width, self.path_count)
+        p2_num_public(self.leaf_width, self.depth, self.path_count)
     }
 }
 
@@ -274,12 +274,12 @@ where
 
         for p in 0..path_count {
             let path_sel = eq_bits_const::<AB>(&path_bits_c, p as u32);
-            let row_base = pv_path_base(p, leaf_width);
-            let leaf_d_base = pv_leaf_digest_off(p, leaf_width);
-            let root_base = pv_root_off(p, leaf_width);
-            let idx_bits_base = pv_index_bits_off(p, leaf_width);
-            let sib_base = pv_siblings_off(p, leaf_width);
-            let layer_base = pv_layers_off(p, leaf_width);
+            let path_sel_n = eq_bits_const::<AB>(&path_bits_n, p as u32);
+            let row_base = pv_path_base(p, leaf_width, depth);
+            let leaf_d_base = pv_leaf_digest_off(p, leaf_width, depth);
+            let root_base = pv_root_off(p, leaf_width, depth);
+            let idx_bits_base = pv_index_bits_off(p, leaf_width, depth);
+            let sib_base = pv_siblings_off(p, leaf_width, depth);
 
             // Leaf sponge segment starts (RATE=8 overwrite absorb + capacity carry).
             for k in 0..n_leaf {
@@ -313,7 +313,7 @@ where
                 let leaf_next = is_tr.clone()
                     * seg_start_n.clone()
                     * eq_bits_const::<AB>(&seg_bits_n, k as u32)
-                    * eq_bits_const::<AB>(&path_bits_n, p as u32);
+                    * path_sel_n.clone();
                 for i in POSEIDON_RATE..POSEIDON2_WIDTH {
                     builder.assert_zero(
                         leaf_next.clone()
@@ -322,20 +322,16 @@ where
                 }
             }
 
-            // Compress segment starts: left‖right (8+8 limbs) from PV digests.
-            for layer in 0..depth {
+            // Compress layer 0 start: left‖right from leaf_digest PV + sibling[0].
+            {
                 let start = seg_start_c.clone()
-                    * eq_bits_const::<AB>(&seg_bits_c, (n_leaf + layer) as u32)
+                    * eq_bits_const::<AB>(&seg_bits_c, n_leaf as u32)
                     * path_sel.clone();
-                let bit = pv[idx_bits_base + layer].clone();
+                let bit = pv[idx_bits_base].clone();
                 let not_bit = one.clone() - bit.clone();
                 for limb in 0..DIGEST_LIMBS {
-                    let prev = if layer == 0 {
-                        pv[leaf_d_base + limb].clone()
-                    } else {
-                        pv[layer_base + (layer - 1) * DIGEST_LIMBS + limb].clone()
-                    };
-                    let sib = pv[sib_base + layer * DIGEST_LIMBS + limb].clone();
+                    let prev = pv[leaf_d_base + limb].clone();
+                    let sib = pv[sib_base + limb].clone();
                     let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
                     let right = bit.clone() * prev + not_bit.clone() * sib;
                     builder.assert_zero(
@@ -344,6 +340,30 @@ where
                     builder.assert_zero(
                         start.clone()
                             * (AB::Expr::from(curr_state[DIGEST_LIMBS + limb]) - right),
+                    );
+                }
+            }
+
+            // Compress layers L>0: chain digest from previous segment output on the
+            // boundary transition (prev = curr_state[0..8]), siblings/bits from PV.
+            for layer in 1..depth {
+                let start_next = is_tr.clone()
+                    * seg_start_n.clone()
+                    * eq_bits_const::<AB>(&seg_bits_n, (n_leaf + layer) as u32)
+                    * path_sel_n.clone();
+                let bit = pv[idx_bits_base + layer].clone();
+                let not_bit = one.clone() - bit.clone();
+                for limb in 0..DIGEST_LIMBS {
+                    let prev: AB::Expr = curr_state[limb].into();
+                    let sib = pv[sib_base + layer * DIGEST_LIMBS + limb].clone();
+                    let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
+                    let right = bit.clone() * prev + not_bit.clone() * sib;
+                    builder.assert_zero(
+                        start_next.clone() * (AB::Expr::from(next_state[limb]) - left),
+                    );
+                    builder.assert_zero(
+                        start_next.clone()
+                            * (AB::Expr::from(next_state[DIGEST_LIMBS + limb]) - right),
                     );
                 }
             }
@@ -360,24 +380,14 @@ where
                         * (AB::Expr::from(curr_state[limb]) - pv[leaf_d_base + limb].clone()),
                 );
             }
-            for layer in 0..depth {
-                let layer_out = bind_out.clone()
-                    * eq_bits_const::<AB>(&seg_bits_c, (n_leaf + layer) as u32)
-                    * path_sel.clone();
-                for limb in 0..DIGEST_LIMBS {
-                    builder.assert_zero(
-                        layer_out.clone()
-                            * (AB::Expr::from(curr_state[limb])
-                                - pv[layer_base + layer * DIGEST_LIMBS + limb].clone()),
-                    );
-                }
-            }
-
-            let last = depth - 1;
+            // Final compress output binds to claimed Merkle root (no intermediate layer PVs).
+            let root_out = bind_out
+                * eq_bits_const::<AB>(&seg_bits_c, (n_leaf + depth - 1) as u32)
+                * path_sel.clone();
             for limb in 0..DIGEST_LIMBS {
                 builder.assert_zero(
-                    pv[layer_base + last * DIGEST_LIMBS + limb].clone()
-                        - pv[root_base + limb].clone(),
+                    root_out.clone()
+                        * (AB::Expr::from(curr_state[limb]) - pv[root_base + limb].clone()),
                 );
             }
         }
@@ -430,38 +440,25 @@ fn build_public_values(
     roots: &[[u8; 32]],
     indices: &[u32],
     siblings: &[Vec<[u8; 32]>],
-    layer_digests: &[Vec<[u8; 32]>],
 ) -> Result<Vec<Mersenne31>, String> {
-    let mut pv = Vec::with_capacity(p2_num_public(leaf_width, path_count));
+    let mut pv = Vec::with_capacity(p2_num_public(leaf_width, depth, path_count));
     pv.push(Mersenne31::from_u32(path_count as u32));
     pv.push(Mersenne31::from_u32(depth as u32));
     for p in 0..path_count {
         if rows[p].len() != leaf_width {
             return Err("inhomogeneous leaf_width".into());
         }
+        if siblings[p].len() != depth {
+            return Err("siblings length mismatch".into());
+        }
         pv.extend_from_slice(&rows[p]);
         pv.extend_from_slice(&digest_bytes_to_limbs(leaf_digests[p]));
         pv.extend_from_slice(&digest_bytes_to_limbs(roots[p]));
-        pv.push(Mersenne31::from_u32(indices[p]));
-        for i in 0..FRI_MMCS_MAX_DEPTH {
-            let bit = if i < depth { (indices[p] >> i) & 1 } else { 0 };
-            pv.push(Mersenne31::from_u32(bit));
+        for i in 0..depth {
+            pv.push(Mersenne31::from_u32((indices[p] >> i) & 1));
         }
-        for i in 0..FRI_MMCS_MAX_DEPTH {
-            let s = if i < depth {
-                digest_bytes_to_limbs(siblings[p][i])
-            } else {
-                [Mersenne31::ZERO; DIGEST_LIMBS]
-            };
-            pv.extend_from_slice(&s);
-        }
-        for i in 0..FRI_MMCS_MAX_DEPTH {
-            let d = if i < depth {
-                digest_bytes_to_limbs(layer_digests[p][i])
-            } else {
-                [Mersenne31::ZERO; DIGEST_LIMBS]
-            };
-            pv.extend_from_slice(&d);
+        for i in 0..depth {
+            pv.extend_from_slice(&digest_bytes_to_limbs(siblings[p][i]));
         }
     }
     Ok(pv)
@@ -577,7 +574,6 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
         &roots,
         &indices,
         &siblings,
-        &layer_digests,
     )?;
     drop(rows);
     drop(roots);
@@ -658,7 +654,6 @@ pub fn verify_poseidon_group_fold_proof(
         &roots,
         &indices,
         &siblings,
-        &proof.layer_digests,
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -868,5 +863,54 @@ mod tests {
         let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove w48");
         assert_eq!(proof.leaf_width, 48);
         assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
+    }
+
+    /// Two-layer Merkle path (depth=2) exercises compress chaining without layer PVs.
+    fn stmt_poseidon_w3_depth2(index: usize, sib0: [u8; 32], sib1: [u8; 32], seed: u32) -> MmcsPathStatement {
+        let row = vec![
+            Mersenne31::from_u32(seed),
+            Mersenne31::from_u32(seed + 1),
+            Mersenne31::from_u32(seed + 2),
+        ];
+        let leaf = hash_val_leaf_poseidon(&row);
+        let mut digest = leaf;
+        let mut idx = index;
+        for sib in [sib0, sib1] {
+            let (left, right) = if idx.is_multiple_of(2) {
+                (digest, sib)
+            } else {
+                (sib, digest)
+            };
+            digest = compress_digests_poseidon(left, right);
+            idx /= 2;
+        }
+        MmcsPathStatement {
+            row,
+            siblings: vec![sib0, sib1],
+            index,
+            root: digest,
+        }
+    }
+
+    #[test]
+    fn poseidon_m4b_two_paths_depth2_roundtrip() {
+        let stmts = vec![
+            stmt_poseidon_w3_depth2(0, packed_sib(9), packed_sib(11), 1),
+            stmt_poseidon_w3_depth2(3, packed_sib(3), packed_sib(7), 10),
+        ];
+        let proof = generate_poseidon_group_fold_proof(&stmts).expect("prove d2");
+        assert_eq!(proof.depth, 2);
+        assert_eq!(
+            p2_num_public(3, 2, 2),
+            2 + 2 * (3 + 8 + 8 + 2 + 2 * 8)
+        );
+        assert!(verify_poseidon_group_fold_proof(&stmts, &proof));
+    }
+
+    #[test]
+    fn poseidon_m4b_pv_stride_is_depth_packed() {
+        // Old MAX_DEPTH=20 stride for W=3 was 360; packed d=8 is 91.
+        assert_eq!(p2_path_stride(3, 8), 3 + 16 + 8 + 64);
+        assert_eq!(p2_num_public(3, 8, 40), 2 + 40 * 91);
     }
 }
