@@ -34,8 +34,6 @@ pub type Val = Mersenne31;
 pub type Challenge = BinomialExtensionField<Val, 3>;
 /// FS sponge hash (Keccak); independent of Poseidon ValMmcs.
 pub type ByteHash = Keccak256Hash;
-pub type FieldHash = PoseidonPackedFieldHash;
-pub type Compress = PoseidonPackedCompress;
 pub type ValMmcs = PoseidonValMmcs;
 pub type ChallengeMmcs = PoseidonChallengeMmcs;
 pub type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;

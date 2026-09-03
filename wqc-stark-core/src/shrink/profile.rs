@@ -96,7 +96,7 @@ impl ShrinkComposeProfile {
 
 /// Mirror of `nested_fri_queries` for shrink tooling (avoids a plonky3-feature cycle).
 fn nested_fri_queries_from_env(outer_queries: usize) -> usize {
-    let outer = outer_queries.max(1).min(DEVNET_FRI_NUM_QUERIES);
+    let outer = outer_queries.clamp(1, DEVNET_FRI_NUM_QUERIES);
     match std::env::var("WQC_PCS_NESTED_FRI_QUERIES")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())

@@ -3,8 +3,6 @@
 //! Production [`crate::plonky3_stark::config::ValMmcs`] uses Poseidon2; these Keccak helpers
 //! remain for Keccak group-fold AIRs and legacy path STARKs.
 
-#[cfg(test)]
-use p3_field::PrimeField32;
 use p3_keccak::Keccak256Hash;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
@@ -76,6 +74,7 @@ pub fn merkle_root_from_path(
 }
 
 /// Keccak Merkle root replay (Keccak group / legacy tests).
+#[allow(dead_code)] // exercised by keccak_merkle_air tests
 pub fn merkle_root_from_path_keccak(
     leaf_digest: [u8; 32],
     siblings: &[[u8; 32]],

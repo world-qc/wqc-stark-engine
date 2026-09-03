@@ -1777,7 +1777,7 @@ mod tests {
         let saved = strip_chal_mmcs_siblings_for_groups(&mut bundle, &groups);
         // first_layer 2 sibs + commit depth-1 (1 sib); depth-2 commit kept
         assert_eq!(saved, 32 * (2 + 1));
-        assert_eq!(bundle[0].commit_siblings[0].is_empty(), true);
+        assert!(bundle[0].commit_siblings[0].is_empty());
         assert_eq!(bundle[0].commit_siblings[1].len(), 2);
     }
 

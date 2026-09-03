@@ -21,9 +21,6 @@ use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
 
 use super::poseidon2_spike::POSEIDON2_WIDTH;
 
-/// State columns `[0..WIDTH)`.
-pub const POSEIDON2_PERM_STATE_COLS: usize = POSEIDON2_WIDTH;
-
 /// Step-index bit decomposition columns `[WIDTH..WIDTH+STEP_BITS)`.
 pub const POSEIDON2_STEP_BITS: usize = 5;
 
@@ -120,7 +117,7 @@ fn mds_light<R: PrimeCharacteristicRing, const WIDTH: usize>(state: &mut [R; WID
 }
 
 fn internal_linear<R: PrimeCharacteristicRing>(state: &mut [R; POSEIDON2_WIDTH]) {
-    let part_sum: R = state[1..].iter().map(|r| r.clone()).sum();
+    let part_sum: R = state[1..].iter().cloned().sum();
     let full_sum = part_sum.clone() + state[0].clone();
     state[0] = part_sum - state[0].clone();
     state[1] = full_sum.clone() + state[1].clone();
@@ -137,16 +134,6 @@ fn external_round_native(
 ) {
     for i in 0..POSEIDON2_WIDTH {
         state[i] = sbox5(state[i] + rc[i]);
-    }
-    mds_light(state);
-}
-
-fn external_round<R: PrimeCharacteristicRing>(
-    state: &mut [R; POSEIDON2_WIDTH],
-    rc: &[R; POSEIDON2_WIDTH],
-) {
-    for i in 0..POSEIDON2_WIDTH {
-        state[i] = sbox5(state[i].clone() + rc[i].clone());
     }
     mds_light(state);
 }

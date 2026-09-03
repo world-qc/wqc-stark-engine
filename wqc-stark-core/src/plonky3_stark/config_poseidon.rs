@@ -100,6 +100,7 @@ pub type PoseidonValMmcs =
 pub type PoseidonChallengeMmcs = ExtensionMmcs<Val, Challenge, PoseidonValMmcs>;
 
 /// Field-native (unpacked) ValMmcs — used by isolated smoke tests / migration docs.
+#[allow(dead_code)]
 pub type PoseidonFieldValMmcs = MerkleTreeMmcs<
     <Val as Field>::Packing,
     <Val as Field>::Packing,

@@ -476,6 +476,7 @@ pub fn prove_lde_leaf(row: &[Mersenne31]) -> Result<Keccak256StarkProof, String>
 }
 
 /// Prove ValMmcs leaf hash for an arbitrary-width M31 row (must be a supported byte length).
+#[allow(dead_code)] // covered by module tests; kept as Keccak ValMmcs helper API
 pub fn prove_val_leaf(row: &[Mersenne31]) -> Result<Keccak256StarkProof, String> {
     let bytes = val_row_to_bytes(row);
     if !supported_msg_len(bytes.len()) {
@@ -495,6 +496,7 @@ pub fn verify_lde_leaf(row: &[Mersenne31], proof: &Keccak256StarkProof) -> bool 
     verify_keccak256(&lde_row_to_bytes(row), proof)
 }
 
+#[allow(dead_code)] // covered by module tests; kept as Keccak ValMmcs helper API
 pub fn verify_val_leaf(row: &[Mersenne31], proof: &Keccak256StarkProof) -> bool {
     verify_keccak256(&val_row_to_bytes(row), proof)
 }
@@ -525,6 +527,7 @@ pub fn verify_lde_leaf_digest(
     verify_lde_leaf(row, proof)
 }
 
+#[allow(dead_code)] // kept as Keccak ValMmcs helper API
 pub fn verify_val_leaf_digest(
     row: &[Mersenne31],
     expected: &[u8; 32],

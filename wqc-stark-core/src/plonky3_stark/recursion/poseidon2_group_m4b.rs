@@ -36,13 +36,11 @@ use super::merkle_poseidon2::{
 };
 use super::poseidon2_perm_air::{
     build_perm_trace, constrain_external, constrain_internal, constrain_mds_only,
-    selector_for_step, POSEIDON2_LIVE_COL, POSEIDON2_PERM_ROWS, POSEIDON2_PERM_STEPS,
-    POSEIDON2_PERM_WIDTH, POSEIDON2_STEP_BITS, POSEIDON2_STEP_COL,
+    selector_for_step, POSEIDON2_LIVE_COL, POSEIDON2_PERM_STEPS, POSEIDON2_PERM_WIDTH,
+    POSEIDON2_STEP_BITS, POSEIDON2_STEP_COL,
 };
 use super::poseidon2_spike::POSEIDON2_WIDTH;
 use crate::plonky3_stark::config_poseidon::POSEIDON_RATE;
-
-pub const POSEIDON2_SEG_ROWS: usize = POSEIDON2_PERM_ROWS;
 
 pub const P2_SEG_START_COL: usize = POSEIDON2_PERM_WIDTH;
 pub const P2_SEG_IDX_COL: usize = POSEIDON2_PERM_WIDTH + 1;
@@ -502,6 +500,7 @@ where
     acc
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_public_values(
     leaf_width: usize,
     depth: usize,
@@ -557,12 +556,14 @@ fn build_public_values(
     Ok(pv)
 }
 
+type FoldPathWitness = ([u8; 32], Vec<[u8; 32]>, Vec<[Mersenne31; POSEIDON2_WIDTH]>);
+
 fn fold_path_witness(
     row: &[Mersenne31],
     siblings: &[[u8; 32]],
     index: usize,
     expected_root: &[u8; 32],
-) -> Result<([u8; 32], Vec<[u8; 32]>, Vec<[Mersenne31; POSEIDON2_WIDTH]>), String> {
+) -> Result<FoldPathWitness, String> {
     let depth = siblings.len();
     if depth == 0 || depth > FRI_MMCS_MAX_DEPTH || !poseidon_m4b_width_eligible(row.len()) {
         return Err(format!(

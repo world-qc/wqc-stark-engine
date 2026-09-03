@@ -108,9 +108,7 @@ pub fn m4b_group_chunk() -> usize {
 /// Reads [`PCS_NESTED_FRI_QUERIES_ENV`] when set and in `1..=outer_queries`;
 /// otherwise returns `outer_queries` (match the leaf/agg proof).
 pub fn nested_fri_queries(outer_queries: usize) -> usize {
-    let outer = outer_queries
-        .max(1)
-        .min(crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES);
+    let outer = outer_queries.clamp(1, crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES);
     match std::env::var(PCS_NESTED_FRI_QUERIES_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -777,6 +775,7 @@ pub(crate) fn roots_are_shared(roots: &[[u8; 32]]) -> bool {
     roots.len() > 1 && roots.iter().all(|r| r == &roots[0])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_public_values(
     leaf_msg_len: usize,
     depth: usize,
