@@ -1,44 +1,13 @@
-warning: unused import: `poseidon_leaf_perm_count`
-  --> wqc-stark-core/src/plonky3_stark/recursion/merkle_poseidon2.rs:10:5
-   |
-10 |     poseidon_leaf_perm_count,
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
-warning: constant `POSEIDON_RATE` is never used
-  --> wqc-stark-core/src/plonky3_stark/config_poseidon.rs:30:11
-   |
-30 | pub const POSEIDON_RATE: usize = 8;
-   |           ^^^^^^^^^^^^^
-   |
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: function `poseidon_sponge_leaf_perm_inputs` is never used
-   --> wqc-stark-core/src/plonky3_stark/config_poseidon.rs:139:8
-    |
-139 | pub fn poseidon_sponge_leaf_perm_inputs(row: &[Mersenne31]) -> Vec<[Mersenne31; 16]> {
-    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: function `poseidon_leaf_perm_count` is never used
-   --> wqc-stark-core/src/plonky3_stark/config_poseidon.rs:162:8
-    |
-162 | pub fn poseidon_leaf_perm_count(leaf_width: usize) -> usize {
-    |        ^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: `wqc-stark-core` (lib) generated 4 warnings (run `cargo fix --lib -p wqc-stark-core` to apply 1 suggestion)
     Finished `release` profile [optimized] target(s) in 0.04s
      Running `/var/folders/kb/218_f3n52rz43dz9crbpfxs80000gn/T/cursor-sandbox-cache/bf12cfdfff560947f5558558bfa3fd5a/cargo-target/release/shrink-baseline --poseidon-compose`
 E5b Poseidon compose: idle two-leaf RecAgg (security_level=default)…
-[Aggregation] using prebuilt leaf PCS bundle (89391 bytes)
-[Aggregation] using prebuilt leaf PCS bundle (89391 bytes)
-[M4c size] compose left leaf PCS STARKs total=57487 bytes (0.05 MiB); certs=1 mmcs_groups=48274 fri_fold=7409 deep_ro=0 ood=1804
-[M4c size]   cert0 val_trace: 1 group(s) [n=80 d=3 w=48 stark=25179]
-[M4c size]   cert0 chal_commit: 1 group(s) [n=80 d=2 w=6 stark=23095]
+[Aggregation] using prebuilt leaf PCS bundle (68505 bytes)
+[Aggregation] using prebuilt leaf PCS bundle (68505 bytes)
+[M4c size] compose left leaf PCS STARKs total=36618 bytes (0.03 MiB); certs=1 mmcs_groups=27405 fri_fold=7409 deep_ro=0 ood=1804
+[M4c size]   cert0 val_trace: 1 group(s) [n=160 d=3 w=48 stark=27405]
 [M4c size]   cert0 fri_fold: y=7409 xs=0 (log_h=[])
-[M4c size] compose right leaf PCS STARKs total=57487 bytes (0.05 MiB); certs=1 mmcs_groups=48274 fri_fold=7409 deep_ro=0 ood=1804
-[M4c size]   cert0 val_trace: 1 group(s) [n=80 d=3 w=48 stark=25179]
-[M4c size]   cert0 chal_commit: 1 group(s) [n=80 d=2 w=6 stark=23095]
+[M4c size] compose right leaf PCS STARKs total=36618 bytes (0.03 MiB); certs=1 mmcs_groups=27405 fri_fold=7409 deep_ro=0 ood=1804
+[M4c size]   cert0 val_trace: 1 group(s) [n=160 d=3 w=48 stark=27405]
 [M4c size]   cert0 fri_fold: y=7409 xs=0 (log_h=[])
 [Aggregation] using embedded leaf PCS bundle from rec-agg proof (1 certs)
 [Aggregation] using embedded leaf PCS bundle from rec-agg proof (1 certs)
@@ -50,17 +19,17 @@ E5b Poseidon compose: idle two-leaf RecAgg (security_level=default)…
   "has_rec_agg_tail": true,
   "keccak_reference_root_bytes": 5022410,
   "left_leaf_bytes": 16247,
-  "left_pcs_bytes": 89391,
+  "left_pcs_bytes": 68505,
   "mmcs_group_chunk": 40,
   "nested_fri_num_queries": 4,
   "reference_sweep": "low/chunk24",
   "right_leaf_bytes": 16247,
-  "right_pcs_bytes": 89391,
-  "root_bytes": 273165,
-  "root_saved_vs_keccak_ref": 4749245,
+  "right_pcs_bytes": 68505,
+  "root_bytes": 231393,
+  "root_saved_vs_keccak_ref": 4791017,
   "security_level": "",
   "security_level_label": "default",
   "shrink_gate_bytes": 512000,
-  "vs_shrink_gate": -238835
+  "vs_shrink_gate": -280607
 }
 wrote /Users/yoshitaka/world-qc/wqc-stark-engine/fixtures/e5b/poseidon-compose-default-chunk40-nested4q.json (ref low/chunk24)

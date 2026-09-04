@@ -63,6 +63,9 @@ pub struct LeafMmcsFoldGroups {
     pub val_quot_batch: Vec<MmcsGroupFoldProof>,
     pub chal_first_layer: Vec<MmcsGroupFoldProof>,
     pub chal_commit: Vec<MmcsGroupFoldProof>,
+    /// Prove-time flag: `val_trace` covers val + chal paths (chal_* empty).
+    /// Not on the wire — verify reconstructs via path-count equality.
+    pub pcs_combined: bool,
 }
 
 fn log2_strict(n: usize) -> Result<usize, String> {
@@ -424,7 +427,8 @@ fn try_group_chunked(
 }
 
 /// Fold val_trace + val_quot_batch into as few Poseidon STARKs as possible (mixed width).
-fn try_group_val_combined(
+/// Also used for val+chal PCS combine when the combined set is Poseidon-eligible.
+fn try_group_poseidon_combined(
     stmts: &[MmcsPathStatement],
     num_queries: usize,
 ) -> Result<Vec<MmcsGroupFoldProof>, String> {
@@ -448,6 +452,29 @@ fn try_group_val_combined(
     }
     groups.shrink_to_fit();
     Ok(groups)
+}
+
+fn try_group_val_combined(
+    stmts: &[MmcsPathStatement],
+    num_queries: usize,
+) -> Result<Vec<MmcsGroupFoldProof>, String> {
+    try_group_poseidon_combined(stmts, num_queries)
+}
+
+fn group_fold_path_count(groups: &[MmcsGroupFoldProof]) -> usize {
+    groups.iter().map(|g| g.path_count() as usize).sum()
+}
+
+/// `val_trace` holds val+chal when chal categories are empty and path counts match.
+fn pcs_val_chal_merged(groups: &LeafMmcsFoldGroups, val_n: usize, chal_n: usize) -> bool {
+    chal_n > 0
+        && val_n > 0
+        && groups.chal_commit.is_empty()
+        && groups.chal_first_layer.is_empty()
+        && groups.val_quot.is_empty()
+        && groups.val_quot_batch.is_empty()
+        && !groups.val_trace.is_empty()
+        && group_fold_path_count(&groups.val_trace) == val_n + chal_n
 }
 
 /// Fold first_layer+commit (or mixed-depth commit) into as few STARKs as possible.
@@ -847,23 +874,79 @@ pub fn apply_leaf_mmcs_m4c_folds(
         None
     };
 
-    let mut val_merged = false;
-    if let Some(ref batch_stmts) = batch_opt {
-        if !batch_stmts.is_empty() && !trace_stmts.is_empty() {
-            let mut val_all = Vec::with_capacity(trace_stmts.len() + batch_stmts.len());
-            val_all.extend_from_slice(&trace_stmts);
-            val_all.extend_from_slice(batch_stmts);
-            let merged = try_group_val_combined(&val_all, num_queries)?;
-            if !merged.is_empty() {
-                for qp in &mut bundle.val {
-                    strip_fri_mmcs_path_starks(&mut qp.trace_path);
-                    if let Some(ref mut batch) = qp.quot_batch {
-                        strip_chal_batch_starks(batch);
-                    }
-                }
-                groups.val_trace = merged;
-                val_merged = true;
+    let fl_opt = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)?;
+    if fl_opt.is_none() {
+        // Inject / multi-height first_layer: strip nested STARKs (host digest verify).
+        for qp in &mut bundle.chal {
+            if !qp.first_layer.inject_compresses.is_empty() {
+                strip_chal_batch_starks(&mut qp.first_layer);
             }
+        }
+    }
+    let chal_by_depth = collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?;
+
+    let mut val_all = Vec::new();
+    if !trace_stmts.is_empty() {
+        if let Some(ref batch_stmts) = batch_opt {
+            if !batch_stmts.is_empty() {
+                val_all.reserve(trace_stmts.len() + batch_stmts.len());
+                val_all.extend_from_slice(&trace_stmts);
+                val_all.extend_from_slice(batch_stmts);
+            }
+        }
+    }
+    let mut chal_all = Vec::new();
+    if let Some(ref fl) = fl_opt {
+        chal_all.extend_from_slice(fl);
+    }
+    for (_, stmts) in &chal_by_depth {
+        chal_all.extend_from_slice(stmts);
+    }
+
+    // Poseidon: fold val + chal into one (or few) group STARK(s) when eligible.
+    if !val_all.is_empty() && !chal_all.is_empty() {
+        let mut pcs_all = Vec::with_capacity(val_all.len() + chal_all.len());
+        pcs_all.extend_from_slice(&val_all);
+        pcs_all.extend_from_slice(&chal_all);
+        let merged = try_group_poseidon_combined(&pcs_all, num_queries)?;
+        if !merged.is_empty() && group_fold_path_count(&merged) == pcs_all.len() {
+            for qp in &mut bundle.val {
+                strip_fri_mmcs_path_starks(&mut qp.trace_path);
+                if let Some(ref mut batch) = qp.quot_batch {
+                    strip_chal_batch_starks(batch);
+                }
+                if qp.quot_batch.is_some() {
+                    strip_fri_mmcs_path_starks(&mut qp.quot_path);
+                }
+            }
+            if fl_opt.is_some() {
+                for qp in &mut bundle.chal {
+                    strip_chal_batch_starks(&mut qp.first_layer);
+                }
+            }
+            for qp in &mut bundle.chal {
+                for path in &mut qp.commit_paths {
+                    strip_fri_mmcs_path_starks(path);
+                }
+            }
+            groups.val_trace = merged;
+            groups.pcs_combined = true;
+            return Ok(groups);
+        }
+    }
+
+    let mut val_merged = false;
+    if !val_all.is_empty() {
+        let merged = try_group_val_combined(&val_all, num_queries)?;
+        if !merged.is_empty() {
+            for qp in &mut bundle.val {
+                strip_fri_mmcs_path_starks(&mut qp.trace_path);
+                if let Some(ref mut batch) = qp.quot_batch {
+                    strip_chal_batch_starks(batch);
+                }
+            }
+            groups.val_trace = merged;
+            val_merged = true;
         }
     }
 
@@ -910,25 +993,6 @@ pub fn apply_leaf_mmcs_m4c_folds(
                 strip_fri_mmcs_path_starks(&mut qp.quot_path);
             }
         }
-    }
-
-    let fl_opt = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)?;
-    if fl_opt.is_none() {
-        // Inject / multi-height first_layer: strip nested STARKs (host digest verify).
-        for qp in &mut bundle.chal {
-            if !qp.first_layer.inject_compresses.is_empty() {
-                strip_chal_batch_starks(&mut qp.first_layer);
-            }
-        }
-    }
-
-    let chal_by_depth = collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?;
-    let mut chal_all = Vec::new();
-    if let Some(ref fl) = fl_opt {
-        chal_all.extend_from_slice(fl);
-    }
-    for (_, stmts) in &chal_by_depth {
-        chal_all.extend_from_slice(stmts);
     }
 
     let merged = try_group_chal_combined(&chal_all, num_queries)?;
@@ -1097,13 +1161,14 @@ pub fn strip_chal_mmcs_siblings_for_groups(
     }
     let before = chal_mmcs_sibling_wire_bytes(bundle);
     let merged_fl_commit = groups.chal_first_layer.is_empty() && !groups.chal_commit.is_empty();
-    if !groups.chal_first_layer.is_empty() || merged_fl_commit {
+    let pcs_combined = groups.pcs_combined;
+    if !groups.chal_first_layer.is_empty() || merged_fl_commit || pcs_combined {
         for qp in bundle.iter_mut() {
             qp.first_layer.siblings.clear();
         }
     }
-    if !groups.chal_commit.is_empty() {
-        if merged_fl_commit {
+    if !groups.chal_commit.is_empty() || pcs_combined {
+        if merged_fl_commit || pcs_combined {
             for qp in bundle.iter_mut() {
                 for sibs in qp.commit_siblings.iter_mut() {
                     sibs.clear();
@@ -1190,6 +1255,52 @@ pub fn bind_leaf_mmcs_with_groups(
 ) -> Result<(), String> {
     use super::fri_mmcs_bind::{bind_fri_chal_mmcs_bundle_width, bind_fri_val_mmcs_bundle_width};
 
+    let pcs_combined = {
+        let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
+        let batch_n = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)?
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let quot_n = if batch_n == 0 {
+            collect_val_quot_stmts(proof, trace_width, &bundle.val)?
+                .map(|s| s.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let val_n = if batch_n > 0 {
+            trace_stmts.len() + batch_n
+        } else {
+            trace_stmts.len() + quot_n
+        };
+        let fl_len = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)?
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let commit_len: usize =
+            collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?
+                .iter()
+                .map(|(_, s)| s.len())
+                .sum();
+        groups.pcs_combined || pcs_val_chal_merged(groups, val_n, fl_len + commit_len)
+    };
+
+    if pcs_combined {
+        let mut pcs_all = Vec::new();
+        let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
+        pcs_all.extend_from_slice(&trace_stmts);
+        if let Some(batch) = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)? {
+            pcs_all.extend(batch);
+        } else if let Some(quot) = collect_val_quot_stmts(proof, trace_width, &bundle.val)? {
+            pcs_all.extend(quot);
+        }
+        if let Some(fl) = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)? {
+            pcs_all.extend(fl);
+        }
+        for (_, stmts) in collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)? {
+            pcs_all.extend(stmts);
+        }
+        verify_group_chunks(&pcs_all, &groups.val_trace, "val+chal pcs")?;
+    }
+
     let val_needs_custom = !groups.val_trace.is_empty()
         || !groups.val_quot.is_empty()
         || !groups.val_quot_batch.is_empty()
@@ -1199,18 +1310,19 @@ pub fn bind_leaf_mmcs_with_groups(
                 || q.quot_batch.as_ref().is_some_and(batch_starks_stripped)
         });
     if val_needs_custom {
-        bind_val_with_groups(proof, &bundle.val, groups, trace_width)?;
+        bind_val_with_groups(proof, &bundle.val, groups, trace_width, pcs_combined)?;
     } else {
         bind_fri_val_mmcs_bundle_width(proof, &bundle.val, trace_width)?;
     }
 
-    let chal_needs_custom = !groups.chal_first_layer.is_empty()
+    let chal_needs_custom = pcs_combined
+        || !groups.chal_first_layer.is_empty()
         || !groups.chal_commit.is_empty()
         || bundle.chal.iter().any(|q| {
             batch_starks_stripped(&q.first_layer) || q.commit_paths.iter().any(path_starks_stripped)
         });
     if chal_needs_custom {
-        bind_chal_with_groups(proof, &bundle.chal, groups, trace_width)?;
+        bind_chal_with_groups(proof, &bundle.chal, groups, trace_width, pcs_combined)?;
     } else {
         bind_fri_chal_mmcs_bundle_width(proof, &bundle.chal, trace_width)?;
     }
@@ -1255,6 +1367,7 @@ fn bind_val_with_groups(
     bundle: &[FriValMmcsQueryProof],
     groups: &LeafMmcsFoldGroups,
     trace_width: usize,
+    pcs_combined: bool,
 ) -> Result<(), String> {
     use super::fri_mmcs_bind::{verify_chal_batch_path_digests, verify_chal_batch_path_replay};
 
@@ -1291,13 +1404,33 @@ fn bind_val_with_groups(
         .iter()
         .map(|g| g.path_count() as usize)
         .sum();
-    let val_merged = groups.val_quot_batch.is_empty()
-        && groups.val_quot.is_empty()
-        && !groups.val_trace.is_empty()
-        && batch_n > 0
-        && val_trace_n == trace_stmts.len() + batch_n;
+    // When `pcs_combined`, the shared group STARK is verified in `bind_leaf` before
+    // this call; here we only check host digests (treat like val_merged for quot).
+    let val_merged = pcs_combined
+        || (groups.val_quot_batch.is_empty()
+            && groups.val_quot.is_empty()
+            && !groups.val_trace.is_empty()
+            && batch_n > 0
+            && val_trace_n == trace_stmts.len() + batch_n);
 
-    if val_merged {
+    if pcs_combined {
+        // Group STARK already verified against val‖chal; bind digests only.
+        for (q, qp) in bundle.iter().enumerate() {
+            let query_index = chal.query_indices[q];
+            let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
+            let row = &input.input_openings[0].opened_values[0];
+            let t_idx = query_index >> (log_global_max_height - trace_log_height);
+            if !verify_fri_mmcs_path_digests(
+                row,
+                &qp.trace_siblings,
+                t_idx,
+                &trace_root,
+                &qp.trace_path,
+            ) {
+                return Err(format!("q{q}: stripped trace digests"));
+            }
+        }
+    } else if val_merged {
         let mut all = Vec::with_capacity(trace_stmts.len() + batch_n);
         all.extend_from_slice(&trace_stmts);
         all.extend_from_slice(batch_opt.as_ref().unwrap());
@@ -1486,6 +1619,7 @@ fn bind_chal_with_groups(
     bundle: &[FriChalMmcsQueryProof],
     groups: &LeafMmcsFoldGroups,
     trace_width: usize,
+    pcs_combined: bool,
 ) -> Result<(), String> {
     let n = fri_queries_from_proof(proof)?;
     if bundle.len() != n {
@@ -1504,11 +1638,14 @@ fn bind_chal_with_groups(
         .iter()
         .map(|g| g.path_count() as usize)
         .sum();
-    let chal_merged = groups.chal_first_layer.is_empty()
+    let chal_merged = !pcs_combined
+        && groups.chal_first_layer.is_empty()
         && !groups.chal_commit.is_empty()
         && chal_commit_n == fl_len + commit_len;
 
-    if chal_merged {
+    if pcs_combined {
+        // Shared val+chal group already verified in `bind_leaf`.
+    } else if chal_merged {
         let mut chal_all = Vec::with_capacity(fl_len + commit_len);
         if let Some(ref fl) = fl_opt {
             chal_all.extend_from_slice(fl);
@@ -1557,6 +1694,8 @@ fn bind_chal_with_groups(
         }
     }
 
+    let chal_grouped = pcs_combined || chal_merged;
+
     for (q, qp_proof) in bundle.iter().enumerate() {
         let query_index = chal.query_indices[q];
         let qp = &view.fri_proof.query_proofs[q];
@@ -1576,7 +1715,7 @@ fn bind_chal_with_groups(
         if qp_proof.first_layer.siblings != input.first_layer_proof {
             return Err(format!("q{q}: first-layer siblings mismatch"));
         }
-        if !groups.chal_first_layer.is_empty() || (chal_merged && fl_len > 0) {
+        if !groups.chal_first_layer.is_empty() || (chal_grouped && fl_len > 0) {
             if !super::fri_mmcs_bind::verify_chal_batch_path_digests(
                 &fl_opened,
                 &fl_dims,
@@ -1639,7 +1778,7 @@ fn bind_chal_with_groups(
                 return Err(format!("q{q} round {round}: commit meta mismatch"));
             }
             let path = &qp_proof.commit_paths[round];
-            let grouped = chal_merged
+            let grouped = chal_grouped
                 || groups
                     .chal_commit
                     .iter()

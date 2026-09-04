@@ -39,8 +39,8 @@ use super::keccak_f_native::{
 };
 use super::merkle_keccak::hash_val_leaf_keccak;
 
-/// Enough for idle unitary Val-trace + Chal-commit (80) with headroom.
-pub const M4B_MAX_PATHS: usize = 128;
+/// Enough for idle unitary Val-trace + Chal paths combined (160) with headroom.
+pub const M4B_MAX_PATHS: usize = 256;
 
 /// Default paths per Mmcs group STARK (`WQC_PCS_MMCS_GROUP_CHUNK` when unset).
 /// Chosen at the time/size knee (~5 MiB STARK payload, ~17 min unitary leaf PCS).
@@ -117,7 +117,7 @@ pub fn nested_fri_queries(outer_queries: usize) -> usize {
         _ => outer,
     }
 }
-pub const M4B_PATH_IDX_BITS: usize = 7;
+pub const M4B_PATH_IDX_BITS: usize = 8;
 pub const M4B_PATH_IDX_COL: usize = M4A_SEG_IDX_COL + M4A_SEG_IDX_BITS;
 pub const M4B_GROUP_WIDTH: usize = SPONGE_WIDTH + 1 + M4A_SEG_IDX_BITS + M4B_PATH_IDX_BITS;
 

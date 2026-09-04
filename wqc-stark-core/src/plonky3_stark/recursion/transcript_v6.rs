@@ -645,6 +645,7 @@ fn decode_mmcs_groups(
             val_quot_batch,
             chal_first_layer,
             chal_commit,
+            pcs_combined: false,
         },
         cursor,
     ))
@@ -2010,6 +2011,7 @@ mod tests {
             val_quot_batch: vec![],
             chal_first_layer: vec![],
             chal_commit: vec![],
+            pcs_combined: false,
         };
         let mut out = Vec::new();
         encode_mmcs_groups(&mut out, &groups);

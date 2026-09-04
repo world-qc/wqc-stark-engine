@@ -19,6 +19,8 @@
 //!    + FriFold YX (`poseidon-compose-default-chunk40-nested8q.json`).
 //! 6. **Poseidon group compress-only AIR** — leaf sponge stays host-side; group STARK
 //!    proves Merkle compress only (shorter nested FRI openings).
+//! 7. **val+chal PCS combine** — Poseidon folds val_trace(+quot) and chal paths into
+//!    one `val_trace` group when `≤ M4B_MAX_PATHS` (256); `chal_*` empty on the wire.
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

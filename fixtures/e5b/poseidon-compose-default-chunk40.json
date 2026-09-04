@@ -4,16 +4,16 @@
   "has_rec_agg_tail": true,
   "keccak_reference_root_bytes": 5022410,
   "left_leaf_bytes": 16247,
-  "left_pcs_bytes": 522492,
+  "left_pcs_bytes": 351684,
   "mmcs_group_chunk": 40,
   "nested_fri_num_queries": 40,
   "reference_sweep": "low/chunk24",
   "right_leaf_bytes": 16247,
-  "right_pcs_bytes": 522492,
-  "root_bytes": 1139367,
-  "root_saved_vs_keccak_ref": 3883043,
+  "right_pcs_bytes": 351684,
+  "root_bytes": 797751,
+  "root_saved_vs_keccak_ref": 4224659,
   "security_level": "",
   "security_level_label": "default",
   "shrink_gate_bytes": 512000,
-  "vs_shrink_gate": 627367
+  "vs_shrink_gate": 285751
 }

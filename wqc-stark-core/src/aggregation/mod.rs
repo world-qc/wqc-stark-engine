@@ -282,6 +282,9 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
             fmt("val_quot_batch", &g.val_quot_batch);
             fmt("chal_first_layer", &g.chal_first_layer);
             fmt("chal_commit", &g.chal_commit);
+            if g.pcs_combined {
+                eprintln!("[M4c size]   cert{i} pcs_combined=true (val+chal in val_trace)");
+            }
             let xs = &cert.fri_fold_groups.fold_xs_by_log_h;
             eprintln!(
                 "[M4c size]   cert{i} fri_fold: y={} xs={} (log_h={:?})",

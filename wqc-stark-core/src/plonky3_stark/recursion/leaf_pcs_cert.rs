@@ -879,13 +879,17 @@ mod tests {
             "expected val_trace group"
         );
         assert!(
-            !cert.mmcs_groups.val_quot_batch.is_empty() || !cert.mmcs_groups.val_quot.is_empty(),
-            "expected val quot or quot_batch group"
+            cert.mmcs_groups.pcs_combined
+                || !cert.mmcs_groups.val_quot_batch.is_empty()
+                || !cert.mmcs_groups.val_quot.is_empty()
+                || !cert.mmcs_groups.chal_commit.is_empty(),
+            "expected val quot, chal, or pcs_combined merge"
         );
         assert!(
-            !cert.mmcs_groups.chal_first_layer.is_empty()
+            cert.mmcs_groups.pcs_combined
+                || !cert.mmcs_groups.chal_first_layer.is_empty()
                 || !cert.mmcs_groups.chal_commit.is_empty(),
-            "expected chal first_layer or merged chal_commit group"
+            "expected chal first_layer, merged chal_commit, or pcs_combined"
         );
         assert!(
             cert.fri_val_mmcs
