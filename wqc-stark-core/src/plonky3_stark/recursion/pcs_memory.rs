@@ -1,10 +1,14 @@
 //! C13×C11 hybrid PCS memory gate.
 //!
-//! Before leaf/agg PCS Mmcs group prove: estimate peak RAM for the dominant
-//! blowup-16 Keccak group STARK. If over `WQC_MAX_MEMORY_GB`:
+//! Before leaf/agg PCS build: estimate peak RAM. If over `WQC_MAX_MEMORY_GB`:
 //! - `WQC_PCS_MEMORY_POLICY=refuse` (default) → error
 //! - `WQC_PCS_MEMORY_POLICY=spill` → lower session Mmcs chunk until estimate fits
 //!   (min chunk = 1); if still over → refuse
+//!
+//! **Production (host-only Mmcs/FriFold/OOD):** nested group STARKs are empty; peak
+//! RAM is proof decode + sibling buffers + native digest/fold checks — not the
+//! historical blowup-16 Keccak group prove matrix. Chunk still appears as a small
+//! residual term (env / spill API), but no longer dominates the estimate.
 //!
 //! `WQC_MAX_MEMORY_GB` unset → no gate (compat).
 
@@ -13,13 +17,14 @@ use super::fri_mmcs_group_m4b::{m4b_group_chunk_from_env, M4bChunkGuard, M4B_MAX
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-/// Fixed prove/orchestration overhead outside the Mmcs group matrix.
-const BASE_BYTES: u64 = 512 * 1024 * 1024;
-/// FriFold group + OOD (+ occasional DeepRo) residual workspace.
-const FIXED_FRI_FOLD_OOD_BYTES: u64 = 256 * 1024 * 1024;
-/// Rough bytes per (path × merkle-depth) in one blowup-16 Mmcs group prove.
-/// Calibrated so unitary-scale PCS at chunk=24 / depth≈8 is multi-GiB.
-const PER_PATH_DEPTH_BYTES: u64 = 18 * 1024 * 1024;
+/// Fixed prove/orchestration overhead (decode, FS replay, scratch).
+const BASE_BYTES: u64 = 128 * 1024 * 1024;
+/// Native FriFold / OOD (+ occasional DeepRo) residual workspace.
+const FIXED_NATIVE_CHECK_BYTES: u64 = 64 * 1024 * 1024;
+/// Per (outer FRI query × merkle-depth) for sibling retention + digest replay.
+const PER_QUERY_DEPTH_BYTES: u64 = 256 * 1024;
+/// Small residual tied to `WQC_PCS_MMCS_GROUP_CHUNK` (spill API / legacy group path).
+const PER_CHUNK_BYTES: u64 = 512 * 1024;
 
 /// Stable error / log prefix for node and orch.
 pub const PCS_MEMORY_ERR_PREFIX: &str = "PCS memory:";
@@ -94,8 +99,6 @@ fn estimate_scale_from_env() -> f64 {
 
 /// Conservative Merkle depth hint from STARK degree (trace log-height ≈ degree_bits + blowup).
 pub fn depth_hint_from_degree_bits(degree_bits: usize) -> usize {
-    // Devnet blowup is 1 for leaf; Keccak group uses blowup 16 but path depth tracks
-    // the committed Merkle height ≈ degree_bits + log_blowup (~1–2).
     degree_bits
         .saturating_add(2)
         .clamp(4, FRI_MMCS_MAX_DEPTH_HINT)
@@ -105,7 +108,8 @@ const FRI_MMCS_MAX_DEPTH_HINT: usize = 24;
 
 /// Peak RAM estimate for one PCS build at the given Mmcs group chunk.
 ///
-/// `num_queries` is the outer FRI query count for this proof (`1..=LEAF_FRI_PROVEN_QUERIES`).
+/// Host-only production path: scales with outer FRI queries × path depth, not with
+/// nested group STARK prove. `num_queries` is `1..=LEAF_FRI_PROVEN_QUERIES`.
 pub fn estimate_pcs_peak_bytes(
     degree_bits: usize,
     chunk: usize,
@@ -116,16 +120,15 @@ pub fn estimate_pcs_peak_bytes(
     let depth = depth_hint
         .unwrap_or_else(|| depth_hint_from_degree_bits(degree_bits))
         .max(1) as u64;
-    // Outer query slots scale sequential residual work; normalize so ultra (40) ≈ prior estimate.
     let n = num_queries.clamp(1, LEAF_FRI_PROVEN_QUERIES) as u64;
-    let group = PER_PATH_DEPTH_BYTES
-        .saturating_mul(chunk)
-        .saturating_mul(depth)
+    let query_work = PER_QUERY_DEPTH_BYTES
         .saturating_mul(n)
-        / (LEAF_FRI_PROVEN_QUERIES as u64).max(1);
+        .saturating_mul(depth);
+    let chunk_residual = PER_CHUNK_BYTES.saturating_mul(chunk);
     let raw = BASE_BYTES
-        .saturating_add(FIXED_FRI_FOLD_OOD_BYTES)
-        .saturating_add(group);
+        .saturating_add(FIXED_NATIVE_CHECK_BYTES)
+        .saturating_add(query_work)
+        .saturating_add(chunk_residual);
     let scale = estimate_scale_from_env();
     ((raw as f64) * scale) as u64
 }
@@ -231,15 +234,34 @@ mod tests {
     }
 
     #[test]
-    fn estimate_monotonic_in_chunk() {
+    fn estimate_host_only_under_2gib_at_40q() {
+        with_clean_env(|| {
+            // Matches e2e refuse-policy cores (budget 2 GiB) that previously refused at ~3 GiB.
+            let e = estimate_pcs_peak_bytes(8, 24, Some(8), 40);
+            assert!(
+                e < 2 * 1024 * 1024 * 1024,
+                "host-only est {:.2} GiB should fit 2 GiB budget",
+                e as f64 / GIB
+            );
+            // Scale 1.25 (devnet spill cores) still under 2 GiB.
+            std::env::set_var("WQC_PCS_MEMORY_ESTIMATE_SCALE", "1.25");
+            let e_scaled = estimate_pcs_peak_bytes(8, 24, Some(8), 40);
+            assert!(e_scaled < 2 * 1024 * 1024 * 1024);
+        });
+    }
+
+    #[test]
+    fn estimate_monotonic_in_queries_and_chunk() {
         with_clean_env(|| {
             let d = 8usize;
-            let e1 = estimate_pcs_peak_bytes(d, 1, Some(8), 40);
-            let e8 = estimate_pcs_peak_bytes(d, 8, Some(8), 40);
-            let e24 = estimate_pcs_peak_bytes(d, 24, Some(8), 40);
-            assert!(e1 < e8 && e8 < e24);
-            // Unitary-scale chunk=24 should be multi-GiB.
-            assert!(e24 > 2 * 1024 * 1024 * 1024);
+            let e8 = estimate_pcs_peak_bytes(d, 24, Some(8), 8);
+            let e40 = estimate_pcs_peak_bytes(d, 24, Some(8), 40);
+            assert!(e8 < e40);
+            let c1 = estimate_pcs_peak_bytes(d, 1, Some(8), 40);
+            let c24 = estimate_pcs_peak_bytes(d, 24, Some(8), 40);
+            assert!(c1 < c24);
+            // Chunk is a residual term only — not multi-GiB.
+            assert!(c24 - c1 < 64 * 1024 * 1024);
         });
     }
 
@@ -256,7 +278,7 @@ mod tests {
     #[test]
     fn under_budget_keeps_requested_chunk() {
         with_clean_env(|| {
-            std::env::set_var("WQC_MAX_MEMORY_GB", "64");
+            std::env::set_var("WQC_MAX_MEMORY_GB", "2");
             std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             let plan = plan_pcs_memory(8, Some(8), 40).expect("plan");
             assert!(!plan.spilled);
@@ -267,9 +289,8 @@ mod tests {
     #[test]
     fn refuse_when_over_budget() {
         with_clean_env(|| {
-            std::env::set_var("WQC_MAX_MEMORY_GB", "1");
+            std::env::set_var("WQC_MAX_MEMORY_GB", "0.05");
             std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
-            // default policy = refuse
             let err = plan_pcs_memory(8, Some(8), 40).expect_err("refuse");
             assert!(err.starts_with(PCS_MEMORY_ERR_PREFIX));
             assert!(err.contains("policy=refuse"));
@@ -277,22 +298,10 @@ mod tests {
     }
 
     #[test]
-    fn spill_lowers_chunk() {
+    fn spill_policy_refuses_when_host_only_still_over() {
         with_clean_env(|| {
-            std::env::set_var("WQC_MAX_MEMORY_GB", "2");
-            std::env::set_var("WQC_PCS_MEMORY_POLICY", "spill");
-            std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
-            let plan = plan_pcs_memory(8, Some(8), 40).expect("spill");
-            assert!(plan.spilled || plan.effective_chunk < 24);
-            assert!(plan.effective_chunk <= 24);
-            assert!(plan.estimate_bytes <= plan.budget_bytes.unwrap());
-        });
-    }
-
-    #[test]
-    fn spill_then_refuse_when_impossible() {
-        with_clean_env(|| {
-            std::env::set_var("WQC_MAX_MEMORY_GB", "0.1");
+            // Host-only estimate barely depends on chunk; tiny budget → refuse even after spill.
+            std::env::set_var("WQC_MAX_MEMORY_GB", "0.05");
             std::env::set_var("WQC_PCS_MEMORY_POLICY", "spill");
             std::env::set_var(PCS_MMCS_GROUP_CHUNK_ENV, "24");
             let err = plan_pcs_memory(8, Some(8), 40).expect_err("still refuse");

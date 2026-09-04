@@ -103,13 +103,12 @@ cargo test -p wqc-stark-core --features plonky3-stark --release \
   idle_two_leaf_rec_agg_compose_under_regression_ceiling -- --ignored --exact --nocapture
 ```
 
-**Leaf PCS memory:** `build_leaf_pcs_certificate` / aggregation PCS use FriFold group proofs,
-DeepRo per query, and chunked Keccak Mmcs groups (`WQC_PCS_MMCS_GROUP_CHUNK`, default **24**; see
-[zk-STARK.md §8.4](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md)). Nested
-uni-STARK workspaces are dropped after postcard encode between proves. **Memory gate:** when
-`WQC_MAX_MEMORY_GB` is set and the peak estimate exceeds budget, `WQC_PCS_MEMORY_POLICY` is
-`refuse` (default) or `spill` (auto-lower Mmcs chunk for that build). Cap `RAYON_NUM_THREADS`
-on low-RAM hosts; raise core `mem_limit` (8G+) or use `spill` if refuse/OOM persists.
+**Leaf PCS memory:** production idle Poseidon PCS is **host-only** (empty nested Mmcs/FriFold/OOD
+group STARKs); the memory gate estimates decode + sibling + native-check workspace, not the
+old blowup-16 group-prove matrix. See [zk-STARK.md §8.4](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md).
+**Memory gate:** when `WQC_MAX_MEMORY_GB` is set and the peak estimate exceeds budget,
+`WQC_PCS_MEMORY_POLICY` is `refuse` (default) or `spill` (auto-lower Mmcs chunk). Host-only
+estimates typically fit a 2 GiB budget at 40q without spilling.
 
 ### Docker
 
