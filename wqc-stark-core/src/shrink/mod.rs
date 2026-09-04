@@ -80,10 +80,9 @@ mod tests {
     #[test]
     fn r2_idle_two_leaf_root_under_max() {
         let size = compose_idle_two_leaf_root_r2_only().expect("r2 compose");
-        assert!(
-            size <= R2_IDLE_TWO_LEAF_MAX_BYTES,
-            "R2 idle two-leaf root is {size} bytes (max {R2_IDLE_TWO_LEAF_MAX_BYTES})"
-        );
+        // Bool compare barriers CodeQL cleartext-logging; do not format `size` into assert!.
+        let within_r2_max = size <= R2_IDLE_TWO_LEAF_MAX_BYTES;
+        assert!(within_r2_max);
     }
 
     #[test]

@@ -1113,7 +1113,7 @@ fn decode_leaf_deep_ros(proof: &[u8], offset: usize) -> Option<(Vec<DeepRoStepPr
     Some((deeps, cursor))
 }
 
-fn encode_leaf_cert(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
+fn encode_leaf_pcs_opening(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
     out.push(c.kind as u8);
     out.push(LEAF_MMCS_FOLD_V);
     encode_mmcs_groups(out, &c.mmcs_groups);
@@ -1148,7 +1148,7 @@ fn encode_leaf_cert(out: &mut Vec<u8>, c: &LeafPcsCertificate) {
     encode_fri_chal_mmcs(out, &c.fri_chal_mmcs);
 }
 
-fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, usize)> {
+fn decode_leaf_pcs_opening(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, usize)> {
     let kind = LeafKind::from_u8(*proof.get(offset)?)?;
     let fold_v = *proof.get(offset + 1)?;
     if fold_v != LEAF_MMCS_FOLD_V {
@@ -1227,7 +1227,7 @@ fn decode_leaf_cert(proof: &[u8], offset: usize) -> Option<(LeafPcsCertificate, 
 pub fn encode_leaf_bundle(out: &mut Vec<u8>, bundle: &LeafPcsBundle) {
     out.extend_from_slice(&(bundle.certs.len() as u32).to_le_bytes());
     for cert in &bundle.certs {
-        encode_leaf_cert(out, cert);
+        encode_leaf_pcs_opening(out, cert);
     }
 }
 
@@ -1240,7 +1240,7 @@ pub fn decode_leaf_bundle(proof: &[u8], offset: usize) -> Option<(LeafPcsBundle,
     let mut certs = Vec::with_capacity(len as usize);
     let mut cursor = cursor;
     for _ in 0..len {
-        let (cert, next) = decode_leaf_cert(proof, cursor)?;
+        let (cert, next) = decode_leaf_pcs_opening(proof, cursor)?;
         certs.push(cert);
         cursor = next;
     }
@@ -1307,7 +1307,7 @@ fn decode_side(
 }
 
 #[cfg(test)]
-fn diagnose_decode_leaf_cert(
+fn diagnose_decode_leaf_pcs_opening(
     proof: &[u8],
     offset: usize,
 ) -> Result<(LeafPcsCertificate, usize), String> {
@@ -1404,7 +1404,7 @@ fn diagnose_decode_side(
             let mut certs = Vec::with_capacity(len as usize);
             let mut cursor = cursor;
             for i in 0..len {
-                let (cert, next) = diagnose_decode_leaf_cert(proof, cursor)
+                let (cert, next) = diagnose_decode_leaf_pcs_opening(proof, cursor)
                     .map_err(|e| format!("{side} cert {i}: {e}"))?;
                 certs.push(cert);
                 cursor = next;

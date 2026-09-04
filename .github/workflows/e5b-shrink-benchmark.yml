@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: "0 6 * * 0"
 
+# Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
+permissions:
+  contents: read
+  actions: write # upload-artifact
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1

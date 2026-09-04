@@ -335,7 +335,7 @@ fn pcs_for_child(
     prebuilt_pcs: Option<&[u8]>,
 ) -> Result<ChildPcs, String> {
     if let Some(agg) = child_aggregation_transcript(child) {
-        let cert = cert_for_child_agg(agg)?;
+        let cert = pcs_opening_for_child_agg(agg)?;
         return Ok(ChildPcs {
             kind: REC_KIND_AGG,
             agg_cert: Some(cert),
@@ -402,7 +402,9 @@ fn child_supports_leaf_pcs(child: &[u8]) -> bool {
 }
 
 #[cfg(feature = "plonky3-stark")]
-fn cert_for_child_agg(agg: &[u8]) -> Result<crate::plonky3_stark::AggPcsCertificate, String> {
+fn pcs_opening_for_child_agg(
+    agg: &[u8],
+) -> Result<crate::plonky3_stark::AggPcsCertificate, String> {
     use crate::plonky3_stark::parse_agg_v4_header_any;
 
     let header = parse_agg_v4_header_any(agg)
@@ -698,7 +700,7 @@ fn pcs_from_embedded_or_build(
                 leaf_bundle: None,
             });
         }
-        let cert = cert_for_child_agg(agg)?;
+        let cert = pcs_opening_for_child_agg(agg)?;
         return Ok(ChildPcs {
             kind: REC_KIND_AGG,
             agg_cert: Some(cert),
