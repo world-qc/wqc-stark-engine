@@ -1,26 +1,20 @@
 //! E5b shrink optimization profiles — knobs that affect R3/PCS wire size.
 //!
-//! Dominant cost today: Poseidon2 M4b `mmcs_groups` (~90% of leaf PCS nested STARK bytes).
-//! Levers (see README Roadmap):
-//! 1. **`security_level`** → outer FRI query count (8/16/32/40) — linear on Mmcs paths;
-//!    nested Mmcs/FriFold STARKs default to this count
-//! 2. **`WQC_PCS_MMCS_GROUP_CHUNK`** → fewer/larger group STARKs (sublinear wire savings;
-//!    chunk40 helps when fri_num_queries > chunk; exhausted at 40q/chunk40 = 1 group/cat)
-//! 3. Group AIR / public-value shrink — both Mmcs group AIRs pack publics by actual
-//!    depth/width with shared-root header and width/depth onehots; FriFold groups
-//!    hoist a shared `beta`. Poseidon can merge mixed-width val_trace+quot paths.
-//! 4. Wire dedup — leaf/layer digests omitted from PCS wire and recomputed at verify
-//!    (mmcs fold wire v6; path + chal-batch stubs); FriFold residual limbs omitted when
-//!    groups cover them (FriFold wire v2). This is where PCS metadata shrinks.
-//! 5. **`WQC_PCS_NESTED_FRI_QUERIES`** → nested Mmcs/FriFold/**OOD/DeepRo** FRI query count
-//!    (≤ outer); **production default = match outer**. E5b shrink tracking profile:
-//!    outer 40 + chunk40 + nested 4 (`poseidon-compose-default-chunk40-nested4q.json`,
-//!    PASS_SHRINK_GATE after wire v6). Nested 8 also PASSes after chal Mmcs merge
-//!    + FriFold YX (`poseidon-compose-default-chunk40-nested8q.json`).
-//! 6. **Poseidon group compress-only AIR** — leaf sponge stays host-side; group STARK
-//!    proves Merkle compress only (shorter nested FRI openings).
-//! 7. **val+chal PCS combine** — Poseidon folds val_trace(+quot) and chal paths into
-//!    one `val_trace` group when `≤ M4B_MAX_PATHS` (256); `chal_*` empty on the wire.
+//! **Production idle Poseidon compose** uses **host-only** Mmcs / FriFold / OOD
+//! (empty nested group STARKs; siblings + digests on the wire). Measured
+//! `default`/40q/`WQC_PCS_MMCS_GROUP_CHUNK=40` nested=outer ≈ **173 483** B
+//! (`PASS_SHRINK_GATE`). Nested FRI query count does not change that root size.
+//!
+//! Historical / optional levers (still relevant when nested group STARKs are proven):
+//! 1. **`security_level`** → outer FRI query count (8/16/32/40) — linear on Mmcs paths.
+//! 2. **`WQC_PCS_MMCS_GROUP_CHUNK`** → fewer/larger group STARKs when groups are on the wire.
+//! 3. Group AIR packing / mixed-width val / compress-only Poseidon group AIR.
+//! 4. Wire dedup — leaf/layer digests omitted (mmcs fold wire v6); FriFold limbs omitted
+//!    under wire v2 host marker.
+//! 5. **`WQC_PCS_NESTED_FRI_QUERIES`** → nested FRI for group/OOD/DeepRo STARKs when those
+//!    STARKs exist; **production default = match outer**.
+//! 6. **val+chal PCS combine** — when group prove is enabled, folds val+chal into one
+//!    `val_trace` group (`≤ M4B_MAX_PATHS`).
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

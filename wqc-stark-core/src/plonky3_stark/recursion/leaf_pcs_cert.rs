@@ -1,10 +1,13 @@
 //! Leaf uni-STARK PCS opening certificates (R3-M3e / M4c / FriFold B5).
 //!
-//! Mirrors AggregationAir M3d flow on a leaf `Proof`: host OOD, FriFold group fold,
-//! DeepRo (quot + leaf-trace), and in-circuit Val/Challenge Mmcs. Skips natural-row LDE
+//! Mirrors AggregationAir M3d flow on a leaf `Proof`: OOD, FriFold, DeepRo (quot +
+//! leaf-trace when single-chunk), and Val/Challenge Mmcs. Skips natural-row LDE
 //! rebuild (no prover_data); `merkle_fold` reuses query-0 ValMmcs trace path.
-//! M4c folds eligible single-matrix paths into `LeafMmcsFoldGroups` and strips
-//! nested Keccak STARKs from the wire. B5 folds FriFold steps into `LeafFriFoldGroups`.
+//!
+//! **Production (E5b shrink):** Mmcs / FriFold / OOD ship **host-only** — nested Circle
+//! STARKs are stripped/empty; bind verifies Merkle digests from retained siblings and
+//! native fold/OOD algebra. Optional M4c group STARKs and FriFold group STARKs remain
+//! on the verify path when present (benchmarks / legacy wires).
 
 use p3_commit::Mmcs;
 use p3_mersenne_31::Mersenne31;

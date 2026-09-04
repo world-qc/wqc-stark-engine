@@ -1,4 +1,8 @@
-//! R3 OOD AIR: in-circuit constraint fold + quotient check at ζ.
+//! R3 OOD: constraint fold + quotient check at ζ.
+//!
+//! Production leaf/agg PCS emit an empty `ood_stark`; [`verify_ood_proof`] runs the fold
+//! and quotient check natively. Non-empty `ood_stark` still verifies as a nested Circle
+//! STARK when present on the wire.
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};

@@ -3,17 +3,26 @@
 use crate::generate_plonky3_stark_proof;
 use crate::plonky3_stark::recursion::benchmark_poseidon_mmcs_from_child;
 use crate::plonky3_stark::recursion::PoseidonMmcsBenchmarkReport;
-use crate::plonky3_stark::recursion::PCS_MMCS_HASH_ENV;
-use crate::shrink::idle_compose::compose_idle_two_leaf_root_with_pcs;
-use crate::shrink::IdleTwoLeafComposeReport;
 use crate::trace_spec;
 use crate::transcript::StarkContext;
+
+#[cfg(feature = "poseidon-mmcs")]
+use crate::plonky3_stark::recursion::PCS_MMCS_HASH_ENV;
+#[cfg(feature = "poseidon-mmcs")]
+use crate::shrink::idle_compose::compose_idle_two_leaf_root_with_pcs;
+#[cfg(feature = "poseidon-mmcs")]
+use crate::shrink::IdleTwoLeafComposeReport;
 
 /// Reference row from `fixtures/e5b/sweep.json` (`low/chunk24`).
 pub const SWEEP_REF_LABEL: &str = "low/chunk24";
 pub const SWEEP_REF_ROOT_BYTES: u64 = 5_022_410;
 pub const SWEEP_REF_LEFT_PCS_BYTES: u64 = 2_499_954;
 pub const SWEEP_REF_MMCS_GROUPS_PER_SIDE: u64 = 2_400_773;
+
+/// Production Poseidon compose fixture under the §7.1 shrink gate (nested=outer, chunk40).
+pub const POSEIDON_COMPOSE_DEFAULT_CHUNK40_JSON: &str =
+    "fixtures/e5b/poseidon-compose-default-chunk40.json";
+pub const POSEIDON_DEFAULT_CHUNK40_ROOT_BYTES: u64 = 173_483;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IdleLeafPoseidonMmcsReport {
@@ -29,12 +38,25 @@ pub struct IdleLeafPoseidonMmcsReport {
     pub reference_mmcs_groups_per_side: u64,
 }
 
+#[cfg(feature = "poseidon-mmcs")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdleTwoLeafPoseidonComposeReport {
     pub security_level: String,
     pub keccak_reference_root_bytes: u64,
     pub compose: IdleTwoLeafComposeReport,
     pub root_saved_vs_keccak_ref: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PoseidonComposeFixture {
+    pub benchmark: String,
+    pub fri_num_queries: u32,
+    pub nested_fri_num_queries: u32,
+    pub mmcs_group_chunk: u32,
+    pub root_bytes: u64,
+    pub left_pcs_bytes: u64,
+    pub shrink_gate_bytes: u64,
+    pub has_rec_agg_tail: bool,
 }
 
 fn idle_leaf_context(

@@ -28,7 +28,8 @@ pub use idle_compose::{
 
 #[cfg(feature = "plonky3-stark")]
 pub use poseidon_benchmark::{
-    benchmark_idle_leaf_poseidon_mmcs, IdleLeafPoseidonMmcsReport, SWEEP_REF_LABEL,
+    benchmark_idle_leaf_poseidon_mmcs, IdleLeafPoseidonMmcsReport, PoseidonComposeFixture,
+    POSEIDON_COMPOSE_DEFAULT_CHUNK40_JSON, POSEIDON_DEFAULT_CHUNK40_ROOT_BYTES, SWEEP_REF_LABEL,
     SWEEP_REF_LEFT_PCS_BYTES, SWEEP_REF_MMCS_GROUPS_PER_SIDE, SWEEP_REF_ROOT_BYTES,
 };
 
@@ -215,6 +216,46 @@ mod tests {
         let default = sweep.default_row().expect("default row");
         let best = sweep.best_row().expect("best row");
         assert!(best.root_bytes < default.root_bytes);
+    }
+
+    /// PR / scheduled CI lock: committed Poseidon nested=outer fixture must stay ≤500 KB.
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn poseidon_default_chunk40_fixture_under_shrink_gate() {
+        use crate::shrink::poseidon_benchmark::{
+            PoseidonComposeFixture, POSEIDON_COMPOSE_DEFAULT_CHUNK40_JSON,
+            POSEIDON_DEFAULT_CHUNK40_ROOT_BYTES,
+        };
+
+        let repo = stark_engine_repo_root();
+        let path = repo.join(POSEIDON_COMPOSE_DEFAULT_CHUNK40_JSON);
+        let raw = std::fs::read_to_string(&path).expect("read poseidon compose fixture");
+        let fix: PoseidonComposeFixture =
+            serde_json::from_str(&raw).expect("parse poseidon compose fixture");
+        assert_eq!(fix.benchmark, "idle_two_leaf_poseidon_compose");
+        assert!(fix.has_rec_agg_tail);
+        assert_eq!(fix.fri_num_queries, 40);
+        assert_eq!(fix.nested_fri_num_queries, 40);
+        assert_eq!(fix.mmcs_group_chunk, 40);
+        assert_eq!(fix.shrink_gate_bytes, SHRINK_GATE_BYTES);
+        assert_eq!(fix.root_bytes, POSEIDON_DEFAULT_CHUNK40_ROOT_BYTES);
+        assert!(
+            fix.root_bytes <= SHRINK_GATE_BYTES,
+            "production Poseidon nested=outer must stay ≤ shrink gate (got {})",
+            fix.root_bytes
+        );
+
+        let sweep = ShrinkSweep::load_from_repo(&repo).expect("load sweep");
+        let row = sweep
+            .rows
+            .iter()
+            .find(|r| r.label == "poseidon/default/chunk40")
+            .expect("sweep poseidon/default/chunk40");
+        assert_eq!(
+            row.root_bytes, fix.root_bytes,
+            "sweep.json must match poseidon-compose-default-chunk40.json"
+        );
+        assert!(row.root_bytes <= SHRINK_GATE_BYTES);
     }
 
     #[cfg(feature = "plonky3-stark")]

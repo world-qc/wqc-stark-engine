@@ -35,6 +35,11 @@ jobs:
           cargo test -p wqc-stark-core --features plonky3-stark --release --locked --verbose \
             idle_two_leaf_rec_agg_compose_under_regression_ceiling -- --ignored --exact --nocapture
 
+      - name: Assert Poseidon shrink-gate fixture (no re-prove)
+        run: |
+          cargo test -p wqc-stark-core --features plonky3-stark --release --locked --verbose \
+            poseidon_default_chunk40_fixture_under_shrink_gate -- --exact --nocapture
+
       - name: Refresh baseline JSON (artifact only)
         run: |
           cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --release -- \

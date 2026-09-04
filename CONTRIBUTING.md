@@ -106,12 +106,14 @@ cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --rel
 
 # Shrink optimization knobs (R3/PCS wire size):
 #   --security-level low|normal|high|ultra   (outer FRI ladder; default = 40 queries)
-#   WQC_PCS_MMCS_GROUP_CHUNK=40              (fewer/larger Mmcs group STARKs)
-#   WQC_PCS_NESTED_FRI_QUERIES=8             (nested Mmcs/FriFold FRI ≤ outer;
+#   WQC_PCS_MMCS_GROUP_CHUNK=40              (historical group chunk; host-only idle
+#                                            Poseidon still records this in fixtures)
+#   WQC_PCS_NESTED_FRI_QUERIES=8             (only affects size when nested group
+#                                            STARKs are proven; host-only idle = no effect;
 #                                            production default = match outer)
 #
-# E5b shrink tracking profile (toward 500 KB gate; not production default):
-WQC_PCS_MMCS_GROUP_CHUNK=40 WQC_PCS_NESTED_FRI_QUERIES=4 \
+# Production Poseidon shrink-gate profile (nested=outer, chunk40):
+WQC_PCS_MMCS_GROUP_CHUNK=40 \
 cargo run -p wqc-stark-core --bin shrink-baseline \
   --features plonky3-stark,poseidon-mmcs --release -- --poseidon-compose
 
@@ -121,7 +123,7 @@ cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --rel
 
 Baseline JSON lives at `fixtures/e5b/baseline.json`; the golden `idle_two_leaf_root.bin` is gitignored until generated locally.
 
-Poseidon compose fixtures: `fixtures/e5b/poseidon-compose-default-chunk40.json` (outer=nested=40, **PASS** ≤500 KB after host-only Mmcs), `poseidon-compose.json` (low/8q), `poseidon-compose-default-chunk40-nested8q.json` (matches nested=outer size when host-only).
+Poseidon compose fixtures: `fixtures/e5b/poseidon-compose-default-chunk40.json` (outer=nested=40, **PASS** ≤500 KB; PR CI asserts `root_bytes`), `poseidon-compose.json` (low/8q), `poseidon-compose-default-chunk40-nested{4,8,16}q.json` (host-only size matches nested=outer).
 
 ## Pull Request Guidelines
 

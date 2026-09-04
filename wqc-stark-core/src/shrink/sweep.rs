@@ -96,5 +96,19 @@ mod tests {
             "poseidon/low should pass shrink gate (got {})",
             poseidon_low.root_bytes
         );
+        let poseidon_prod = sweep
+            .rows
+            .iter()
+            .find(|r| r.label == "poseidon/default/chunk40")
+            .expect("poseidon/default/chunk40 row");
+        assert!(
+            poseidon_prod.root_bytes <= SHRINK_GATE_BYTES,
+            "production poseidon/default/chunk40 must pass shrink gate (got {})",
+            poseidon_prod.root_bytes
+        );
+        assert_eq!(
+            poseidon_prod.root_bytes, 173_483,
+            "production tracking fixture must stay in sync with poseidon-compose-default-chunk40.json"
+        );
     }
 }

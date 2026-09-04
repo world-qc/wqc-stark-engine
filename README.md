@@ -16,7 +16,7 @@ wqc-stark-engine/
 └── wqc-stark-ffi/      # CGO-compatible `libwqc_stark_verifier`
 ```
 
-* **`wqc-stark-core`**: Quantum execution AIR over Plonky3 Mersenne31 field types. Supports embedded trace verification, FRI STARKs via Plonky3 Circle PCS, distribution / trajectory segments, Born and shot-sampling AIRs, leaf compose proofs, and in-circuit recursive aggregation (`RecursiveAggregationAir` v6 with agg/leaf PCS certificates, in-circuit OOD / FriFold / DeepRo / Keccak Mmcs; Born K≤21, W≤68).
+* **`wqc-stark-core`**: Quantum execution AIR over Plonky3 Mersenne31 field types. Supports embedded trace verification, FRI STARKs via Plonky3 Circle PCS, distribution / trajectory segments, Born and shot-sampling AIRs, leaf compose proofs, and recursive aggregation (`RecursiveAggregationAir` v6 with agg/leaf PCS certificates; host-bound Mmcs/FriFold/OOD digests + optional nested group STARKs; Born K≤21, W≤68).
 * **`wqc-stark-ffi`**: Panic-safe C ABI for the Go orchestrator (leaf verify, compose with optional prebuilt leaf PCS, root verify, `wqc_build_leaf_pcs_bundle`, distribution/trajectory binding, scheme detection).
 
 ## Public inputs (`StarkContext`)
@@ -40,7 +40,7 @@ wqc-stark-engine/
 | v3 | `_WQC_COMPOSE_V3_` | Proof-tree compose — binds two child proofs by SHA3-256 hash (leaf or agg pairs) |
 | v4 | `_WQC_AGG_STARK_V4_` / `_WQC_AGG_TAIL_V4_` | AggregationAir digest attestation |
 | v5 | `_WQC_REC_AGG_V5_` / `_WQC_REC_TAIL_V5_` | Recursive aggregation (legacy); wraps AggregationAir + child metadata |
-| v6 | `_WQC_REC_AGG_V6_` / `_WQC_REC_TAIL_V6_` | Recursive aggregation with agg/leaf PCS certificates, in-circuit OOD, FriFold, DeepRo, Val/Challenge Mmcs |
+| v6 | `_WQC_REC_AGG_V6_` / `_WQC_REC_TAIL_V6_` | Recursive aggregation with agg/leaf PCS certificates (host Mmcs/FriFold/OOD bind; DeepRo when present) |
 
 **Layout** — v2/v4 carry a postcard-encoded Plonky3 proof after C-string public inputs. v3/v5/v6 embed compose headers (`parent_task_id`, `compose_label`, child hashes/digests/kinds) followed by the child proof bytes.
 
@@ -120,37 +120,43 @@ docker run --rm -v "$(pwd)/dist:/output" wqc-stark-builder \
        /output/
 ```
 
-## In-circuit recursion
+## Recursive aggregation (RecAgg v6)
 
-With the `plonky3-stark` feature, leaf and aggregation PCS certificates bind FRI openings inside
-`RecursiveAggregationAir` (v6) compose. Verify-time checks include in-circuit OOD (aggregation
-and all leaf AIR kinds), FriFold, DeepRo, and Val/Challenge Mmcs. Born recursion supports
-outcome dimension K≤21 (AIR width W≤68). Protocol details:
+With the `plonky3-stark` feature, compose attaches a `RecursiveAggregationAir` (v6) tail when
+both children carry verified PCS certificates. The RecAgg STARK asserts child digests, kinds,
+and `pcs_ok` flags in-circuit — it does **not** re-verify nested Mmcs/FriFold/OOD Circle STARKs.
+
+**PCS verify model (production idle Poseidon):** leaf/agg certificates ship **host-only**
+Mmcs / FriFold / OOD: nested group STARKs are empty; verify replays Merkle digests from
+retained siblings and checks FriFold/OOD algebra natively against openings already bound to
+the parent FRI proof. DeepRo nested STARKs still apply on single-chunk paths (idle multi-chunk
+ships `deep_ro=0`). Optional nested group STARKs remain supported on the wire for benchmarks.
+Born recursion supports outcome dimension K≤21 (AIR width W≤68). Protocol details:
 [zk-STARK.md §8](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md).
 
 | Module (`wqc-stark-core/.../recursion/`) | Role |
 |--------------------------------------------|------|
-| `ood_air.rs` | `OodCheckAir` STARK: ζ quotient + aggregation in-circuit fold |
+| `ood_air.rs` | OOD witness + host-native fold/quotient (empty `ood_stark` on wire) |
 | `ood_native.rs` | Prove-time OOD witness extraction (FS replay) |
 | `ood_bind.rs` | Bind OOD step to child openings at verify |
-| `ood_leaf_fold.rs` | In-circuit leaf constraint fold (Unitary / Distribution / Shot) |
-| `ood_fold.rs` | Native fold for prove-time witness sanity checks |
-| `fri_mmcs_path.rs` | Per-step Keccak Mmcs path proofs (superseded by group fold on wire) |
-| `fri_mmcs_path_m4a.rs` | Single Merkle path → batched Keccak path STARK |
-| `fri_mmcs_group_m4b.rs` | Homogeneous Val/Chal paths → `KeccakGroupFoldProof` |
-| `fri_mmcs_m4c.rs` | Leaf + aggregation Mmcs groups (bind, strip nested proofs) |
-| `fri_fold_group.rs` | FriFold steps → `FriFoldGroupProof` (Y or X) |
-| `fri_fold_m4c.rs` | Apply / strip / bind FriFold groups |
+| `ood_leaf_fold.rs` | Leaf constraint fold helpers (Unitary / Distribution / Shot) |
+| `ood_fold.rs` | Native OOD fold used at host bind |
+| `fri_mmcs_path.rs` | Path stubs / digest verify (nested path STARKs stripped) |
+| `fri_mmcs_path_m4a.rs` | Optional single-path batched STARK (benchmark / legacy) |
+| `fri_mmcs_group_m4b.rs` | Optional homogeneous path → group STARK (benchmark / legacy) |
+| `fri_mmcs_m4c.rs` | Leaf + agg Mmcs apply/bind (host-only empty groups by default) |
+| `fri_fold_group.rs` | Optional FriFold group STARK (benchmark / legacy) |
+| `fri_fold_m4c.rs` | FriFold apply/bind (host-native YX marker by default) |
 | `pcs_memory.rs` | PCS peak-RAM estimate, `refuse` / `spill` memory gate |
 | `leaf_pcs_cert.rs` | Leaf cert prove/verify + Born/trajectory bundle decode |
 | `transcript_v6.rs` | v6 encode / decode (agg cert or leaf bundle) |
 | `prove.rs` | RecAgg matrix bind for leaf bundles |
-| `air.rs` | Recursive aggregation AIR (leaf PCS columns) |
+| `air.rs` | Recursive aggregation AIR (digest / pcs_ok columns) |
 | `../aggregation/mod.rs` | Compose / verify context; optional prebuilt leaf PCS |
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`default`/40q/chunk40 nested=outer ≈ 169 KiB** (`173_483` B) — **PASS_SHRINK_GATE** (≤500 KB); **`low`/8q ≈ 131 KiB** (`133_694` B, older fixture). Host-only Mmcs/FriFold/OOD (siblings + digests; empty group STARKs); prior levers: val+chal combine, compress-only Poseidon group AIR, mixed-width val. Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
+- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`default`/40q/chunk40 nested=outer ≈ 169 KiB** (`173_483` B) — **PASS_SHRINK_GATE** (≤500 KB); **`low`/8q ≈ 38 KiB** (`39_386` B). Host-only Mmcs/FriFold/OOD (siblings + digests; empty group STARKs). Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40. PR CI asserts the chunk40 fixture ≤ gate.
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.
 - Prove-time witness oracles in-circuit

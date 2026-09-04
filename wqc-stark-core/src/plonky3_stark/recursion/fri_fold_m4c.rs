@@ -75,8 +75,8 @@ pub fn apply_leaf_fri_fold_m4c_folds(
 
 /// Like [`apply_leaf_fri_fold_m4c_folds`], matching nested FRI queries to the outer proof.
 ///
-/// **Host-only FriFold (E5b shrink):** Mmcs groups already attest the opened FRI
-/// values; fold algebra is checked natively at bind. Emitting an empty-stark YX
+/// **Host-only FriFold (E5b shrink):** opened FRI values are already bound to the parent
+/// proof; fold algebra is checked natively at bind. Emitting an empty-stark YX
 /// marker keeps FriFold wire v2 limb omission without a nested Circle proof.
 pub fn apply_leaf_fri_fold_m4c_folds_with_queries(
     bundle: &mut AggFriFoldBundle,

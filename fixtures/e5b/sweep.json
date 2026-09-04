@@ -57,20 +57,20 @@
       "security_level": "low",
       "fri_num_queries": 8,
       "mmcs_group_chunk": 24,
-      "root_bytes": 133694,
-      "left_pcs_bytes": 55696,
-      "mmcs_groups_per_side": 38102,
-      "note": "PASS_SHRINK_GATE after val+chal pcs_combined (fixtures/e5b/poseidon-compose.json); not remeasured after host-only Mmcs"
+      "root_bytes": 39386,
+      "left_pcs_bytes": 8542,
+      "mmcs_groups_per_side": 0,
+      "note": "PASS_SHRINK_GATE after host-only Mmcs (fixtures/e5b/poseidon-compose.json)"
     },
     {
       "label": "poseidon/default/chunk24",
       "security_level": "",
       "fri_num_queries": 40,
       "mmcs_group_chunk": 24,
-      "root_bytes": 3579161,
-      "left_pcs_bytes": 1742389,
-      "mmcs_groups_per_side": 1465045,
-      "note": "Poseidon compose at 40q/chunk24 (fixtures/e5b/poseidon-compose-default.json); not remeasured after host-only Mmcs"
+      "root_bytes": 173483,
+      "left_pcs_bytes": 39550,
+      "mmcs_groups_per_side": 0,
+      "note": "Poseidon compose at 40q/chunk24 after host-only Mmcs (fixtures/e5b/poseidon-compose-default.json)"
     },
     {
       "label": "poseidon/default/chunk40",
@@ -88,10 +88,10 @@
       "fri_num_queries": 40,
       "nested_fri_num_queries": 16,
       "mmcs_group_chunk": 40,
-      "root_bytes": 1147303,
-      "left_pcs_bytes": 526460,
-      "mmcs_groups_per_side": 335264,
-      "note": "outer 40q + nested 16q; stale — not remeasured after host-only Mmcs"
+      "root_bytes": 173483,
+      "left_pcs_bytes": 39550,
+      "mmcs_groups_per_side": 0,
+      "note": "outer 40q + nested 16q; remounted host-only — same root as nested=outer"
     },
     {
       "label": "poseidon/default/chunk40/nested8q",
@@ -120,8 +120,10 @@
   },
   "poseidon_default_40q": {
     "chunk24": {
-      "root_bytes": 3579161,
-      "mmcs_groups_per_side": 1465045
+      "root_bytes": 173483,
+      "mmcs_groups_per_side": 0,
+      "left_pcs_bytes": 39550,
+      "note": "host-only; same root as chunk40"
     },
     "chunk40": {
       "root_bytes": 173483,
@@ -132,11 +134,11 @@
       "note": "PASS nested=outer after host-only Mmcs/FriFold/OOD"
     },
     "chunk40_nested16q": {
-      "root_bytes": 1147303,
-      "mmcs_groups_per_side": 335264,
-      "fri_fold_per_side": 46509,
-      "gap_to_gate_bytes": 635303,
-      "note": "stale — not remeasured after host-only Mmcs"
+      "root_bytes": 173483,
+      "mmcs_groups_per_side": 0,
+      "fri_fold_per_side": 0,
+      "gap_to_gate_bytes": -338517,
+      "note": "matches nested=outer (host-only)"
     },
     "chunk40_nested8q": {
       "root_bytes": 173483,
@@ -148,18 +150,19 @@
       "note": "matches nested=outer (host-only; nested FRI unused for size)"
     },
     "chunk40_nested4q": {
-      "root_bytes": 231393,
-      "mmcs_groups_per_side": 27405,
-      "fri_fold_per_side": 7409,
-      "ood_per_side": 1804,
-      "left_pcs_bytes": 68505,
-      "gap_to_gate_bytes": -280607,
-      "note": "stale fixture — not remeasured after host-only Mmcs"
+      "root_bytes": 173483,
+      "mmcs_groups_per_side": 0,
+      "fri_fold_per_side": 0,
+      "ood_per_side": 0,
+      "left_pcs_bytes": 39550,
+      "gap_to_gate_bytes": -338517,
+      "note": "matches nested=outer (host-only)"
     }
   },
   "next_levers": [
     "DONE: host-only Mmcs/FriFold/OOD (siblings + digests on wire; empty group STARKs)",
     "DONE: val+chal pcs_combined; compress-only Poseidon group AIR; mixed-width val",
+    "DONE: PR CI locks poseidon-compose-default-chunk40.json ≤ SHRINK_GATE",
     "Production nested=outer chunk40: 173 483 B PASS (gap -338 517)",
     "Residual: E5b-1b shrink-gate sign-off; then wrap path (E5b-2a)"
   ],
