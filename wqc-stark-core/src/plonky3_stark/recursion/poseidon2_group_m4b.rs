@@ -2,14 +2,20 @@
 //!
 //! Replaces Keccak sponge segments (width ~1657) with width-16 Poseidon2 perm traces (width 21).
 //!
+//! **Compress-only AIR (lever 5):** leaf sponge hashing stays on the host
+//! (`hash_val_leaf_poseidon` at prove/verify). The group STARK only proves the
+//! Merkle compress chain from `leaf_digest` PV through siblings to `root`.
+//! That drops ~`ceil(W/RATE)` perm segments per path (dominant for wide val rows)
+//! and shrinks nested FRI `opening_proof` roughly with trace height.
+//!
 //! Public values (`depth` = max path depth; `leaf_width` = max leaf width; unused high slots zero):
 //! `path_count | max_depth | [shared_root[8]]`
 //! `×path { leaf_row[max_W] | width_onehot[max_W] | leaf_digest[8] | [root[8]]
 //!   | depth_onehot[max_depth] | index_bits[max_depth] | siblings[max_depth×8] }`.
 //! `width_onehot[i]` / `depth_onehot[i]` are boolean, each sums to 1, and mean
 //! `path_width == i+1` / `path_depth == i+1`.
-//! Intermediate Merkle digests chain via segment-boundary transitions; the final
-//! compress output binds to `root` at segment `n_leaf + d - 1` when both onehots match.
+//! Compress layer `L` lives at segment `L`; the final compress output binds to
+//! `root` at segment `d - 1` when `depth_onehot[d - 1]`.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -31,9 +37,8 @@ use super::fri_mmcs_group_m4b::{
 use super::fri_mmcs_path::FRI_MMCS_MAX_DEPTH;
 use super::fri_mmcs_path_m4a::M4A_SEG_IDX_BITS;
 use super::merkle_poseidon2::{
-    compress_digests_poseidon, hash_val_leaf_poseidon, leaf_perm_state,
-    merkle_root_from_path_poseidon, poseidon_compress_perm_input, poseidon_leaf_perm_count,
-    poseidon_m4b_width_eligible,
+    compress_digests_poseidon, hash_val_leaf_poseidon, merkle_root_from_path_poseidon,
+    poseidon_compress_perm_input, poseidon_m4b_width_eligible,
 };
 use super::poseidon2_perm_air::{
     build_perm_trace, constrain_external, constrain_internal, constrain_mds_only,
@@ -41,7 +46,6 @@ use super::poseidon2_perm_air::{
     POSEIDON2_STEP_BITS, POSEIDON2_STEP_COL,
 };
 use super::poseidon2_spike::POSEIDON2_WIDTH;
-use crate::plonky3_stark::config_poseidon::POSEIDON_RATE;
 
 pub const P2_SEG_START_COL: usize = POSEIDON2_PERM_WIDTH;
 pub const P2_SEG_IDX_COL: usize = POSEIDON2_PERM_WIDTH + 1;
@@ -54,8 +58,8 @@ const DIGEST_LIMBS: usize = 8;
 
 /// Poseidon2 Mmcs group proof (homogeneous or mixed depth/width; fields are maxima).
 ///
-/// Leaf and layer digests are **not** carried: the verifier recomputes them from the
-/// path statements it already holds.
+/// Leaf digests are recomputed on the host from path statements; the group STARK
+/// attests the Merkle compress chain only (compress-only AIR).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoseidonGroupFoldProof {
     pub path_count: u32,
@@ -133,20 +137,6 @@ where
 {
     let mut acc = AB::Expr::ZERO;
     for w in (slot + 1)..=max_w {
-        acc += width_oh[w - 1].clone();
-    }
-    acc
-}
-
-/// Selector for `n_leaf == n` from `width_onehot` (`n_leaf = ceil(W / RATE)`).
-fn n_leaf_is<AB: AirBuilder>(width_oh: &[AB::Expr], max_w: usize, n: usize) -> AB::Expr
-where
-    AB::F: PrimeCharacteristicRing,
-{
-    let mut acc = AB::Expr::ZERO;
-    let lo = (n - 1) * POSEIDON_RATE + 1;
-    let hi = (n * POSEIDON_RATE).min(max_w);
-    for w in lo..=hi {
         acc += width_oh[w - 1].clone();
     }
     acc
@@ -230,17 +220,12 @@ fn append_perm_segment(
     }
 }
 
-fn build_group_matrix(
-    paths: &[(Vec<Mersenne31>, Vec<[Mersenne31; POSEIDON2_WIDTH]>)],
-) -> RowMajorMatrix<Mersenne31> {
+fn build_group_matrix(paths: &[Vec<[Mersenne31; POSEIDON2_WIDTH]>]) -> RowMajorMatrix<Mersenne31> {
     let mut values = Vec::new();
-    for (p, (row, compress_inputs)) in paths.iter().enumerate() {
-        let n_leaf = poseidon_leaf_perm_count(row.len());
-        for k in 0..n_leaf {
-            append_perm_segment(&mut values, leaf_perm_state(row, k), k, p);
-        }
+    for (p, compress_inputs) in paths.iter().enumerate() {
+        // Compress-only: segment index == Merkle layer (leaf sponge is host-side).
         for (layer, input) in compress_inputs.iter().enumerate() {
-            append_perm_segment(&mut values, *input, n_leaf + layer, p);
+            append_perm_segment(&mut values, *input, layer, p);
         }
     }
     let active_rows = values.len() / POSEIDON2_GROUP_WIDTH;
@@ -336,8 +321,6 @@ where
         builder.assert_zero(pv[0].clone() - AB::Expr::from(AB::F::from_u32(path_count as u32)));
         builder.assert_zero(pv[1].clone() - AB::Expr::from(AB::F::from_u32(depth as u32)));
 
-        let max_n_leaf = poseidon_leaf_perm_count(leaf_width);
-
         for p in 0..path_count {
             let path_sel = eq_bits_const::<AB>(&path_bits_c, p as u32);
             let path_sel_n = eq_bits_const::<AB>(&path_bits_n, p as u32);
@@ -358,7 +341,7 @@ where
                 w_sum += bit;
             }
             builder.assert_zero(w_sum - one.clone());
-            // Pad limbs beyond actual W must be zero.
+            // Pad limbs beyond actual W must be zero (row still in PV for host leaf hash).
             for slot in 0..leaf_width {
                 let live = width_gt_slot::<AB>(&width_oh, leaf_width, slot);
                 builder.assert_zero((one.clone() - live) * pv[row_base + slot].clone());
@@ -385,95 +368,27 @@ where
                 }
             }
 
-            // Leaf sponge segment starts (RATE=8 overwrite absorb + capacity carry).
-            for k in 0..max_n_leaf {
-                // Live leaf segment iff n_leaf > k.
-                let mut leaf_active = AB::Expr::ZERO;
-                for n in (k + 1)..=max_n_leaf {
-                    leaf_active += n_leaf_is::<AB>(&width_oh, leaf_width, n);
-                }
-                let leaf_start = seg_start_c.clone()
-                    * eq_bits_const::<AB>(&seg_bits_c, k as u32)
-                    * path_sel.clone()
-                    * leaf_active;
-                let off = k * POSEIDON_RATE;
-                for i in 0..POSEIDON_RATE {
-                    let row_i = off + i;
-                    if row_i < leaf_width {
-                        let used = width_gt_slot::<AB>(&width_oh, leaf_width, row_i);
-                        builder.assert_zero(
-                            leaf_start.clone()
-                                * used
-                                * (AB::Expr::from(curr_state[i]) - pv[row_base + row_i].clone()),
-                        );
-                    }
-                    // Partial last rate / multi-perm carry: unconstrained when slot unused.
-                }
-                if k == 0 {
-                    for i in POSEIDON_RATE..POSEIDON2_WIDTH {
-                        builder.assert_zero(leaf_start.clone() * AB::Expr::from(curr_state[i]));
-                    }
-                    // Single-perm partial leaf: unused rate starts at zero.
-                    let is_one = n_leaf_is::<AB>(&width_oh, leaf_width, 1);
-                    for i in 0..POSEIDON_RATE {
-                        if i < leaf_width {
-                            let used = width_gt_slot::<AB>(&width_oh, leaf_width, i);
-                            builder.assert_zero(
-                                leaf_start.clone()
-                                    * is_one.clone()
-                                    * (one.clone() - used)
-                                    * AB::Expr::from(curr_state[i]),
-                            );
-                        }
-                    }
-                }
-            }
-            // Capacity continuity across leaf sponge perms: next leaf seg keeps prior capacity.
-            for k in 1..max_n_leaf {
-                let mut leaf_active = AB::Expr::ZERO;
-                for n in (k + 1)..=max_n_leaf {
-                    leaf_active += n_leaf_is::<AB>(&width_oh, leaf_width, n);
-                }
-                let leaf_next = is_tr.clone()
-                    * seg_start_n.clone()
-                    * eq_bits_const::<AB>(&seg_bits_n, k as u32)
-                    * path_sel_n.clone()
-                    * leaf_active;
-                for i in POSEIDON_RATE..POSEIDON2_WIDTH {
-                    builder.assert_zero(
-                        leaf_next.clone()
-                            * (AB::Expr::from(next_state[i]) - AB::Expr::from(curr_state[i])),
-                    );
-                }
-            }
-
-            // Compress layer 0 start: left‖right from leaf_digest PV + sibling[0].
+            // Compress layer 0: left‖right from leaf_digest PV + sibling[0].
             {
                 let mut layer_active = AB::Expr::ZERO;
                 for i in 0..depth {
                     layer_active += pv[oh_base + i].clone();
                 }
-                for n in 1..=max_n_leaf {
-                    let is_n = n_leaf_is::<AB>(&width_oh, leaf_width, n);
-                    let start = seg_start_c.clone()
-                        * eq_bits_const::<AB>(&seg_bits_c, n as u32)
-                        * path_sel.clone()
-                        * layer_active.clone()
-                        * is_n;
-                    let bit = pv[idx_bits_base].clone();
-                    let not_bit = one.clone() - bit.clone();
-                    for limb in 0..DIGEST_LIMBS {
-                        let prev = pv[leaf_d_base + limb].clone();
-                        let sib = pv[sib_base + limb].clone();
-                        let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
-                        let right = bit.clone() * prev + not_bit.clone() * sib;
-                        builder
-                            .assert_zero(start.clone() * (AB::Expr::from(curr_state[limb]) - left));
-                        builder.assert_zero(
-                            start.clone()
-                                * (AB::Expr::from(curr_state[DIGEST_LIMBS + limb]) - right),
-                        );
-                    }
+                let start = seg_start_c.clone()
+                    * eq_bits_const::<AB>(&seg_bits_c, 0)
+                    * path_sel.clone()
+                    * layer_active;
+                let bit = pv[idx_bits_base].clone();
+                let not_bit = one.clone() - bit.clone();
+                for limb in 0..DIGEST_LIMBS {
+                    let prev = pv[leaf_d_base + limb].clone();
+                    let sib = pv[sib_base + limb].clone();
+                    let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
+                    let right = bit.clone() * prev + not_bit.clone() * sib;
+                    builder.assert_zero(start.clone() * (AB::Expr::from(curr_state[limb]) - left));
+                    builder.assert_zero(
+                        start.clone() * (AB::Expr::from(curr_state[DIGEST_LIMBS + limb]) - right),
+                    );
                 }
             }
 
@@ -483,64 +398,41 @@ where
                 for i in layer..depth {
                     layer_active += pv[oh_base + i].clone();
                 }
-                for n in 1..=max_n_leaf {
-                    let is_n = n_leaf_is::<AB>(&width_oh, leaf_width, n);
-                    let start_next = is_tr.clone()
-                        * seg_start_n.clone()
-                        * eq_bits_const::<AB>(&seg_bits_n, (n + layer) as u32)
-                        * path_sel_n.clone()
-                        * layer_active.clone()
-                        * is_n;
-                    let bit = pv[idx_bits_base + layer].clone();
-                    let not_bit = one.clone() - bit.clone();
-                    for limb in 0..DIGEST_LIMBS {
-                        let prev: AB::Expr = curr_state[limb].into();
-                        let sib = pv[sib_base + layer * DIGEST_LIMBS + limb].clone();
-                        let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
-                        let right = bit.clone() * prev + not_bit.clone() * sib;
-                        builder.assert_zero(
-                            start_next.clone() * (AB::Expr::from(next_state[limb]) - left),
-                        );
-                        builder.assert_zero(
-                            start_next.clone()
-                                * (AB::Expr::from(next_state[DIGEST_LIMBS + limb]) - right),
-                        );
-                    }
-                }
-            }
-
-            // Segment outputs bind when the next row starts a new segment or padding begins.
-            let end_seg = is_tr.clone() * seg_start_n.clone() * live_n.clone();
-            let bind_out = end_seg + end_active.clone();
-            for n in 1..=max_n_leaf {
-                let is_n = n_leaf_is::<AB>(&width_oh, leaf_width, n);
-                let leaf_out = bind_out.clone()
-                    * eq_bits_const::<AB>(&seg_bits_c, (n - 1) as u32)
-                    * path_sel.clone()
-                    * is_n;
+                let start_next = is_tr.clone()
+                    * seg_start_n.clone()
+                    * eq_bits_const::<AB>(&seg_bits_n, layer as u32)
+                    * path_sel_n.clone()
+                    * layer_active;
+                let bit = pv[idx_bits_base + layer].clone();
+                let not_bit = one.clone() - bit.clone();
                 for limb in 0..DIGEST_LIMBS {
+                    let prev: AB::Expr = curr_state[limb].into();
+                    let sib = pv[sib_base + layer * DIGEST_LIMBS + limb].clone();
+                    let left = not_bit.clone() * prev.clone() + bit.clone() * sib.clone();
+                    let right = bit.clone() * prev + not_bit.clone() * sib;
                     builder.assert_zero(
-                        leaf_out.clone()
-                            * (AB::Expr::from(curr_state[limb]) - pv[leaf_d_base + limb].clone()),
+                        start_next.clone() * (AB::Expr::from(next_state[limb]) - left),
+                    );
+                    builder.assert_zero(
+                        start_next.clone()
+                            * (AB::Expr::from(next_state[DIGEST_LIMBS + limb]) - right),
                     );
                 }
             }
-            // Final compress output binds to claimed Merkle root at segment
-            // `n_leaf + d - 1` when `depth_onehot[d-1]` and width selects `n_leaf`.
-            for n in 1..=max_n_leaf {
-                let is_n = n_leaf_is::<AB>(&width_oh, leaf_width, n);
-                for d in 1..=depth {
-                    let root_out = bind_out.clone()
-                        * eq_bits_const::<AB>(&seg_bits_c, (n + d - 1) as u32)
-                        * path_sel.clone()
-                        * pv[oh_base + d - 1].clone()
-                        * is_n.clone();
-                    for limb in 0..DIGEST_LIMBS {
-                        builder.assert_zero(
-                            root_out.clone()
-                                * (AB::Expr::from(curr_state[limb]) - pv[root_base + limb].clone()),
-                        );
-                    }
+
+            // Final compress output binds to claimed Merkle root at segment `d - 1`.
+            let end_seg = is_tr.clone() * seg_start_n.clone() * live_n.clone();
+            let bind_out = end_seg + end_active.clone();
+            for d in 1..=depth {
+                let root_out = bind_out.clone()
+                    * eq_bits_const::<AB>(&seg_bits_c, (d - 1) as u32)
+                    * path_sel.clone()
+                    * pv[oh_base + d - 1].clone();
+                for limb in 0..DIGEST_LIMBS {
+                    builder.assert_zero(
+                        root_out.clone()
+                            * (AB::Expr::from(curr_state[limb]) - pv[root_base + limb].clone()),
+                    );
                 }
             }
         }
@@ -752,12 +644,7 @@ pub fn generate_poseidon_group_fold_proof_with_queries(
         path_count,
         shared_root: roots_are_shared(&roots),
     };
-    let matrix_paths: Vec<_> = rows
-        .iter()
-        .zip(compress_inputs.iter())
-        .map(|(row, compress)| (row.clone(), compress.clone()))
-        .collect();
-    let matrix = build_group_matrix(&matrix_paths);
+    let matrix = build_group_matrix(&compress_inputs);
     drop(compress_inputs);
 
     let pv = build_public_values(
@@ -1021,8 +908,10 @@ mod tests {
     }
 
     #[test]
-    fn poseidon_m4b_sponge_capacity_carry_width21() {
-        use crate::plonky3_stark::config_poseidon::poseidon_sponge_leaf_perm_inputs;
+    fn poseidon_m4b_host_leaf_sponge_capacity_carry_width21() {
+        use crate::plonky3_stark::config_poseidon::{
+            poseidon_sponge_leaf_perm_inputs, POSEIDON_RATE,
+        };
         use p3_mersenne_31::default_mersenne31_poseidon2_16;
         use p3_symmetric::Permutation;
 

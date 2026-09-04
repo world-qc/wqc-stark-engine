@@ -71,7 +71,7 @@ select outer FRI query count from the same task-level `security_level` (PCS `n` 
 **Nested Mmcs / FriFold policy** (see [zk-STARK.md §5.1](https://github.com/world-qc/wqc-docs/blob/main/spec/zk-STARK.md#51-securitylevel--fri-query-ladder)):
 
 - **Production default:** nested FRI `num_queries` = outer `n` (weakest attestation link matches the task tier).
-- **Shrink / experiment:** `WQC_PCS_NESTED_FRI_QUERIES` ∈ `{1,…,n}` (e.g. outer 40 + nested 4 → ~397 KiB idle Poseidon root, PASS ≤500 KB). Not a silent `security_level` downgrade.
+- **Shrink / experiment:** `WQC_PCS_NESTED_FRI_QUERIES` ∈ `{1,…,n}` (e.g. outer 40 + nested 4 → ~267 KiB idle Poseidon root, PASS ≤500 KB). Not a silent `security_level` downgrade.
 - Nested Mmcs / FriFold / OOD / DeepRo uni-STARKs follow `WQC_PCS_NESTED_FRI_QUERIES` (default = outer).
 
 ## Build
@@ -150,7 +150,7 @@ outcome dimension K≤21 (AIR width W≤68). Protocol details:
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`low`/8q ≈ 402 KiB** (`411_736` B) — **PASS_SHRINK_GATE** (≤500 KB); **`default`/40q/chunk40 ≈ 1.17 MiB** (`1_223_017` B); **nested8q ≈ 377 KiB** (`386_397` B, PASS); **nested4q ≈ 397 KiB** (`406_555` B, PASS). Mixed-width val Mmcs (trace+quot); chal first+commit merged; FriFold YX; OOD/DeepRo follow nested FRI queries. Nested Mmcs/FriFold/OOD/DeepRo FRI queries default to the outer count and can be lowered via `WQC_PCS_NESTED_FRI_QUERIES`. Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
+- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`low`/8q ≈ 198 KiB** (`202_600` B) — **PASS_SHRINK_GATE** (≤500 KB); **`default`/40q/chunk40 ≈ 1.09 MiB** (`1_139_367` B); **nested8q ≈ 361 KiB** (`369_389` B, PASS); **nested4q ≈ 267 KiB** (`273_165` B, PASS). Compress-only Poseidon Mmcs group AIR (leaf sponge host-side); mixed-width val Mmcs; chal first+commit merged; FriFold YX; OOD/DeepRo follow nested FRI queries. Nested Mmcs/FriFold/OOD/DeepRo FRI queries default to the outer count and can be lowered via `WQC_PCS_NESTED_FRI_QUERIES`. Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40.
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout.
 - Prove-time witness oracles in-circuit

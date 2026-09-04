@@ -17,6 +17,8 @@
 //!    outer 40 + chunk40 + nested 4 (`poseidon-compose-default-chunk40-nested4q.json`,
 //!    PASS_SHRINK_GATE after wire v6). Nested 8 also PASSes after chal Mmcs merge
 //!    + FriFold YX (`poseidon-compose-default-chunk40-nested8q.json`).
+//! 6. **Poseidon group compress-only AIR** — leaf sponge stays host-side; group STARK
+//!    proves Merkle compress only (shorter nested FRI openings).
 
 use crate::plonky3_stark::{fri_num_queries_for_security_level, DEVNET_FRI_NUM_QUERIES};
 

@@ -9,9 +9,10 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::{default_mersenne31_poseidon2_16, Mersenne31, Poseidon2Mersenne31};
+#[cfg(test)]
+use p3_symmetric::Permutation;
 use p3_symmetric::{
-    CryptographicHasher, PaddingFreeSponge, Permutation, PseudoCompressionFunction,
-    TruncatedPermutation,
+    CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
 };
 
 type Val = Mersenne31;
@@ -19,15 +20,17 @@ type Challenge = BinomialExtensionField<Val, 3>;
 
 /// Poseidon2 width-16 permutation (Plonky3 default M31 RC tables).
 pub type Poseidon2Perm16 = Poseidon2Mersenne31<16>;
-/// Leaf / row hasher: sponge WIDTH=16, RATE=8, OUT=8 field limbs.
-pub type PoseidonFieldHash = PaddingFreeSponge<Poseidon2Perm16, 16, 8, 8>;
-/// Binary compress: truncated perm over 2×8 limbs.
-pub type PoseidonCompress = TruncatedPermutation<Poseidon2Perm16, 2, 8, 16>;
 
 /// Field limbs per Poseidon Merkle digest (packed into 32 bytes on the wire).
 pub const POSEIDON_DIGEST_LIMBS: usize = 8;
 /// Sponge rate (= digest limb count).
 pub const POSEIDON_RATE: usize = 8;
+
+/// Leaf / row hasher: sponge WIDTH=16, RATE=8, OUT=8 field limbs.
+pub type PoseidonFieldHash =
+    PaddingFreeSponge<Poseidon2Perm16, 16, { POSEIDON_RATE }, { POSEIDON_DIGEST_LIMBS }>;
+/// Binary compress: truncated perm over 2×8 limbs.
+pub type PoseidonCompress = TruncatedPermutation<Poseidon2Perm16, 2, { POSEIDON_DIGEST_LIMBS }, 16>;
 
 /// Pack 8×M31 into a 32-byte wire digest (little-endian canonical u32 each).
 pub fn pack_digest(limbs: [Mersenne31; POSEIDON_DIGEST_LIMBS]) -> [u8; 32] {
@@ -136,6 +139,9 @@ pub fn compress_digests_poseidon_mmcs(left: [u8; 32], right: [u8; 32]) -> [u8; 3
 /// Pre-permutation sponge states for a leaf row (RATE=8 overwrite absorb).
 ///
 /// Each returned state is the width-16 input to one Poseidon2 perm in the sponge.
+/// Host-only helper for tests (group AIR is compress-only; leaf hash uses
+/// [`hash_val_leaf_poseidon_mmcs`]).
+#[cfg(test)]
 pub fn poseidon_sponge_leaf_perm_inputs(row: &[Mersenne31]) -> Vec<[Mersenne31; 16]> {
     let perm = default_mersenne31_poseidon2_16();
     let mut state = [Mersenne31::ZERO; 16];
@@ -159,6 +165,7 @@ pub fn poseidon_sponge_leaf_perm_inputs(row: &[Mersenne31]) -> Vec<[Mersenne31; 
 }
 
 /// Number of Poseidon2 perms in the leaf sponge for this row width.
+#[cfg(test)]
 pub fn poseidon_leaf_perm_count(leaf_width: usize) -> usize {
     if leaf_width == 0 {
         0

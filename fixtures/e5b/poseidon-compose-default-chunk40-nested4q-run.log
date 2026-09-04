@@ -1,4 +1,3 @@
-   Compiling wqc-stark-core v0.1.0 (/Users/yoshitaka/world-qc/wqc-stark-engine/wqc-stark-core)
 warning: unused import: `poseidon_leaf_perm_count`
   --> wqc-stark-core/src/plonky3_stark/recursion/merkle_poseidon2.rs:10:5
    |
@@ -28,19 +27,19 @@ warning: function `poseidon_leaf_perm_count` is never used
     |        ^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: `wqc-stark-core` (lib) generated 4 warnings (run `cargo fix --lib -p wqc-stark-core` to apply 1 suggestion)
-    Finished `release` profile [optimized] target(s) in 48.84s
+    Finished `release` profile [optimized] target(s) in 0.04s
      Running `/var/folders/kb/218_f3n52rz43dz9crbpfxs80000gn/T/cursor-sandbox-cache/bf12cfdfff560947f5558558bfa3fd5a/cargo-target/release/shrink-baseline --poseidon-compose`
 E5b Poseidon compose: idle two-leaf RecAgg (security_level=default)…
-[Aggregation] using prebuilt leaf PCS bundle (137503 bytes)
-[Aggregation] using prebuilt leaf PCS bundle (137503 bytes)
-[M4c size] compose left leaf PCS STARKs total=105599 bytes (0.10 MiB); certs=1 mmcs_groups=87870 fri_fold=14441 deep_ro=0 ood=3288
-[M4c size]   cert0 val_trace: 1 group(s) [n=80 d=3 w=48 stark=45971]
-[M4c size]   cert0 chal_commit: 1 group(s) [n=80 d=2 w=6 stark=41899]
-[M4c size]   cert0 fri_fold: y=14441 xs=0 (log_h=[])
-[M4c size] compose right leaf PCS STARKs total=105599 bytes (0.10 MiB); certs=1 mmcs_groups=87870 fri_fold=14441 deep_ro=0 ood=3288
-[M4c size]   cert0 val_trace: 1 group(s) [n=80 d=3 w=48 stark=45971]
-[M4c size]   cert0 chal_commit: 1 group(s) [n=80 d=2 w=6 stark=41899]
-[M4c size]   cert0 fri_fold: y=14441 xs=0 (log_h=[])
+[Aggregation] using prebuilt leaf PCS bundle (89391 bytes)
+[Aggregation] using prebuilt leaf PCS bundle (89391 bytes)
+[M4c size] compose left leaf PCS STARKs total=57487 bytes (0.05 MiB); certs=1 mmcs_groups=48274 fri_fold=7409 deep_ro=0 ood=1804
+[M4c size]   cert0 val_trace: 1 group(s) [n=80 d=3 w=48 stark=25179]
+[M4c size]   cert0 chal_commit: 1 group(s) [n=80 d=2 w=6 stark=23095]
+[M4c size]   cert0 fri_fold: y=7409 xs=0 (log_h=[])
+[M4c size] compose right leaf PCS STARKs total=57487 bytes (0.05 MiB); certs=1 mmcs_groups=48274 fri_fold=7409 deep_ro=0 ood=1804
+[M4c size]   cert0 val_trace: 1 group(s) [n=80 d=3 w=48 stark=25179]
+[M4c size]   cert0 chal_commit: 1 group(s) [n=80 d=2 w=6 stark=23095]
+[M4c size]   cert0 fri_fold: y=7409 xs=0 (log_h=[])
 [Aggregation] using embedded leaf PCS bundle from rec-agg proof (1 certs)
 [Aggregation] using embedded leaf PCS bundle from rec-agg proof (1 certs)
 [RecursiveAggregationAir] Verification success (R3-M2 compose=root)
@@ -51,17 +50,17 @@ E5b Poseidon compose: idle two-leaf RecAgg (security_level=default)…
   "has_rec_agg_tail": true,
   "keccak_reference_root_bytes": 5022410,
   "left_leaf_bytes": 16247,
-  "left_pcs_bytes": 137503,
+  "left_pcs_bytes": 89391,
   "mmcs_group_chunk": 40,
-  "nested_fri_num_queries": 8,
+  "nested_fri_num_queries": 4,
   "reference_sweep": "low/chunk24",
   "right_leaf_bytes": 16247,
-  "right_pcs_bytes": 137503,
-  "root_bytes": 369389,
-  "root_saved_vs_keccak_ref": 4653021,
+  "right_pcs_bytes": 89391,
+  "root_bytes": 273165,
+  "root_saved_vs_keccak_ref": 4749245,
   "security_level": "",
   "security_level_label": "default",
   "shrink_gate_bytes": 512000,
-  "vs_shrink_gate": -142611
+  "vs_shrink_gate": -238835
 }
-wrote /Users/yoshitaka/world-qc/wqc-stark-engine/fixtures/e5b/poseidon-compose-default-chunk40-nested8q.json (ref low/chunk24)
+wrote /Users/yoshitaka/world-qc/wqc-stark-engine/fixtures/e5b/poseidon-compose-default-chunk40-nested4q.json (ref low/chunk24)
