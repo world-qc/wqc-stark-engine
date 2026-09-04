@@ -73,6 +73,7 @@ select outer FRI query count from the same task-level `security_level` (PCS `n` 
 - **Production default:** nested FRI `num_queries` = outer `n` (weakest attestation link matches the task tier).
 - **Shrink / experiment:** `WQC_PCS_NESTED_FRI_QUERIES` ∈ `{1,…,n}` when nested group STARKs are present. Idle Poseidon compose currently uses **host-only** Mmcs/FriFold/OOD (no nested group STARKs), so this knob does not change that root size. Not a silent `security_level` downgrade.
 - Nested Mmcs / FriFold / OOD / DeepRo uni-STARKs follow `WQC_PCS_NESTED_FRI_QUERIES` (default = outer) when those STARKs are proven.
+- **Idle Poseidon host-only:** nested group STARKs are empty, so changing nested query count does **not** change root size (nested4/8/16q fixtures match nested=outer at `173_483` B).
 
 ## Build
 
@@ -156,9 +157,16 @@ Born recursion supports outcome dimension K≤21 (AIR width W≤68). Protocol de
 
 ## Roadmap
 
-- **Proof size / PCS (E5b shrink baseline):** Keccak-era default ≈ **10.2 MiB**. **Poseidon compose:** **`default`/40q/chunk40 nested=outer ≈ 169 KiB** (`173_483` B) — **PASS_SHRINK_GATE** (≤500 KB); **`low`/8q ≈ 38 KiB** (`39_386` B). Host-only Mmcs/FriFold/OOD (siblings + digests; empty group STARKs). Production ValMmcs = packed Poseidon2. **Prove:** `--features plonky3-stark,poseidon-mmcs`; `WQC_PCS_MMCS_GROUP_CHUNK=40` for chunk40. PR CI asserts the chunk40 fixture ≤ gate.
+- **E5b shrink (Poseidon compose, idle two-leaf):**
+  - Keccak-era documented baseline ≈ **10.2 MiB**
+  - Production nested=outer / chunk40 ≈ **169 KiB** (`173_483` B) — **PASS ≤500 KB**
+  - `low`/8q ≈ **38 KiB** (`39_386` B)
+  - Host-only Mmcs/FriFold/OOD (siblings + digests; empty nested group STARKs)
+  - `WQC_PCS_NESTED_FRI_QUERIES` does **not** change idle Poseidon root size under host-only
+  - Prove/remeasure: `--features plonky3-stark`; `WQC_PCS_MMCS_GROUP_CHUNK=40`; `--poseidon-compose`
+  - PR CI asserts `poseidon-compose-default-chunk40.json` ≤ gate
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
-  bundles with orchestrator fallback on refuse / timeout.
+  bundles with orchestrator fallback on refuse / timeout
 - Prove-time witness oracles in-circuit
 - Multi-chunk quotient leaf DeepRo STARKs
 - Full-stack multislice recursive aggregation compose on devnet

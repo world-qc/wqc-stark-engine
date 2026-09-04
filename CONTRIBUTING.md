@@ -115,7 +115,7 @@ cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --rel
 # Production Poseidon shrink-gate profile (nested=outer, chunk40):
 WQC_PCS_MMCS_GROUP_CHUNK=40 \
 cargo run -p wqc-stark-core --bin shrink-baseline \
-  --features plonky3-stark,poseidon-mmcs --release -- --poseidon-compose
+  --features plonky3-stark --release -- --poseidon-compose
 
 cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --release -- \
   --security-level low
@@ -123,7 +123,9 @@ cargo run -p wqc-stark-core --bin shrink-baseline --features plonky3-stark --rel
 
 Baseline JSON lives at `fixtures/e5b/baseline.json`; the golden `idle_two_leaf_root.bin` is gitignored until generated locally.
 
-Poseidon compose fixtures: `fixtures/e5b/poseidon-compose-default-chunk40.json` (outer=nested=40, **PASS** ≤500 KB; PR CI asserts `root_bytes`), `poseidon-compose.json` (low/8q), `poseidon-compose-default-chunk40-nested{4,8,16}q.json` (host-only size matches nested=outer).
+Poseidon compose fixtures: `fixtures/e5b/poseidon-compose-default-chunk40.json` (outer=nested=40, **PASS** ≤500 KB; PR CI asserts `root_bytes`), `poseidon-compose.json` (low/8q), `poseidon-compose-default-chunk40-nested{4,8,16}q.json` (same root as nested=outer under host-only — nested FRI knob is size-inert). `fixtures/e5b/*-run.log` are local stdout captures and are gitignored.
+
+Feature flags: use **`plonky3-stark`** for all shrink tooling (including `--poseidon-compose`). `poseidon-mmcs` remains a deprecated alias of `plonky3-stark`.
 
 ## Pull Request Guidelines
 

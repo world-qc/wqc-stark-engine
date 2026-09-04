@@ -170,7 +170,6 @@ fn run_poseidon_benchmark(security_level: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(feature = "poseidon-mmcs")]
 fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     use wqc_stark_core::shrink::benchmark_idle_two_leaf_poseidon_compose;
 
@@ -185,6 +184,11 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     let fri_q = profile.fri_num_queries();
     let nested_q = profile.nested_fri_num_queries();
     let chunk = profile.mmcs_group_chunk;
+    let note = if nested_q != fri_q {
+        "host-only Mmcs/FriFold/OOD: nested FRI query count does not change idle Poseidon root size"
+    } else {
+        "production nested=outer; host-only Mmcs/FriFold/OOD"
+    };
     let out = serde_json::json!({
         "benchmark": "idle_two_leaf_poseidon_compose",
         "security_level": report.security_level,
@@ -203,6 +207,7 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
         "reference_sweep": SWEEP_REF_LABEL,
         "shrink_gate_bytes": SHRINK_GATE_BYTES,
         "vs_shrink_gate": (report.compose.root_bytes as i64) - (SHRINK_GATE_BYTES as i64),
+        "note": note,
     });
     println!(
         "{}",
@@ -241,9 +246,4 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     .map_err(|e| format!("write {}: {e}", path.display()))?;
     eprintln!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
     Ok(())
-}
-
-#[cfg(not(feature = "poseidon-mmcs"))]
-fn run_poseidon_compose(_security_level: &str) -> Result<(), String> {
-    Err("rebuild with --features plonky3-stark,poseidon-mmcs for --poseidon-compose".into())
 }

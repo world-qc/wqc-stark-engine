@@ -3,15 +3,11 @@
 use crate::generate_plonky3_stark_proof;
 use crate::plonky3_stark::recursion::benchmark_poseidon_mmcs_from_child;
 use crate::plonky3_stark::recursion::PoseidonMmcsBenchmarkReport;
+use crate::plonky3_stark::recursion::PCS_MMCS_HASH_ENV;
+use crate::shrink::idle_compose::compose_idle_two_leaf_root_with_pcs;
+use crate::shrink::IdleTwoLeafComposeReport;
 use crate::trace_spec;
 use crate::transcript::StarkContext;
-
-#[cfg(feature = "poseidon-mmcs")]
-use crate::plonky3_stark::recursion::PCS_MMCS_HASH_ENV;
-#[cfg(feature = "poseidon-mmcs")]
-use crate::shrink::idle_compose::compose_idle_two_leaf_root_with_pcs;
-#[cfg(feature = "poseidon-mmcs")]
-use crate::shrink::IdleTwoLeafComposeReport;
 
 /// Reference row from `fixtures/e5b/sweep.json` (`low/chunk24`).
 pub const SWEEP_REF_LABEL: &str = "low/chunk24";
@@ -38,7 +34,6 @@ pub struct IdleLeafPoseidonMmcsReport {
     pub reference_mmcs_groups_per_side: u64,
 }
 
-#[cfg(feature = "poseidon-mmcs")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdleTwoLeafPoseidonComposeReport {
     pub security_level: String,
@@ -115,12 +110,12 @@ pub fn benchmark_idle_leaf_poseidon_mmcs(
     })
 }
 
-/// Full idle two-leaf RecAgg compose with `WQC_PCS_MMCS_HASH=poseidon` (requires `poseidon-mmcs`).
-#[cfg(feature = "poseidon-mmcs")]
+/// Full idle two-leaf RecAgg compose (Poseidon ValMmcs is production default).
 pub fn benchmark_idle_two_leaf_poseidon_compose(
     security_level: &str,
 ) -> Result<IdleTwoLeafPoseidonComposeReport, String> {
     let level = parse_security_level(security_level)?;
+    // Explicit poseidon for environments that still default Keccak via env.
     std::env::set_var(PCS_MMCS_HASH_ENV, "poseidon");
     let compose = compose_idle_two_leaf_root_with_pcs(level)?;
     std::env::remove_var(PCS_MMCS_HASH_ENV);

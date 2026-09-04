@@ -1,4 +1,4 @@
-//! E5b prototype: Poseidon2 Mmcs group fold parallel to [`super::fri_mmcs_group_m4b`].
+//! E5b: Poseidon2 Mmcs group fold parallel to [`super::fri_mmcs_group_m4b`].
 //!
 //! Replaces Keccak sponge segments (width ~1657) with width-16 Poseidon2 perm traces (width 21).
 //!
@@ -7,6 +7,11 @@
 //! Merkle compress chain from `leaf_digest` PV through siblings to `root`.
 //! That drops ~`ceil(W/RATE)` perm segments per path (dominant for wide val rows)
 //! and shrinks nested FRI `opening_proof` roughly with trace height.
+//!
+//! **Tests:** prove/verify roundtrips in this module; V6 wire encode→decode for a
+//! proven Poseidon group is `transcript_v6::tests::m4c_group_fold_poseidon_codec_roundtrip`.
+//! Production idle compose currently ships **host-only** Mmcs (empty groups); these
+//! group STARKs remain for benchmarks and non-empty wire compatibility.
 //!
 //! Public values (`depth` = max path depth; `leaf_width` = max leaf width; unused high slots zero):
 //! `path_count | max_depth | [shared_root[8]]`

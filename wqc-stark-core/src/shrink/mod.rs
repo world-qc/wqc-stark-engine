@@ -28,14 +28,10 @@ pub use idle_compose::{
 
 #[cfg(feature = "plonky3-stark")]
 pub use poseidon_benchmark::{
-    benchmark_idle_leaf_poseidon_mmcs, IdleLeafPoseidonMmcsReport, PoseidonComposeFixture,
+    benchmark_idle_leaf_poseidon_mmcs, benchmark_idle_two_leaf_poseidon_compose,
+    IdleLeafPoseidonMmcsReport, IdleTwoLeafPoseidonComposeReport, PoseidonComposeFixture,
     POSEIDON_COMPOSE_DEFAULT_CHUNK40_JSON, POSEIDON_DEFAULT_CHUNK40_ROOT_BYTES, SWEEP_REF_LABEL,
     SWEEP_REF_LEFT_PCS_BYTES, SWEEP_REF_MMCS_GROUPS_PER_SIDE, SWEEP_REF_ROOT_BYTES,
-};
-
-#[cfg(all(feature = "plonky3-stark", feature = "poseidon-mmcs"))]
-pub use poseidon_benchmark::{
-    benchmark_idle_two_leaf_poseidon_compose, IdleTwoLeafPoseidonComposeReport,
 };
 
 /// Mainnet shrink gate from `on-chain_settlement_scope.md` §7.1 (500 KB pre-wrap).
@@ -194,19 +190,16 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     #[test]
-    #[ignore = "slow; multi-hour — idle two-leaf RecAgg with poseidon-mmcs PCS"]
+    #[ignore = "slow; multi-hour — idle two-leaf RecAgg Poseidon compose"]
     fn idle_two_leaf_poseidon_compose_smoke() {
-        #[cfg(feature = "poseidon-mmcs")]
-        {
-            use crate::shrink::benchmark_idle_two_leaf_poseidon_compose;
-            let report = benchmark_idle_two_leaf_poseidon_compose("low").expect("compose");
-            assert!(report.compose.has_rec_agg_tail);
-            assert!(report.compose.root_bytes > 0);
-            eprintln!(
-                "poseidon compose root={} saved_vs_ref={}",
-                report.compose.root_bytes, report.root_saved_vs_keccak_ref
-            );
-        }
+        use crate::shrink::benchmark_idle_two_leaf_poseidon_compose;
+        let report = benchmark_idle_two_leaf_poseidon_compose("low").expect("compose");
+        assert!(report.compose.has_rec_agg_tail);
+        assert!(report.compose.root_bytes > 0);
+        eprintln!(
+            "poseidon compose root={} saved_vs_ref={}",
+            report.compose.root_bytes, report.root_saved_vs_keccak_ref
+        );
     }
 
     #[test]

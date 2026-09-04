@@ -15,5 +15,6 @@
   "security_level": "low",
   "security_level_label": "low",
   "shrink_gate_bytes": 512000,
-  "vs_shrink_gate": -472614
+  "vs_shrink_gate": -472614,
+  "note": "production nested=outer; host-only Mmcs/FriFold/OOD"
 }

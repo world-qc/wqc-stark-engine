@@ -15,5 +15,6 @@
   "security_level": "",
   "security_level_label": "default",
   "shrink_gate_bytes": 512000,
-  "vs_shrink_gate": -338517
+  "vs_shrink_gate": -338517,
+  "note": "host-only Mmcs/FriFold/OOD: nested FRI query count does not change idle Poseidon root size (same as nested=outer)"
 }

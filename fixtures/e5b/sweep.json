@@ -163,6 +163,7 @@
     "DONE: host-only Mmcs/FriFold/OOD (siblings + digests on wire; empty group STARKs)",
     "DONE: val+chal pcs_combined; compress-only Poseidon group AIR; mixed-width val",
     "DONE: PR CI locks poseidon-compose-default-chunk40.json ≤ SHRINK_GATE",
+    "NOTE: WQC_PCS_NESTED_FRI_QUERIES is size-inert for idle Poseidon host-only (nested4/8/16 == nested=outer = 173483)",
     "Production nested=outer chunk40: 173 483 B PASS (gap -338 517)",
     "Residual: E5b-1b shrink-gate sign-off; then wrap path (E5b-2a)"
   ],

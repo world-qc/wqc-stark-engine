@@ -966,9 +966,8 @@ mod tests {
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
     }
 
-    #[cfg(feature = "poseidon-mmcs")]
     #[test]
-    #[ignore = "slow; local only — poseidon-mmcs leaf PCS prove + dual-bind verify"]
+    #[ignore = "slow; local only — leaf PCS prove + dual-bind verify (Poseidon ValMmcs)"]
     fn unitary_leaf_pcs_poseidon_mmcs_mode_roundtrip() {
         use crate::plonky3_stark::recursion::{
             mmcs_merkle_mode, MmcsMerkleMode, PCS_MMCS_HASH_ENV,
