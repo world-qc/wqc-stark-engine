@@ -156,14 +156,15 @@ Born recursion supports outcome dimension K≤21 (AIR width W≤68). Protocol de
 
 ## Roadmap
 
+- **E5b-1b signed off (2026-09-04):** pre-wrap shrink gate ≤500 KB met on idle two-leaf Poseidon nested=outer / chunk40 host-only Mmcs/FriFold/OOD — `173_483` B (`fixtures/e5b/poseidon-compose-default-chunk40.json`). Next: E5b-2a SNARK wrap.
 - **E5b shrink (Poseidon compose, idle two-leaf):**
-  - Keccak-era documented baseline ≈ **10.2 MiB**
+  - Keccak-era documented baseline ≈ **10.2 MiB** (`fixtures/e5b/baseline.json` regression reference)
   - Production nested=outer / chunk40 ≈ **169 KiB** (`173_483` B) — **PASS ≤500 KB**
   - `low`/8q ≈ **38 KiB** (`39_386` B)
   - Host-only Mmcs/FriFold/OOD (siblings + digests; empty nested group STARKs)
   - `WQC_PCS_NESTED_FRI_QUERIES` does **not** change idle Poseidon root size under host-only
   - Prove/remeasure: `--features plonky3-stark`; `WQC_PCS_MMCS_GROUP_CHUNK=40`; `--poseidon-compose`
-  - PR CI asserts `poseidon-compose-default-chunk40.json` ≤ gate
+  - PR CI asserts `poseidon-compose-default-chunk40.json` ≤ gate (`poseidon_default_chunk40_fixture_under_shrink_gate`)
 - **Leaf PCS delivery:** winner `POST /leaf_pcs` + orchestrator P2P; compose binds prebuilt
   bundles with orchestrator fallback on refuse / timeout
 - Prove-time witness oracles in-circuit

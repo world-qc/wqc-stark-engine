@@ -87,11 +87,16 @@ cargo build --release -p wqc-stark-ffi
 
 ### E5b shrink regression (root size)
 
-E5b **Shrink** tracks idle two-leaf root proof size toward the 500 KB pre-wrap gate (`wqc-contracts` `on-chain_settlement_scope.md` §7). Fast PR checks:
+E5b **Shrink** tracks idle two-leaf root proof size toward the 500 KB pre-wrap gate (`wqc-contracts` `on-chain_settlement_scope.md` §7).
+
+**E5b-1b signed off (2026-09-04):** production profile Poseidon nested=outer / `WQC_PCS_MMCS_GROUP_CHUNK=40`, host-only Mmcs/FriFold/OOD → `root_bytes = 173_483` (≤ `512_000`). Evidence fixture `fixtures/e5b/poseidon-compose-default-chunk40.json`; CI lock `poseidon_default_chunk40_fixture_under_shrink_gate`. KPI is idle two-leaf only; `fixtures/e5b/baseline.json` remains the Keccak-era regression reference (~10.7 MiB), not the shrink-gate number. Next track: E5b-2a SNARK wrap.
+
+Fast PR checks:
 
 ```bash
 cargo test -p wqc-stark-core --features plonky3-stark --release \
-  shrink_gate_constants_match_scope baseline_json_matches_constants r2_idle_two_leaf_root_under_max
+  shrink_gate_constants_match_scope baseline_json_matches_constants r2_idle_two_leaf_root_under_max \
+  poseidon_default_chunk40_fixture_under_shrink_gate
 ```
 
 Full RecAgg + PCS compose (~hours) — local or scheduled workflow `.github/workflows/e5b-shrink-benchmark.yml`:
