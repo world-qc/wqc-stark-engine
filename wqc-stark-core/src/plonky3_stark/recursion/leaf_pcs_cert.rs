@@ -875,32 +875,17 @@ mod tests {
         assert_eq!(cert.trace_width as usize, UNITARY_TRACE_WIDTH);
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
         assert!(
-            !cert.mmcs_groups.val_trace.is_empty(),
-            "expected val_trace group"
+            cert.mmcs_groups.val_trace.is_empty()
+                && cert.mmcs_groups.chal_commit.is_empty()
+                && cert
+                    .fri_val_mmcs
+                    .iter()
+                    .any(|q| !q.trace_siblings.is_empty()),
+            "expected host-only Mmcs (empty groups, retained siblings)"
         );
-        assert!(
-            cert.mmcs_groups.pcs_combined
-                || !cert.mmcs_groups.val_quot_batch.is_empty()
-                || !cert.mmcs_groups.val_quot.is_empty()
-                || !cert.mmcs_groups.chal_commit.is_empty(),
-            "expected val quot, chal, or pcs_combined merge"
-        );
-        assert!(
-            cert.mmcs_groups.pcs_combined
-                || !cert.mmcs_groups.chal_first_layer.is_empty()
-                || !cert.mmcs_groups.chal_commit.is_empty(),
-            "expected chal first_layer, merged chal_commit, or pcs_combined"
-        );
-        assert!(
-            cert.fri_val_mmcs
-                .iter()
-                .all(|q| q.trace_siblings.is_empty()),
-            "expected stripped trace siblings after M4c group bind"
-        );
-
         assert!(
             cert.fri_fold_groups.fold_ys.is_some(),
-            "expected FriFold Y or YX group"
+            "expected FriFold YX host marker"
         );
         assert!(
             !cert.fri_fold_groups.fold_xs_by_log_h.is_empty()
@@ -983,7 +968,7 @@ mod tests {
     #[ignore = "slow; local only — poseidon-mmcs leaf PCS prove + dual-bind verify"]
     fn unitary_leaf_pcs_poseidon_mmcs_mode_roundtrip() {
         use crate::plonky3_stark::recursion::{
-            mmcs_merkle_mode, MmcsGroupHashKind, MmcsMerkleMode, PCS_MMCS_HASH_ENV,
+            mmcs_merkle_mode, MmcsMerkleMode, PCS_MMCS_HASH_ENV,
         };
 
         std::env::set_var(PCS_MMCS_HASH_ENV, "poseidon");
@@ -1006,11 +991,8 @@ mod tests {
         let cert = build_leaf_pcs_certificate(&proof, kind, stmt).expect("cert");
         assert_eq!(mmcs_merkle_mode(), MmcsMerkleMode::PoseidonNative);
         assert!(
-            cert.mmcs_groups
-                .val_trace
-                .iter()
-                .any(|g| g.hash_kind() == MmcsGroupHashKind::Poseidon),
-            "expected Poseidon val_trace group"
+            cert.mmcs_groups.val_trace.is_empty(),
+            "expected host-only Mmcs (no Poseidon group STARK)"
         );
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
         std::env::remove_var(PCS_MMCS_HASH_ENV);

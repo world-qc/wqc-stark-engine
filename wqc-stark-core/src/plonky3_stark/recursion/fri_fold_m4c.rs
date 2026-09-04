@@ -12,8 +12,7 @@ use super::fri_fold_bind::{
     bind_fri_fold_bundle_to_proof_width, fri_fold_bundle_from_proof, AggFriFoldBundle,
 };
 use super::fri_fold_group::{
-    generate_fri_fold_group_proof_with_queries, verify_fri_fold_group_proof, FriFoldGroupProof,
-    FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y, FRI_FOLD_KIND_YX,
+    verify_fri_fold_group_proof, FriFoldGroupProof, FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_YX,
 };
 
 /// Leaf/Agg PCS FriFold wire version (after Mmcs fold version in V6 cert).
@@ -64,25 +63,6 @@ pub fn resolve_fri_fold_steps_for_groups(
     }
 }
 
-/// Prove all FriFold-X steps as one mixed-height group STARK.
-///
-/// Host bind still checks per-step twiddles via residual limbs (or rebuild).
-/// `log_folded_height = None` → wire marker `u32::MAX` (mixed).
-fn group_fold_xs_merged(
-    fold_xs: &[FriFoldStepProof],
-    num_queries: usize,
-) -> Result<Vec<FriFoldGroupProof>, String> {
-    if fold_xs.len() > FRI_FOLD_GROUP_MAX_STEPS {
-        return Err(format!(
-            "fold_x merged group too large: {} > {FRI_FOLD_GROUP_MAX_STEPS}",
-            fold_xs.len()
-        ));
-    }
-    let g =
-        generate_fri_fold_group_proof_with_queries(FRI_FOLD_KIND_X, fold_xs, None, num_queries)?;
-    Ok(vec![g])
-}
-
 /// Prove FriFold groups from a limb-only (or mixed) bundle and strip nested STARKs.
 pub fn apply_leaf_fri_fold_m4c_folds(
     bundle: &mut AggFriFoldBundle,
@@ -94,49 +74,38 @@ pub fn apply_leaf_fri_fold_m4c_folds(
 }
 
 /// Like [`apply_leaf_fri_fold_m4c_folds`], matching nested FRI queries to the outer proof.
+///
+/// **Host-only FriFold (E5b shrink):** Mmcs groups already attest the opened FRI
+/// values; fold algebra is checked natively at bind. Emitting an empty-stark YX
+/// marker keeps FriFold wire v2 limb omission without a nested Circle proof.
 pub fn apply_leaf_fri_fold_m4c_folds_with_queries(
     bundle: &mut AggFriFoldBundle,
     num_queries: usize,
 ) -> Result<LeafFriFoldGroups, String> {
+    let _ = num_queries;
     let total = bundle.fold_ys.len() + bundle.fold_xs.len();
-    let (fold_ys, fold_xs_by_log_h) = if !bundle.fold_ys.is_empty()
-        && !bundle.fold_xs.is_empty()
-        && total <= FRI_FOLD_GROUP_MAX_STEPS
-    {
-        let mut all = Vec::with_capacity(total);
-        all.extend_from_slice(&bundle.fold_ys);
-        all.extend_from_slice(&bundle.fold_xs);
-        let g =
-            generate_fri_fold_group_proof_with_queries(FRI_FOLD_KIND_YX, &all, None, num_queries)?;
-        (Some(g), Vec::new())
-    } else {
-        let fold_ys = if bundle.fold_ys.is_empty() {
-            None
-        } else {
-            if bundle.fold_ys.len() > FRI_FOLD_GROUP_MAX_STEPS {
-                return Err(format!("fold_y group too large: {}", bundle.fold_ys.len()));
-            }
-            Some(generate_fri_fold_group_proof_with_queries(
-                FRI_FOLD_KIND_Y,
-                &bundle.fold_ys,
-                None,
-                num_queries,
-            )?)
-        };
-        let fold_xs_by_log_h = if bundle.fold_xs.is_empty() {
-            Vec::new()
-        } else {
-            group_fold_xs_merged(&bundle.fold_xs, num_queries)?
-        };
-        (fold_ys, fold_xs_by_log_h)
-    };
+    if total == 0 {
+        return Ok(LeafFriFoldGroups::default());
+    }
+    if total > FRI_FOLD_GROUP_MAX_STEPS {
+        return Err(format!(
+            "FriFold host-only marker too many steps: {total} > {FRI_FOLD_GROUP_MAX_STEPS}"
+        ));
+    }
 
     strip_fold_starks(&mut bundle.fold_ys);
     strip_fold_starks(&mut bundle.fold_xs);
 
+    // Empty `group_stark` = host-native fold only; kind YX covers Y‖X for limb omit.
+    let marker = FriFoldGroupProof {
+        kind: FRI_FOLD_KIND_YX,
+        step_count: total as u32,
+        log_folded_height: u32::MAX,
+        group_stark: Vec::new(),
+    };
     Ok(LeafFriFoldGroups {
-        fold_ys,
-        fold_xs_by_log_h,
+        fold_ys: Some(marker),
+        fold_xs_by_log_h: Vec::new(),
     })
 }
 
@@ -187,6 +156,30 @@ pub fn bind_fri_fold_with_groups(
             let mut all = Vec::with_capacity(fold_ys.len() + fold_xs.len());
             all.extend_from_slice(fold_ys);
             all.extend_from_slice(fold_xs);
+            if all.len() as u32 != gy.step_count {
+                return Err(format!(
+                    "FriFold YX step_count {} != limbs {}",
+                    gy.step_count,
+                    all.len()
+                ));
+            }
+            if gy.group_stark.is_empty() {
+                // Host-only marker: native fold checks (Mmcs already attested openings).
+                for (i, step) in all.iter().enumerate() {
+                    let ok = if i < fold_ys.len() {
+                        verify_fri_fold_y_native(step)
+                    } else {
+                        verify_fri_fold_x_native(step)
+                    };
+                    if !ok {
+                        return Err(format!("FriFold YX host-native failed at {i}"));
+                    }
+                }
+                if all.iter().any(|s| !s.fold_stark.is_empty()) {
+                    return Err("FriFold YX residual steps must have empty fold_stark".into());
+                }
+                return Ok(());
+            }
             if !verify_fri_fold_group_proof(&all, gy) {
                 return Err("FriFold YX group verification failed".into());
             }
@@ -195,7 +188,13 @@ pub fn bind_fri_fold_with_groups(
             }
             return Ok(());
         }
-        if !verify_fri_fold_group_proof(fold_ys, gy) {
+        if gy.group_stark.is_empty() {
+            for (i, step) in fold_ys.iter().enumerate() {
+                if !verify_fri_fold_y_native(step) {
+                    return Err(format!("FriFold Y host-native failed at {i}"));
+                }
+            }
+        } else if !verify_fri_fold_group_proof(fold_ys, gy) {
             return Err("FriFold Y group verification failed".into());
         }
         if fold_ys.iter().any(|s| !s.fold_stark.is_empty()) {
@@ -214,13 +213,21 @@ pub fn bind_fri_fold_with_groups(
     }
 
     if groups.fold_xs_by_log_h.is_empty() {
-        for (i, step) in fold_xs.iter().enumerate() {
-            if step.fold_stark.is_empty() {
-                if !verify_fri_fold_x_native(step) {
-                    return Err(format!("legacy fold_x native failed at {i}"));
+        if groups
+            .fold_ys
+            .as_ref()
+            .is_some_and(|g| g.kind == FRI_FOLD_KIND_YX)
+        {
+            // Covered by YX branch above.
+        } else {
+            for (i, step) in fold_xs.iter().enumerate() {
+                if step.fold_stark.is_empty() {
+                    if !verify_fri_fold_x_native(step) {
+                        return Err(format!("legacy fold_x native failed at {i}"));
+                    }
+                } else if !verify_fri_fold_proof(step) {
+                    return Err(format!("legacy fold_x STARK failed at {i}"));
                 }
-            } else if !verify_fri_fold_proof(step) {
-                return Err(format!("legacy fold_x STARK failed at {i}"));
             }
         }
     } else {
@@ -228,7 +235,16 @@ pub fn bind_fri_fold_with_groups(
         for gx in &groups.fold_xs_by_log_h {
             let selected = collect_xs_for_group(fold_xs, gx)?;
             let owned: Vec<FriFoldStepProof> = selected.into_iter().cloned().collect();
-            if !verify_fri_fold_group_proof(&owned, gx) {
+            if gx.group_stark.is_empty() {
+                for (i, step) in owned.iter().enumerate() {
+                    if !verify_fri_fold_x_native(step) {
+                        return Err(format!(
+                            "FriFold X host-native failed at log_h={} step {i}",
+                            gx.log_folded_height
+                        ));
+                    }
+                }
+            } else if !verify_fri_fold_group_proof(&owned, gx) {
                 return Err(format!(
                     "FriFold X group verification failed at log_h={}",
                     gx.log_folded_height
