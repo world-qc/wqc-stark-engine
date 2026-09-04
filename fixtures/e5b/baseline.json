@@ -1,0 +1,9 @@
+{
+  "root_bytes": 10742800,
+  "regression_ceiling_bytes": 18874368,
+  "shrink_gate_bytes": 512000,
+  "documented_baseline_bytes": 10742800,
+  "fixture_path": "fixtures/e5b/idle_two_leaf_root.bin",
+  "updated_at": "unix:1788348467",
+  "note": "Measured by shrink-baseline; has_rec_agg=true"
+}

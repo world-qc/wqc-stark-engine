@@ -25,7 +25,7 @@ use super::keccak_f_native::{
     keccak256_compress, keccak256_val_leaf, num_permutations, val_row_to_bytes, KECCAK256_OUT,
     KECCAK_DELIM, KECCAK_RATE, KECCAK_ROUNDS, KECCAK_STATE_BITS, RC,
 };
-use super::merkle_keccak::hash_val_leaf;
+use super::merkle_keccak::hash_val_leaf_keccak;
 
 /// Rows per single-permutation sponge (`build_sponge_matrix` for msg ≤ rate).
 /// Compress segments always use this height; 2-perm leaves use 64.
@@ -597,7 +597,7 @@ pub fn generate_fri_mmcs_batched_path_proof(
         ));
     }
     let leaf_digest = keccak256_val_leaf(row);
-    if leaf_digest != hash_val_leaf(row) {
+    if leaf_digest != hash_val_leaf_keccak(row) {
         return Err("leaf digest mismatch".into());
     }
 
@@ -745,7 +745,7 @@ mod tests {
             Mersenne31::from_u32(2),
             Mersenne31::from_u32(3),
         ];
-        let leaf = hash_val_leaf(&row);
+        let leaf = hash_val_leaf_keccak(&row);
         let sibling = [9u8; 32];
         let root = keccak256_compress(leaf, sibling);
         let proof =
@@ -758,9 +758,16 @@ mod tests {
             &proof
         ));
 
-        let nested = generate_fri_mmcs_path_proof(&row, &[sibling], 0, &root).expect("nested");
-        assert_eq!(proof.leaf_digest, nested.leaf_digest);
-        assert_eq!(proof.layer_digests, nested.layer_digests);
+        // Size baseline vs digest-only Poseidon PCS path (nested Keccak STARKs retired).
+        let poseidon_sib =
+            crate::plonky3_stark::config_poseidon::pack_digest([Mersenne31::from_u32(9); 8]);
+        let poseidon_leaf = crate::plonky3_stark::recursion::merkle_keccak::hash_val_leaf(&row);
+        let poseidon_root = crate::plonky3_stark::recursion::merkle_keccak::compress_digests(
+            poseidon_leaf,
+            poseidon_sib,
+        );
+        let nested = generate_fri_mmcs_path_proof(&row, &[poseidon_sib], 0, &poseidon_root)
+            .expect("poseidon nested");
         let nested_bytes: usize = nested.fold_stark.len()
             + nested.leaf_keccak.stark.len()
             + nested
@@ -769,16 +776,16 @@ mod tests {
                 .map(|p| p.stark.len())
                 .sum::<usize>();
         eprintln!(
-            "M4a size: path_stark={} vs nested keccak+fold={}",
+            "M4a size: path_stark={} vs poseidon digest-path wire={}",
             proof.path_stark.len(),
             nested_bytes
         );
-        // One outer STARK should beat 2 nested Keccak STARKs (+ fold) on depth-1.
+        // M4a carries a real Keccak path STARK; Poseidon PCS paths are digest-only stubs.
         assert!(
-            proof.path_stark.len() < nested_bytes,
-            "m4a {} not smaller than nested {}",
-            proof.path_stark.len(),
-            nested_bytes
+            nested_bytes < proof.path_stark.len(),
+            "poseidon digest path {} should be smaller than m4a {}",
+            nested_bytes,
+            proof.path_stark.len()
         );
     }
 
@@ -787,7 +794,7 @@ mod tests {
         let row: Vec<_> = (0..6)
             .map(|i| Mersenne31::from_u32(i as u32 + 10))
             .collect();
-        let leaf = hash_val_leaf(&row);
+        let leaf = hash_val_leaf_keccak(&row);
         let sibling = [3u8; 32];
         let root = keccak256_compress(sibling, leaf); // index=1
         let proof =
@@ -808,7 +815,7 @@ mod tests {
             Mersenne31::from_u32(2),
             Mersenne31::from_u32(3),
         ];
-        let leaf = hash_val_leaf(&row);
+        let leaf = hash_val_leaf_keccak(&row);
         let s0 = [9u8; 32];
         let s1 = [7u8; 32];
         let d0 = keccak256_compress(leaf, s0); // index bit0 = 0
@@ -832,7 +839,7 @@ mod tests {
             .collect();
         assert_eq!(val_row_to_bytes(&row).len(), 192);
         assert_eq!(num_permutations(192), 2);
-        let leaf = hash_val_leaf(&row);
+        let leaf = hash_val_leaf_keccak(&row);
         let sibling = [11u8; 32];
         let root = keccak256_compress(leaf, sibling);
         let proof =

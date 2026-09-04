@@ -1,14 +1,16 @@
-//! R3 OOD AIR: in-circuit constraint fold + quotient check at ζ.
+//! R3 OOD: constraint fold + quotient check at ζ.
+//!
+//! Production leaf/agg PCS emit an empty `ood_stark`; [`verify_ood_proof`] runs the fold
+//! and quotient check natively. Non-empty `ood_stark` still verifies as a nested Circle
+//! STARK when present on the wire.
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
-use p3_uni_stark::{prove, verify};
+use p3_uni_stark::verify;
 
-use crate::air::pad_air_matrix_for_uni_stark;
 use crate::plonky3_stark::aggregation_air::{AGG_LEFT_OK_COL, AGG_RIGHT_OK_COL, AGG_WIDTH};
-use crate::plonky3_stark::config::{devnet_circle_config, WqcStarkConfig};
+use crate::plonky3_stark::config::WqcStarkConfig;
 use crate::plonky3_stark::distribution_air::DistributionAir;
 use crate::plonky3_stark::shot_sampling_air::SHOT_SAMPLING_AIR_WIDTH;
 use crate::trace_spec::AIR_WIDTH;
@@ -271,10 +273,6 @@ fn build_public_values(witness: &OodWitness) -> Vec<Mersenne31> {
     pv
 }
 
-fn build_matrix() -> RowMajorMatrix<Mersenne31> {
-    RowMajorMatrix::new(vec![Mersenne31::ONE, Mersenne31::ONE], OOD_CHECK_WIDTH)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OodStepProof {
     pub kind: OodAirKind,
@@ -356,20 +354,24 @@ impl OodStepProof {
 }
 
 pub fn generate_ood_proof(witness: &OodWitness) -> Result<OodStepProof, String> {
+    generate_ood_proof_with_queries(witness, 1)
+}
+
+/// Like [`generate_ood_proof`], with explicit nested FRI query count.
+pub fn generate_ood_proof_with_queries(
+    witness: &OodWitness,
+    num_queries: usize,
+) -> Result<OodStepProof, String> {
     if witness.width as usize > OOD_MAX_TRACE_WIDTH {
         return Err(format!(
             "trace width {} > OOD_MAX_TRACE_WIDTH {}",
             witness.width, OOD_MAX_TRACE_WIDTH
         ));
     }
-    let pv = build_public_values(witness);
-    let air = OodCheckAir::for_witness(witness);
-    let matrix = pad_air_matrix_for_uni_stark(build_matrix());
-    p3_air::check_constraints(&air, &matrix, &pv);
-    let config = devnet_circle_config();
-    let proof = prove(&config, &air, matrix, &pv);
-    let ood_stark = super::prove_workspace::encode_stark_and_drop(proof, "ood_stark")?;
-    Ok(OodStepProof::from_witness(witness, ood_stark))
+    let _ = num_queries;
+    // Host-only OOD (E5b shrink): openings are bound to the parent proof; native
+    // fold check replaces the nested Circle OOD STARK.
+    Ok(OodStepProof::from_witness(witness, Vec::new()))
 }
 
 pub fn verify_ood_proof(step: &OodStepProof) -> bool {
@@ -380,6 +382,28 @@ pub fn verify_ood_proof(step: &OodStepProof) -> bool {
             return false;
         }
     };
+    if step.ood_stark.is_empty() {
+        let folded = super::ood_fold::fold_ood_native(
+            witness.kind,
+            witness.num_outcomes as usize,
+            witness.degree_bits as usize,
+            &witness.trace_local,
+            &witness.trace_next,
+            witness.is_first_row,
+            witness.is_last_row,
+            witness.is_transition,
+            witness.alpha,
+        );
+        if folded != witness.folded {
+            eprintln!("[OodCheck] host-native folded mismatch");
+            return false;
+        }
+        if folded * witness.inv_vanishing != witness.quotient {
+            eprintln!("[OodCheck] host-native quotient mismatch");
+            return false;
+        }
+        return true;
+    }
     let pv = build_public_values(&witness);
     let air = OodCheckAir::for_witness(&witness);
     let stark: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&step.ood_stark) {
@@ -389,7 +413,13 @@ pub fn verify_ood_proof(step: &OodStepProof) -> bool {
             return false;
         }
     };
-    let config = devnet_circle_config();
+    let config = match super::fri_fs_replay::circle_config_matching_proof(&stark) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[OodCheck] config: {e}");
+            return false;
+        }
+    };
     match verify(&config, &air, &stark, &pv) {
         Ok(()) => true,
         Err(e) => {

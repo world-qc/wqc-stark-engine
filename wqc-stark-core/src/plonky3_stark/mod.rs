@@ -6,6 +6,8 @@ mod aggregation;
 mod aggregation_air;
 mod config;
 #[cfg(feature = "plonky3-stark")]
+mod config_poseidon;
+#[cfg(feature = "plonky3-stark")]
 mod distribution_air;
 #[cfg(feature = "plonky3-stark")]
 mod distribution_stark;
@@ -36,6 +38,11 @@ pub use config::{
     fri_num_queries_for_security_level, keccak_circle_config, keccak_circle_config_with_queries,
     DEVNET_FRI_NUM_QUERIES, FRI_NUM_QUERIES_HIGH, FRI_NUM_QUERIES_LOW, FRI_NUM_QUERIES_NORMAL,
     FRI_NUM_QUERIES_ULTRA,
+};
+#[cfg(feature = "plonky3-stark")]
+pub use config_poseidon::{
+    poseidon_challenge_mmcs, poseidon_val_mmcs, PoseidonChallengeMmcs, PoseidonCompress,
+    PoseidonFieldHash, PoseidonValMmcs, POSEIDON_DIGEST_LIMBS,
 };
 #[cfg(feature = "plonky3-stark")]
 pub use distribution_stark::{

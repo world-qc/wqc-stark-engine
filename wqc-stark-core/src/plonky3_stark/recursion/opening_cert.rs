@@ -17,7 +17,9 @@ use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
 use super::agg_constraints::aggregation_air_constraints_hold;
 use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
-use super::deep_ro_bind::{bind_deep_ro_bundle_to_proof, deep_ro_bundle_from_agg_proof};
+use super::deep_ro_bind::{
+    bind_deep_ro_bundle_to_proof, deep_ro_bundle_from_agg_proof_with_queries,
+};
 use super::deep_ro_trace_air::{verify_deep_ro_trace_proof, DeepRoTraceStepProof};
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{
@@ -25,20 +27,21 @@ use super::fri_fold_bind::{
     AGG_FRI_MAX_ROUNDS, AGG_FRI_PROVEN_QUERIES,
 };
 use super::fri_fold_m4c::{
-    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups,
+    apply_leaf_fri_fold_m4c_folds_with_queries, bind_fri_fold_with_groups, LeafFriFoldGroups,
 };
 use super::fri_fs_replay::fri_queries_from_proof;
 use super::fri_mmcs_bind::{
     fri_mmcs_bundle_from_agg_proof_drop_nested, AggFriMmcsBundle, FriChalMmcsQueryProof,
     FriValMmcsQueryProof,
 };
+use super::fri_mmcs_group_m4b::nested_fri_queries;
 use super::fri_mmcs_m4c::{
     apply_leaf_mmcs_m4c_folds, bind_leaf_mmcs_with_groups, LeafMmcsFoldGroups,
 };
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::ood_air::{verify_ood_proof, OodStepProof};
 use super::ood_bind::verify_agg_ood_step;
-use super::ood_native::generate_agg_ood_proof;
+use super::ood_native::generate_agg_ood_proof_with_queries;
 use super::pcs_memory::{depth_hint_from_degree_bits, plan_pcs_memory};
 
 /// Max Merkle siblings retained for legacy V6 decode (LDE rebuild removed).
@@ -156,7 +159,11 @@ pub fn build_agg_pcs_certificate(
     }
     let _chunk_guard = mem_plan.enter_chunk_override();
 
-    let ood = generate_agg_ood_proof(&proof).map_err(|e| format!("R3 OOD prove failed: {e}"))?;
+    let proven_queries = fri_queries_from_proof(&proof)?;
+    let nested_queries = nested_fri_queries(proven_queries);
+
+    let ood = generate_agg_ood_proof_with_queries(&proof, nested_queries)
+        .map_err(|e| format!("R3 OOD prove failed: {e}"))?;
     if !verify_ood_proof(&ood) {
         return Err("R3 OOD self-check failed".into());
     }
@@ -183,7 +190,7 @@ pub fn build_agg_pcs_certificate(
         ));
     }
 
-    let deep_bundle = deep_ro_bundle_from_agg_proof(&proof)
+    let deep_bundle = deep_ro_bundle_from_agg_proof_with_queries(&proof, nested_queries)
         .map_err(|e| format!("R3-M3c3 DeepRo bundle prove failed: {e}"))?;
     // DeepRo self-checks run per-query inside deep_ro_bundle_from_agg_proof.
     bind_deep_ro_bundle_to_proof(
@@ -194,8 +201,9 @@ pub fn build_agg_pcs_certificate(
     )
     .map_err(|e| format!("R3-M3c3 DeepRo bundle bind failed: {e}"))?;
 
-    let fri_fold_groups = apply_leaf_fri_fold_m4c_folds(&mut fri_bundle)
-        .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
+    let fri_fold_groups =
+        apply_leaf_fri_fold_m4c_folds_with_queries(&mut fri_bundle, nested_queries)
+            .map_err(|e| format!("R3-B5 FriFold group fold failed: {e}"))?;
     bind_fri_fold_with_groups(
         &proof,
         &fri_bundle.fold_ys,
@@ -207,7 +215,6 @@ pub fn build_agg_pcs_certificate(
 
     let mut mmcs_bundle = fri_mmcs_bundle_from_agg_proof_drop_nested(&proof)
         .map_err(|e| format!("R3-M3d FRI Mmcs prove failed: {e}"))?;
-    let proven_queries = fri_queries_from_proof(&proof)?;
     if mmcs_bundle.val.len() != proven_queries || mmcs_bundle.chal.len() != proven_queries {
         return Err(format!(
             "unexpected FRI Mmcs counts: val={}, chal={}, want {proven_queries}",
@@ -446,11 +453,24 @@ fn verify_agg_pcs_certificate_fri_bound(
         eprintln!("[AggPcsCertificate] Failed: FRI fold bind/groups: {e}");
         return false;
     }
+    let (fold_ys_for_deep, _) = match super::fri_fold_m4c::resolve_fri_fold_steps_for_groups(
+        &proof,
+        &cert.fri_fold_ys,
+        &cert.fri_folds,
+        &cert.fri_fold_groups,
+        AGG_WIDTH,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[AggPcsCertificate] Failed: FRI fold resolve: {e}");
+            return false;
+        }
+    };
     if let Err(e) = bind_deep_ro_bundle_to_proof(
         &proof,
         &cert.deep_ros,
         &cert.deep_ro_traces,
-        &cert.fri_fold_ys,
+        &fold_ys_for_deep,
     ) {
         eprintln!("[AggPcsCertificate] Failed: DeepRo bundle bind: {e}");
         return false;

@@ -17,37 +17,52 @@ use super::fri_mmcs_bind::{
 };
 use super::fri_mmcs_group_m4b::{
     generate_keccak_group_fold_proof, m4b_group_chunk, verify_keccak_group_fold_proof,
-    KeccakGroupFoldProof, MmcsPathStatement,
+    MmcsPathStatement,
 };
 use super::fri_mmcs_path::FriMmcsPathProof;
 use super::fri_ro::{decode_input_proof, reconstruct_query_ro};
-use super::keccak_f_native::{keccak256_compress, keccak256_val_leaf, KECCAK_RATE};
-use super::merkle_keccak::hash_val_leaf;
+use super::keccak_f_native::KECCAK_RATE;
+use super::merkle_keccak::{compress_digests, hash_val_leaf};
+use super::mmcs_group_fold::{poseidon_group_width_supported, MmcsGroupFoldProof};
+use super::poseidon2_group_m4b::{
+    generate_poseidon_group_fold_proof, generate_poseidon_group_fold_proof_with_queries,
+    verify_poseidon_group_fold_proof,
+};
 
 /// Leaf PCS Mmcs wire version (after `kind` byte in V6 leaf cert).
 /// v2: adds `val_quot_batch` + `chal_first_layer` equal-height / single-matrix batch folds.
 /// v3: each homogeneous category holds a `Vec` of chunked group STARKs (peak-RAM
 ///     tunable via `WQC_PCS_MMCS_GROUP_CHUNK`) instead of a single optional group.
-pub const LEAF_MMCS_FOLD_V: u8 = 3;
+/// v5: per-group `hash_tag` byte (Keccak / Poseidon); leaf/layer digests dropped
+///     from the wire and recomputed from the path statements at verify time.
+/// Wire v6: Mmcs path / chal-batch digests + empty Keccak stubs omitted (recomputed at verify).
+pub const LEAF_MMCS_FOLD_V: u8 = 6;
 
 const EF_DIM: usize = 3;
 const CHAL_LEAF_WIDTH: usize = 6;
 
+/// Collected Mmcs path statements per category (pre-chunk), for benchmarks / replay.
+#[derive(Debug, Clone, Default)]
+pub struct LeafMmcsGroupStatements {
+    pub val_trace: Vec<MmcsPathStatement>,
+    pub val_quot: Option<Vec<MmcsPathStatement>>,
+    pub val_quot_batch: Option<Vec<MmcsPathStatement>>,
+    pub chal_first_layer: Option<Vec<MmcsPathStatement>>,
+    pub chal_commit: Vec<(usize, Vec<MmcsPathStatement>)>,
+}
+
 /// Group folds attached to a leaf PCS certificate (M4c / batch fold).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LeafMmcsFoldGroups {
-    /// Chunked group STARKs per category (v3). Empty = category not folded;
-    /// multiple entries = paths split into `WQC_PCS_MMCS_GROUP_CHUNK`-sized chunks
-    /// proven sequentially. Chunk boundaries are recovered from each group's
-    /// `path_count` on verify (env-independent).
-    pub val_trace: Vec<KeccakGroupFoldProof>,
-    pub val_quot: Vec<KeccakGroupFoldProof>,
-    /// Equal-height multi-chunk Val quot Merkle (concat leaf → M4b).
-    pub val_quot_batch: Vec<KeccakGroupFoldProof>,
-    /// Single-matrix Chal first_layer (idle unitary) → M4b.
-    pub chal_first_layer: Vec<KeccakGroupFoldProof>,
-    /// Commit-phase groups; ordered by ascending depth, then chunk within depth.
-    pub chal_commit: Vec<KeccakGroupFoldProof>,
+    /// Chunked group STARKs per category (v3/v4). Empty = category not folded.
+    pub val_trace: Vec<MmcsGroupFoldProof>,
+    pub val_quot: Vec<MmcsGroupFoldProof>,
+    pub val_quot_batch: Vec<MmcsGroupFoldProof>,
+    pub chal_first_layer: Vec<MmcsGroupFoldProof>,
+    pub chal_commit: Vec<MmcsGroupFoldProof>,
+    /// Prove-time flag: `val_trace` covers val + chal paths (chal_* empty).
+    /// Not on the wire — verify reconstructs via path-count equality.
+    pub pcs_combined: bool,
 }
 
 fn log2_strict(n: usize) -> Result<usize, String> {
@@ -121,7 +136,15 @@ pub fn path_starks_stripped(path: &FriMmcsPathProof) -> bool {
         && path.compress_starks.iter().all(|c| c.stark.is_empty())
 }
 
+/// True when leaf/layer digests were omitted from the PCS wire (v6+).
+pub fn path_digests_stripped(path: &FriMmcsPathProof) -> bool {
+    path.layer_digests.is_empty() && path.compress_starks.is_empty()
+}
+
 /// Native digest binding without nested STARKs (used when path is grouped).
+///
+/// When digests are omitted (`path_digests_stripped`), only the Merkle root is checked
+/// against `row` + `siblings` (wire v6). Otherwise intermediate digests are cross-checked.
 pub fn verify_fri_mmcs_path_digests(
     row: &[Mersenne31],
     siblings: &[[u8; 32]],
@@ -130,16 +153,18 @@ pub fn verify_fri_mmcs_path_digests(
     path: &FriMmcsPathProof,
 ) -> bool {
     let depth = path.depth as usize;
-    if siblings.len() != depth
-        || path.layer_digests.len() != depth
-        || path.compress_starks.len() != depth
-        || row.len() as u32 != path.leaf_width
-        || depth == 0
-    {
+    if siblings.len() != depth || row.len() as u32 != path.leaf_width || depth == 0 {
         return false;
     }
-    let leaf = keccak256_val_leaf(row);
-    if leaf != path.leaf_digest || leaf != hash_val_leaf(row) || leaf != path.leaf_keccak.digest {
+    let leaf = hash_val_leaf(row);
+    if path_digests_stripped(path) {
+        return super::merkle_keccak::merkle_root_from_path(leaf, siblings, index)
+            == *expected_root;
+    }
+    if path.layer_digests.len() != depth || path.compress_starks.len() != depth {
+        return false;
+    }
+    if leaf != path.leaf_digest || leaf != path.leaf_keccak.digest {
         return false;
     }
     let mut digest = leaf;
@@ -150,7 +175,7 @@ pub fn verify_fri_mmcs_path_digests(
         } else {
             (*sib, digest)
         };
-        let next = keccak256_compress(left, right);
+        let next = compress_digests(left, right);
         if next != path.layer_digests[i] {
             return false;
         }
@@ -328,36 +353,236 @@ fn collect_chal_commit_stmts_by_depth(
     Ok(by_depth)
 }
 
-/// True when a homogeneous statement set is eligible for M4b group folding.
+/// True when a same-width statement set is eligible for M4b group folding.
+/// Depths may differ (Poseidon mixed-depth); Keccak still requires homogeneity
+/// in [`try_group_chunked`].
 fn group_eligible(stmts: &[MmcsPathStatement]) -> bool {
     if stmts.is_empty() {
         return false;
     }
     let width = stmts[0].row.len();
-    let depth = stmts[0].siblings.len();
-    if depth == 0 || !m4b_width_eligible(width) {
+    if !m4b_width_eligible(width) {
         return false;
     }
     stmts
         .iter()
-        .all(|s| s.row.len() == width && s.siblings.len() == depth)
+        .all(|s| s.row.len() == width && !s.siblings.is_empty())
 }
 
-/// Fold eligible paths into one group STARK per `WQC_PCS_MMCS_GROUP_CHUNK`-sized chunk.
-/// Chunks are proven **sequentially**; each `generate_*` encodes then drops its
-/// structured uni-STARK so peak RAM tracks one chunk workspace (C10′).
-fn try_group_chunked(stmts: &[MmcsPathStatement]) -> Result<Vec<KeccakGroupFoldProof>, String> {
-    if !group_eligible(stmts) {
+fn group_fold_path_count(groups: &[MmcsGroupFoldProof]) -> usize {
+    groups.iter().map(|g| g.path_count() as usize).sum()
+}
+
+/// `val_trace` holds val+chal when chal categories are empty and path counts match.
+fn pcs_val_chal_merged(groups: &LeafMmcsFoldGroups, val_n: usize, chal_n: usize) -> bool {
+    chal_n > 0
+        && val_n > 0
+        && groups.chal_commit.is_empty()
+        && groups.chal_first_layer.is_empty()
+        && groups.val_quot.is_empty()
+        && groups.val_quot_batch.is_empty()
+        && !groups.val_trace.is_empty()
+        && group_fold_path_count(&groups.val_trace) == val_n + chal_n
+}
+
+/// Collect homogeneous Mmcs path statements (no prove) for size benchmarks.
+pub fn collect_leaf_mmcs_group_statements(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+    bundle: &AggFriMmcsBundle,
+) -> Result<LeafMmcsGroupStatements, String> {
+    let mut out = LeafMmcsGroupStatements {
+        val_trace: collect_val_trace_stmts(proof, trace_width, &bundle.val)?,
+        val_quot: collect_val_quot_stmts(proof, trace_width, &bundle.val)?,
+        val_quot_batch: None,
+        chal_first_layer: collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)?,
+        chal_commit: collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?,
+    };
+    if out.val_quot.is_none() {
+        out.val_quot_batch = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)?
+            .filter(|s| !s.is_empty());
+    }
+    Ok(out)
+}
+
+fn sum_keccak_group_bytes(groups: &[MmcsGroupFoldProof]) -> u64 {
+    groups
+        .iter()
+        .filter_map(|g| g.keccak())
+        .map(|g| g.group_stark.len() as u64)
+        .sum()
+}
+
+fn try_poseidon_group_chunked(
+    stmts: &[MmcsPathStatement],
+    num_queries: usize,
+) -> Result<Vec<MmcsGroupFoldProof>, String> {
+    if !group_eligible(stmts)
+        || !stmts
+            .iter()
+            .all(|s| poseidon_group_width_supported(s.row.len()))
+    {
         return Ok(Vec::new());
     }
     let chunk = m4b_group_chunk();
     let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
     for c in stmts.chunks(chunk) {
-        let g = generate_keccak_group_fold_proof(c)?;
-        groups.push(g);
+        groups.push(MmcsGroupFoldProof::Poseidon(
+            generate_poseidon_group_fold_proof_with_queries(c, num_queries)?,
+        ));
     }
     groups.shrink_to_fit();
     Ok(groups)
+}
+
+fn sum_group_fold_bytes(groups: &[MmcsGroupFoldProof]) -> u64 {
+    groups.iter().map(|g| g.group_stark_len() as u64).sum()
+}
+
+/// Per-category Mmcs group byte breakdown (Keccak measured + Poseidon spike re-prove).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct PoseidonMmcsBenchmarkReport {
+    pub keccak_total: u64,
+    pub poseidon_measured: u64,
+    pub poseidon_extrapolated: u64,
+    pub poseidon_total_estimate: u64,
+    pub keccak_groups: u32,
+    pub poseidon_groups_measured: u32,
+    pub poseidon_groups_skipped_wide: u32,
+}
+
+fn benchmark_category(
+    stmts: &[MmcsPathStatement],
+    keccak_groups: &[MmcsGroupFoldProof],
+    ratio_num: u64,
+    ratio_den: u64,
+    report: &mut PoseidonMmcsBenchmarkReport,
+) -> Result<(), String> {
+    report.keccak_total += sum_keccak_group_bytes(keccak_groups);
+    report.keccak_groups += keccak_groups.len() as u32;
+
+    if stmts.is_empty() {
+        return Ok(());
+    }
+    if stmts
+        .iter()
+        .all(|s| poseidon_group_width_supported(s.row.len()))
+    {
+        let p_groups = try_poseidon_group_chunked(
+            stmts,
+            crate::plonky3_stark::config::DEVNET_FRI_NUM_QUERIES,
+        )?;
+        let bytes = sum_group_fold_bytes(&p_groups);
+        report.poseidon_measured += bytes;
+        report.poseidon_groups_measured += p_groups.len() as u32;
+    } else {
+        report.poseidon_groups_skipped_wide += keccak_groups.len() as u32;
+        for g in keccak_groups {
+            let k = g.group_stark_len() as u64;
+            report.poseidon_extrapolated += k.saturating_mul(ratio_num) / ratio_den.max(1);
+        }
+    }
+    Ok(())
+}
+
+/// Re-prove collected statements with Poseidon2 groups; extrapolate wide widths via W=3 ratio.
+pub fn benchmark_poseidon_mmcs_groups(
+    stmts: &LeafMmcsGroupStatements,
+    keccak: &LeafMmcsFoldGroups,
+) -> Result<PoseidonMmcsBenchmarkReport, String> {
+    let ratio = poseidon_keccak_group_size_ratio_w3()?;
+    let mut report = PoseidonMmcsBenchmarkReport::default();
+
+    benchmark_category(
+        &stmts.val_trace,
+        &keccak.val_trace,
+        ratio.0,
+        ratio.1,
+        &mut report,
+    )?;
+    if let Some(q) = &stmts.val_quot {
+        benchmark_category(q, &keccak.val_quot, ratio.0, ratio.1, &mut report)?;
+    }
+    if let Some(qb) = &stmts.val_quot_batch {
+        benchmark_category(qb, &keccak.val_quot_batch, ratio.0, ratio.1, &mut report)?;
+    }
+    if let Some(fl) = &stmts.chal_first_layer {
+        benchmark_category(fl, &keccak.chal_first_layer, ratio.0, ratio.1, &mut report)?;
+    }
+    let mut g_off = 0usize;
+    for (_depth, depth_stmts) in &stmts.chal_commit {
+        let mut stmt_off = 0usize;
+        while stmt_off < depth_stmts.len() && g_off < keccak.chal_commit.len() {
+            let n = keccak.chal_commit[g_off].path_count() as usize;
+            let end = (stmt_off + n).min(depth_stmts.len());
+            benchmark_category(
+                &depth_stmts[stmt_off..end],
+                std::slice::from_ref(&keccak.chal_commit[g_off]),
+                ratio.0,
+                ratio.1,
+                &mut report,
+            )?;
+            stmt_off += n;
+            g_off += 1;
+        }
+    }
+
+    report.poseidon_total_estimate = report.poseidon_measured + report.poseidon_extrapolated;
+    Ok(report)
+}
+
+/// Reference Keccak/Poseidon group STARK size ratio at W=3 depth=1 (2 paths).
+fn poseidon_keccak_group_size_ratio_w3() -> Result<(u64, u64), String> {
+    use super::merkle_keccak::{compress_digests_keccak, hash_val_leaf_keccak};
+    use p3_field::PrimeCharacteristicRing;
+    use p3_mersenne_31::Mersenne31;
+
+    let row = vec![
+        Mersenne31::from_u32(1),
+        Mersenne31::from_u32(2),
+        Mersenne31::from_u32(3),
+    ];
+    let sibling = crate::plonky3_stark::config_poseidon::pack_digest([Mersenne31::from_u32(9); 8]);
+    let keccak_stmts: Vec<_> = (0usize..2)
+        .map(|i| {
+            let leaf = hash_val_leaf_keccak(&row);
+            let root = if i.is_multiple_of(2) {
+                compress_digests_keccak(leaf, sibling)
+            } else {
+                compress_digests_keccak(sibling, leaf)
+            };
+            MmcsPathStatement {
+                row: row.clone(),
+                siblings: vec![sibling],
+                index: i,
+                root,
+            }
+        })
+        .collect();
+    let poseidon_stmts: Vec<_> = (0usize..2)
+        .map(|i| {
+            let leaf = hash_val_leaf(&row);
+            let root = if i.is_multiple_of(2) {
+                compress_digests(leaf, sibling)
+            } else {
+                compress_digests(sibling, leaf)
+            };
+            MmcsPathStatement {
+                row: row.clone(),
+                siblings: vec![sibling],
+                index: i,
+                root,
+            }
+        })
+        .collect();
+    let k = generate_keccak_group_fold_proof(&keccak_stmts)?;
+    let p = generate_poseidon_group_fold_proof(&poseidon_stmts)?;
+    let kn = k.group_stark.len() as u64;
+    let pn = p.group_stark.len() as u64;
+    if kn == 0 {
+        return Err("reference keccak group size zero".into());
+    }
+    Ok((pn, kn))
 }
 
 /// Equal-height multi-matrix batch → concat leaf path statement (no injects).
@@ -499,84 +724,240 @@ fn collect_chal_first_layer_stmts(
     Ok(Some(stmts))
 }
 
-/// After nested Mmcs prove+bind: fold eligible paths into groups and strip nested STARKs.
+/// After nested Mmcs path prove: strip nested path STARKs for host digest verify.
+///
+/// **Host-only Mmcs (E5b shrink):** Poseidon/Keccak group STARKs dominated nested PCS
+/// bytes. Opened rows are bound to the parent FRI proof; Merkle membership is checked
+/// from retained siblings via digest verify. Empty [`LeafMmcsFoldGroups`] skips sibling
+/// strip so those paths stay on the wire (cheaper than nested Circle openings at 40q).
 pub fn apply_leaf_mmcs_m4c_folds(
     proof: &Proof<WqcStarkConfig>,
     trace_width: usize,
     bundle: &mut AggFriMmcsBundle,
 ) -> Result<LeafMmcsFoldGroups, String> {
-    let mut groups = LeafMmcsFoldGroups::default();
-
-    let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
-    let trace_groups = try_group_chunked(&trace_stmts)?;
-    if !trace_groups.is_empty() {
-        for qp in &mut bundle.val {
-            strip_fri_mmcs_path_starks(&mut qp.trace_path);
+    let _ = (proof, trace_width);
+    for qp in &mut bundle.val {
+        strip_fri_mmcs_path_starks(&mut qp.trace_path);
+        strip_fri_mmcs_path_starks(&mut qp.quot_path);
+        if let Some(ref mut batch) = qp.quot_batch {
+            strip_chal_batch_starks(batch);
         }
-        groups.val_trace = trace_groups;
     }
+    for qp in &mut bundle.chal {
+        strip_chal_batch_starks(&mut qp.first_layer);
+        for path in &mut qp.commit_paths {
+            strip_fri_mmcs_path_starks(path);
+        }
+    }
+    Ok(LeafMmcsFoldGroups::default())
+}
 
-    if let Some(quot_stmts) = collect_val_quot_stmts(proof, trace_width, &bundle.val)? {
-        let quot_groups = try_group_chunked(&quot_stmts)?;
-        if !quot_groups.is_empty() {
-            for qp in &mut bundle.val {
-                strip_fri_mmcs_path_starks(&mut qp.quot_path);
-            }
-            groups.val_quot = quot_groups;
+/// Env gate for post-bind Mmcs sibling stripping on the PCS wire (`WQC_PCS_STRIP_MMCS_SIBLINGS=1`).
+pub const PCS_STRIP_MMCS_SIBLINGS_ENV: &str = "WQC_PCS_STRIP_MMCS_SIBLINGS";
+
+pub fn mmcs_sibling_strip_enabled() -> bool {
+    std::env::var(PCS_STRIP_MMCS_SIBLINGS_ENV)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true)
+}
+
+/// Bytes removable from Val Mmcs query proofs when categories are group-folded.
+pub fn val_mmcs_sibling_wire_bytes(bundle: &[FriValMmcsQueryProof]) -> usize {
+    bundle
+        .iter()
+        .map(|q| {
+            q.trace_siblings.len() * 32
+                + q.quot_siblings.len() * 32
+                + q.quot_batch
+                    .as_ref()
+                    .map(|b| b.siblings.len() * 32)
+                    .unwrap_or(0)
+        })
+        .sum()
+}
+
+/// Clear redundant Merkle siblings from Val queries covered by M4c groups (post-bind wire shrink).
+pub fn strip_val_mmcs_siblings_for_groups(
+    bundle: &mut [FriValMmcsQueryProof],
+    groups: &LeafMmcsFoldGroups,
+) -> usize {
+    if !mmcs_sibling_strip_enabled() {
+        return 0;
+    }
+    let before = val_mmcs_sibling_wire_bytes(bundle);
+    if !groups.val_trace.is_empty() {
+        for qp in bundle.iter_mut() {
+            qp.trace_siblings.clear();
         }
-    } else {
-        // Multi-chunk stub path — strip always.
-        for qp in &mut bundle.val {
-            if qp.quot_batch.is_some() {
-                strip_fri_mmcs_path_starks(&mut qp.quot_path);
-            }
+    }
+    if !groups.val_quot.is_empty() {
+        for qp in bundle.iter_mut() {
+            qp.quot_siblings.clear();
         }
-        if let Some(batch_stmts) = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)? {
-            let batch_groups = try_group_chunked(&batch_stmts)?;
-            if !batch_groups.is_empty() {
-                for qp in &mut bundle.val {
-                    if let Some(ref mut batch) = qp.quot_batch {
-                        strip_chal_batch_starks(batch);
+    }
+    // `val_quot_batch` uses `FriChalBatchPathProof::siblings` — hydrate not wired yet; skip strip.
+    before.saturating_sub(val_mmcs_sibling_wire_bytes(bundle))
+}
+
+/// Refill stripped Val siblings from the embedded uni-STARK FRI openings before host bind.
+pub fn hydrate_val_mmcs_siblings_from_proof(
+    proof: &Proof<WqcStarkConfig>,
+    bundle: &mut [FriValMmcsQueryProof],
+    trace_width: usize,
+) -> Result<(), String> {
+    use super::fri_fs_replay::{
+        circle_config_matching_proof, decode_pcs_view, replay_fri_challenges,
+    };
+    use super::fri_ro::decode_input_proof;
+    use p3_commit::{Pcs, PolynomialSpace};
+
+    let n = fri_queries_from_proof(proof)?;
+    if bundle.len() != n {
+        return Err(format!("val mmcs len {}, want {n}", bundle.len()));
+    }
+    let chal = replay_fri_challenges(proof, trace_width)?;
+    let view = decode_pcs_view(proof)?;
+    let config = circle_config_matching_proof(proof)?;
+    let pcs = config.pcs();
+    let degree = 1usize << proof.degree_bits;
+    let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+        Challenge,
+        crate::plonky3_stark::config::Challenger,
+    >>::natural_domain_for_degree(pcs, degree);
+    let log_blowup = chal.log_blowup;
+    let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+    let trace_height = init_trace_domain.size() << log_blowup;
+    let trace_log_height = log2_strict(trace_height)?;
+
+    for (q, qp) in bundle.iter_mut().enumerate() {
+        let query_index = chal.query_indices[q];
+        let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
+        let t_idx = query_index >> (log_global_max_height - trace_log_height);
+        if qp.trace_siblings.is_empty() {
+            qp.trace_siblings = input.input_openings[0].opening_proof.clone();
+        }
+        if qp.quot_siblings.is_empty() {
+            qp.quot_siblings = input.input_openings[1].opening_proof.clone();
+        }
+        if qp.trace_index as usize != t_idx {
+            return Err(format!("q{q}: trace index mismatch after hydrate"));
+        }
+        if qp.trace_siblings != input.input_openings[0].opening_proof
+            || qp.quot_siblings != input.input_openings[1].opening_proof
+        {
+            return Err(format!("q{q}: hydrated siblings mismatch FRI opening"));
+        }
+    }
+    Ok(())
+}
+
+/// Bytes removable from Chal Mmcs query proofs when categories are group-folded.
+pub fn chal_mmcs_sibling_wire_bytes(bundle: &[FriChalMmcsQueryProof]) -> usize {
+    bundle
+        .iter()
+        .map(|q| {
+            q.first_layer.siblings.len() * 32
+                + q.commit_siblings
+                    .iter()
+                    .map(|s| s.len() * 32)
+                    .sum::<usize>()
+        })
+        .sum()
+}
+
+/// Clear redundant Merkle siblings from Chal queries covered by M4c groups (post-bind wire shrink).
+pub fn strip_chal_mmcs_siblings_for_groups(
+    bundle: &mut [FriChalMmcsQueryProof],
+    groups: &LeafMmcsFoldGroups,
+) -> usize {
+    if !mmcs_sibling_strip_enabled() {
+        return 0;
+    }
+    let before = chal_mmcs_sibling_wire_bytes(bundle);
+    let merged_fl_commit = groups.chal_first_layer.is_empty() && !groups.chal_commit.is_empty();
+    let pcs_combined = groups.pcs_combined;
+    if !groups.chal_first_layer.is_empty() || merged_fl_commit || pcs_combined {
+        for qp in bundle.iter_mut() {
+            qp.first_layer.siblings.clear();
+        }
+    }
+    if !groups.chal_commit.is_empty() || pcs_combined {
+        if merged_fl_commit || pcs_combined {
+            for qp in bundle.iter_mut() {
+                for sibs in qp.commit_siblings.iter_mut() {
+                    sibs.clear();
+                }
+            }
+        } else {
+            let grouped_depths: Vec<usize> = {
+                let mut d: Vec<_> = groups
+                    .chal_commit
+                    .iter()
+                    .map(|g| g.depth() as usize)
+                    .collect();
+                d.sort_unstable();
+                d.dedup();
+                d
+            };
+            for qp in bundle.iter_mut() {
+                for (i, path) in qp.commit_paths.iter().enumerate() {
+                    if grouped_depths.contains(&(path.depth as usize)) {
+                        if let Some(sibs) = qp.commit_siblings.get_mut(i) {
+                            sibs.clear();
+                        }
                     }
                 }
-                groups.val_quot_batch = batch_groups;
             }
         }
     }
+    before.saturating_sub(chal_mmcs_sibling_wire_bytes(bundle))
+}
 
-    if let Some(fl_stmts) = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)? {
-        let fl_groups = try_group_chunked(&fl_stmts)?;
-        if !fl_groups.is_empty() {
-            for qp in &mut bundle.chal {
-                strip_chal_batch_starks(&mut qp.first_layer);
-            }
-            groups.chal_first_layer = fl_groups;
+/// Refill stripped Chal siblings from the embedded uni-STARK FRI openings before host bind.
+pub fn hydrate_chal_mmcs_siblings_from_proof(
+    proof: &Proof<WqcStarkConfig>,
+    bundle: &mut [FriChalMmcsQueryProof],
+    trace_width: usize,
+) -> Result<(), String> {
+    use super::fri_fs_replay::decode_pcs_view;
+    use super::fri_ro::decode_input_proof;
+
+    let _ = trace_width;
+    let n = fri_queries_from_proof(proof)?;
+    if bundle.len() != n {
+        return Err(format!("chal mmcs len {}, want {n}", bundle.len()));
+    }
+    let view = decode_pcs_view(proof)?;
+
+    for (q, qp) in bundle.iter_mut().enumerate() {
+        let fri_qp = &view.fri_proof.query_proofs[q];
+        let input = decode_input_proof(&fri_qp.input_proof)?;
+        if qp.first_layer.siblings.is_empty() {
+            qp.first_layer.siblings = input.first_layer_proof.clone();
         }
-    } else {
-        // Inject / multi-height first_layer: strip nested STARKs (host digest verify).
-        for qp in &mut bundle.chal {
-            if !qp.first_layer.inject_compresses.is_empty() {
-                strip_chal_batch_starks(&mut qp.first_layer);
+        if qp.first_layer.siblings != input.first_layer_proof {
+            return Err(format!("q{q}: hydrated first_layer siblings mismatch"));
+        }
+        let openings = &fri_qp.commit_phase_openings;
+        if qp.commit_siblings.len() != openings.len() {
+            return Err(format!(
+                "q{q}: commit_siblings len {}, want {}",
+                qp.commit_siblings.len(),
+                openings.len()
+            ));
+        }
+        for (round, opening) in openings.iter().enumerate() {
+            if qp.commit_siblings[round].is_empty() {
+                qp.commit_siblings[round] = opening.opening_proof.clone();
+            }
+            if qp.commit_siblings[round] != opening.opening_proof {
+                return Err(format!(
+                    "q{q} round {round}: hydrated commit siblings mismatch"
+                ));
             }
         }
     }
-
-    let chal_by_depth = collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?;
-    for (depth, stmts) in chal_by_depth {
-        let depth_groups = try_group_chunked(&stmts)?;
-        if !depth_groups.is_empty() {
-            for qp in &mut bundle.chal {
-                for path in &mut qp.commit_paths {
-                    if path.depth as usize == depth {
-                        strip_fri_mmcs_path_starks(path);
-                    }
-                }
-            }
-            groups.chal_commit.extend(depth_groups);
-        }
-    }
-
-    Ok(groups)
+    Ok(())
 }
 
 /// Bind leaf Mmcs openings using M4c groups where present; nested verify otherwise.
@@ -588,6 +969,52 @@ pub fn bind_leaf_mmcs_with_groups(
 ) -> Result<(), String> {
     use super::fri_mmcs_bind::{bind_fri_chal_mmcs_bundle_width, bind_fri_val_mmcs_bundle_width};
 
+    let pcs_combined = {
+        let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
+        let batch_n = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)?
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let quot_n = if batch_n == 0 {
+            collect_val_quot_stmts(proof, trace_width, &bundle.val)?
+                .map(|s| s.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let val_n = if batch_n > 0 {
+            trace_stmts.len() + batch_n
+        } else {
+            trace_stmts.len() + quot_n
+        };
+        let fl_len = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)?
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let commit_len: usize =
+            collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)?
+                .iter()
+                .map(|(_, s)| s.len())
+                .sum();
+        groups.pcs_combined || pcs_val_chal_merged(groups, val_n, fl_len + commit_len)
+    };
+
+    if pcs_combined {
+        let mut pcs_all = Vec::new();
+        let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
+        pcs_all.extend_from_slice(&trace_stmts);
+        if let Some(batch) = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)? {
+            pcs_all.extend(batch);
+        } else if let Some(quot) = collect_val_quot_stmts(proof, trace_width, &bundle.val)? {
+            pcs_all.extend(quot);
+        }
+        if let Some(fl) = collect_chal_first_layer_stmts(proof, trace_width, &bundle.chal)? {
+            pcs_all.extend(fl);
+        }
+        for (_, stmts) in collect_chal_commit_stmts_by_depth(proof, trace_width, &bundle.chal)? {
+            pcs_all.extend(stmts);
+        }
+        verify_group_chunks(&pcs_all, &groups.val_trace, "val+chal pcs")?;
+    }
+
     let val_needs_custom = !groups.val_trace.is_empty()
         || !groups.val_quot.is_empty()
         || !groups.val_quot_batch.is_empty()
@@ -597,18 +1024,19 @@ pub fn bind_leaf_mmcs_with_groups(
                 || q.quot_batch.as_ref().is_some_and(batch_starks_stripped)
         });
     if val_needs_custom {
-        bind_val_with_groups(proof, &bundle.val, groups, trace_width)?;
+        bind_val_with_groups(proof, &bundle.val, groups, trace_width, pcs_combined)?;
     } else {
         bind_fri_val_mmcs_bundle_width(proof, &bundle.val, trace_width)?;
     }
 
-    let chal_needs_custom = !groups.chal_first_layer.is_empty()
+    let chal_needs_custom = pcs_combined
+        || !groups.chal_first_layer.is_empty()
         || !groups.chal_commit.is_empty()
         || bundle.chal.iter().any(|q| {
             batch_starks_stripped(&q.first_layer) || q.commit_paths.iter().any(path_starks_stripped)
         });
     if chal_needs_custom {
-        bind_chal_with_groups(proof, &bundle.chal, groups, trace_width)?;
+        bind_chal_with_groups(proof, &bundle.chal, groups, trace_width, pcs_combined)?;
     } else {
         bind_fri_chal_mmcs_bundle_width(proof, &bundle.chal, trace_width)?;
     }
@@ -619,17 +1047,22 @@ pub fn bind_leaf_mmcs_with_groups(
 /// and the chunks must exactly partition `stmts` (order-preserving, env-independent).
 fn verify_group_chunks(
     stmts: &[MmcsPathStatement],
-    groups: &[KeccakGroupFoldProof],
+    groups: &[MmcsGroupFoldProof],
     label: &str,
 ) -> Result<(), String> {
     let mut off = 0usize;
     for g in groups {
-        let n = g.path_count as usize;
+        let n = g.path_count() as usize;
         let end = off
             .checked_add(n)
             .filter(|&e| e <= stmts.len())
             .ok_or_else(|| format!("{label} chunk [{off}+{n}] exceeds {} stmts", stmts.len()))?;
-        if !verify_keccak_group_fold_proof(&stmts[off..end], g) {
+        let chunk = &stmts[off..end];
+        let ok = match g {
+            MmcsGroupFoldProof::Keccak(p) => verify_keccak_group_fold_proof(chunk, p),
+            MmcsGroupFoldProof::Poseidon(p) => verify_poseidon_group_fold_proof(chunk, p),
+        };
+        if !ok {
             return Err(format!("{label} group verify failed (chunk at {off})"));
         }
         off = end;
@@ -648,6 +1081,7 @@ fn bind_val_with_groups(
     bundle: &[FriValMmcsQueryProof],
     groups: &LeafMmcsFoldGroups,
     trace_width: usize,
+    pcs_combined: bool,
 ) -> Result<(), String> {
     use super::fri_mmcs_bind::{verify_chal_batch_path_digests, verify_chal_batch_path_replay};
 
@@ -676,9 +1110,62 @@ fn bind_val_with_groups(
         init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
     let quot_chunk_domains = quot_parent.split_domains(num_quot);
 
-    if !groups.val_trace.is_empty() {
-        let stmts = collect_val_trace_stmts(proof, trace_width, bundle)?;
-        verify_group_chunks(&stmts, &groups.val_trace, "val trace")?;
+    let trace_stmts = collect_val_trace_stmts(proof, trace_width, bundle)?;
+    let batch_opt = collect_val_quot_batch_stmts(proof, trace_width, bundle)?;
+    let batch_n = batch_opt.as_ref().map(|s| s.len()).unwrap_or(0);
+    let val_trace_n: usize = groups
+        .val_trace
+        .iter()
+        .map(|g| g.path_count() as usize)
+        .sum();
+    // When `pcs_combined`, the shared group STARK is verified in `bind_leaf` before
+    // this call; here we only check host digests (treat like val_merged for quot).
+    let val_merged = pcs_combined
+        || (groups.val_quot_batch.is_empty()
+            && groups.val_quot.is_empty()
+            && !groups.val_trace.is_empty()
+            && batch_n > 0
+            && val_trace_n == trace_stmts.len() + batch_n);
+
+    if pcs_combined {
+        // Group STARK already verified against val‖chal; bind digests only.
+        for (q, qp) in bundle.iter().enumerate() {
+            let query_index = chal.query_indices[q];
+            let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
+            let row = &input.input_openings[0].opened_values[0];
+            let t_idx = query_index >> (log_global_max_height - trace_log_height);
+            if !verify_fri_mmcs_path_digests(
+                row,
+                &qp.trace_siblings,
+                t_idx,
+                &trace_root,
+                &qp.trace_path,
+            ) {
+                return Err(format!("q{q}: stripped trace digests"));
+            }
+        }
+    } else if val_merged {
+        let mut all = Vec::with_capacity(trace_stmts.len() + batch_n);
+        all.extend_from_slice(&trace_stmts);
+        all.extend_from_slice(batch_opt.as_ref().unwrap());
+        verify_group_chunks(&all, &groups.val_trace, "val trace+quot_batch")?;
+        for (q, qp) in bundle.iter().enumerate() {
+            let query_index = chal.query_indices[q];
+            let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
+            let row = &input.input_openings[0].opened_values[0];
+            let t_idx = query_index >> (log_global_max_height - trace_log_height);
+            if !verify_fri_mmcs_path_digests(
+                row,
+                &qp.trace_siblings,
+                t_idx,
+                &trace_root,
+                &qp.trace_path,
+            ) {
+                return Err(format!("q{q}: stripped trace digests"));
+            }
+        }
+    } else if !groups.val_trace.is_empty() {
+        verify_group_chunks(&trace_stmts, &groups.val_trace, "val trace")?;
         for (q, qp) in bundle.iter().enumerate() {
             let query_index = chal.query_indices[q];
             let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
@@ -703,7 +1190,8 @@ fn bind_val_with_groups(
     }
 
     if !groups.val_quot_batch.is_empty() {
-        let stmts = collect_val_quot_batch_stmts(proof, trace_width, bundle)?
+        let stmts = batch_opt
+            .clone()
             .ok_or_else(|| "val quot batch group present but statements unavailable".to_string())?;
         verify_group_chunks(&stmts, &groups.val_quot_batch, "val quot batch")?;
     }
@@ -765,7 +1253,7 @@ fn bind_val_with_groups(
             if qp.quot_index as usize != q_idx {
                 return Err(format!("q{q}: quot batch index mismatch"));
             }
-            if !groups.val_quot_batch.is_empty() {
+            if !groups.val_quot_batch.is_empty() || val_merged {
                 if !verify_chal_batch_path_digests(
                     &input.input_openings[1].opened_values,
                     &fl_dims,
@@ -845,6 +1333,7 @@ fn bind_chal_with_groups(
     bundle: &[FriChalMmcsQueryProof],
     groups: &LeafMmcsFoldGroups,
     trace_width: usize,
+    pcs_combined: bool,
 ) -> Result<(), String> {
     let n = fri_queries_from_proof(proof)?;
     if bundle.len() != n {
@@ -854,47 +1343,78 @@ fn bind_chal_with_groups(
     let view = decode_pcs_view(proof)?;
     let fl_root = commitment_root_chal(&view.first_layer_commitment)?;
 
-    if !groups.chal_first_layer.is_empty() {
-        let stmts =
-            collect_chal_first_layer_stmts(proof, trace_width, bundle)?.ok_or_else(|| {
+    let fl_opt = collect_chal_first_layer_stmts(proof, trace_width, bundle)?;
+    let by_depth = collect_chal_commit_stmts_by_depth(proof, trace_width, bundle)?;
+    let fl_len = fl_opt.as_ref().map(|s| s.len()).unwrap_or(0);
+    let commit_len: usize = by_depth.iter().map(|(_, s)| s.len()).sum();
+    let chal_commit_n: usize = groups
+        .chal_commit
+        .iter()
+        .map(|g| g.path_count() as usize)
+        .sum();
+    let chal_merged = !pcs_combined
+        && groups.chal_first_layer.is_empty()
+        && !groups.chal_commit.is_empty()
+        && chal_commit_n == fl_len + commit_len;
+
+    if pcs_combined {
+        // Shared val+chal group already verified in `bind_leaf`.
+    } else if chal_merged {
+        let mut chal_all = Vec::with_capacity(fl_len + commit_len);
+        if let Some(ref fl) = fl_opt {
+            chal_all.extend_from_slice(fl);
+        }
+        for (_, stmts) in &by_depth {
+            chal_all.extend_from_slice(stmts);
+        }
+        verify_group_chunks(&chal_all, &groups.chal_commit, "chal fl+commit")?;
+    } else {
+        if !groups.chal_first_layer.is_empty() {
+            let stmts = fl_opt.as_ref().ok_or_else(|| {
                 "chal first_layer group present but statements unavailable".to_string()
             })?;
-        verify_group_chunks(&stmts, &groups.chal_first_layer, "chal first_layer")?;
-    }
+            verify_group_chunks(stmts, &groups.chal_first_layer, "chal first_layer")?;
+        }
 
-    // Verify commit groups first (same order as apply: ascending depth, then chunk).
-    let by_depth = collect_chal_commit_stmts_by_depth(proof, trace_width, bundle)?;
-    let mut group_iter = groups.chal_commit.iter().peekable();
-    for (depth, stmts) in &by_depth {
-        let eligible =
-            m4b_width_eligible(CHAL_LEAF_WIDTH) && stmts.iter().all(|s| s.siblings.len() == *depth);
-        if eligible && !stmts.is_empty() {
-            let mut off = 0usize;
-            while off < stmts.len() {
-                let g = group_iter
-                    .next()
-                    .ok_or_else(|| format!("missing chal commit group for depth {depth}"))?;
-                if g.depth as usize != *depth {
-                    return Err(format!(
-                        "chal commit group depth {} != expected {depth}",
-                        g.depth
-                    ));
+        // Host-only Mmcs: no commit groups — digests checked per query below.
+        if !groups.chal_commit.is_empty() {
+            let mut group_iter = groups.chal_commit.iter().peekable();
+            for (depth, stmts) in &by_depth {
+                let eligible = m4b_width_eligible(CHAL_LEAF_WIDTH)
+                    && stmts.iter().all(|s| s.siblings.len() == *depth);
+                if eligible && !stmts.is_empty() {
+                    let mut off = 0usize;
+                    while off < stmts.len() {
+                        let g = group_iter.next().ok_or_else(|| {
+                            format!("missing chal commit group for depth {depth}")
+                        })?;
+                        if g.depth() as usize != *depth {
+                            return Err(format!(
+                                "chal commit group depth {} != expected {depth}",
+                                g.depth()
+                            ));
+                        }
+                        let n = g.path_count() as usize;
+                        let end = off
+                            .checked_add(n)
+                            .filter(|&e| e <= stmts.len())
+                            .ok_or_else(|| format!("chal commit depth {depth} chunk overflow"))?;
+                        verify_group_chunks(
+                            &stmts[off..end],
+                            std::slice::from_ref(g),
+                            "chal commit",
+                        )?;
+                        off = end;
+                    }
                 }
-                let n = g.path_count as usize;
-                let end = off
-                    .checked_add(n)
-                    .filter(|&e| e <= stmts.len())
-                    .ok_or_else(|| format!("chal commit depth {depth} chunk overflow"))?;
-                if !verify_keccak_group_fold_proof(&stmts[off..end], g) {
-                    return Err(format!("chal commit group depth {depth} verify failed"));
-                }
-                off = end;
+            }
+            if group_iter.next().is_some() {
+                return Err("extra chal commit groups".into());
             }
         }
     }
-    if group_iter.next().is_some() {
-        return Err("extra chal commit groups".into());
-    }
+
+    let chal_grouped = pcs_combined || chal_merged;
 
     for (q, qp_proof) in bundle.iter().enumerate() {
         let query_index = chal.query_indices[q];
@@ -915,7 +1435,7 @@ fn bind_chal_with_groups(
         if qp_proof.first_layer.siblings != input.first_layer_proof {
             return Err(format!("q{q}: first-layer siblings mismatch"));
         }
-        if !groups.chal_first_layer.is_empty() {
+        if !groups.chal_first_layer.is_empty() || (chal_grouped && fl_len > 0) {
             if !super::fri_mmcs_bind::verify_chal_batch_path_digests(
                 &fl_opened,
                 &fl_dims,
@@ -978,10 +1498,11 @@ fn bind_chal_with_groups(
                 return Err(format!("q{q} round {round}: commit meta mismatch"));
             }
             let path = &qp_proof.commit_paths[round];
-            let grouped = groups
-                .chal_commit
-                .iter()
-                .any(|g| g.depth as usize == path.depth as usize);
+            let grouped = chal_grouped
+                || groups
+                    .chal_commit
+                    .iter()
+                    .any(|g| g.depth() as usize == path.depth as usize);
             if grouped {
                 if !verify_fri_mmcs_path_digests(
                     &row,
@@ -1022,6 +1543,8 @@ fn bind_chal_with_groups(
 
 #[cfg(test)]
 mod tests {
+    use super::super::fri_mmcs_group_m4b::KeccakGroupFoldProof;
+    use super::super::mmcs_group_fold::MmcsGroupFoldProof;
     use super::*;
     use crate::plonky3_stark::recursion::keccak256_air::Keccak256StarkProof;
 
@@ -1088,5 +1611,198 @@ mod tests {
         assert!(m4b_width_eligible(68)); // 272 B = 2-perm max
         assert!(!m4b_width_eligible(69));
         assert!(!m4b_width_eligible(0));
+    }
+
+    #[test]
+    fn strip_val_siblings_clears_grouped_categories() {
+        let mut bundle = vec![FriValMmcsQueryProof {
+            trace_index: 0,
+            quot_index: 0,
+            trace_siblings: vec![[1u8; 32], [2u8; 32]],
+            quot_siblings: vec![[3u8; 32]],
+            trace_path: FriMmcsPathProof {
+                depth: 1,
+                leaf_width: 3,
+                leaf_digest: [0u8; 32],
+                layer_digests: vec![[0u8; 32]],
+                fold_stark: vec![],
+                leaf_keccak: Keccak256StarkProof {
+                    msg_len: 12,
+                    digest: [0u8; 32],
+                    stark: vec![],
+                },
+                compress_starks: vec![Keccak256StarkProof {
+                    msg_len: 64,
+                    digest: [0u8; 32],
+                    stark: vec![],
+                }],
+            },
+            quot_path: FriMmcsPathProof {
+                depth: 1,
+                leaf_width: 3,
+                leaf_digest: [0u8; 32],
+                layer_digests: vec![[0u8; 32]],
+                fold_stark: vec![],
+                leaf_keccak: Keccak256StarkProof {
+                    msg_len: 12,
+                    digest: [0u8; 32],
+                    stark: vec![],
+                },
+                compress_starks: vec![Keccak256StarkProof {
+                    msg_len: 64,
+                    digest: [0u8; 32],
+                    stark: vec![],
+                }],
+            },
+            quot_batch: None,
+        }];
+        let groups = LeafMmcsFoldGroups {
+            val_trace: vec![MmcsGroupFoldProof::Keccak(KeccakGroupFoldProof {
+                path_count: 1,
+                depth: 1,
+                leaf_width: 3,
+                group_stark: vec![1],
+            })],
+            val_quot: vec![MmcsGroupFoldProof::Keccak(KeccakGroupFoldProof {
+                path_count: 1,
+                depth: 1,
+                leaf_width: 3,
+                group_stark: vec![1],
+            })],
+            ..Default::default()
+        };
+        let saved = strip_val_mmcs_siblings_for_groups(&mut bundle, &groups);
+        assert_eq!(saved, 32 * (2 + 1));
+        assert!(bundle[0].trace_siblings.is_empty());
+        assert!(bundle[0].quot_siblings.is_empty());
+    }
+
+    #[test]
+    fn strip_chal_siblings_clears_grouped_categories() {
+        let mut bundle = vec![FriChalMmcsQueryProof {
+            first_layer: FriChalBatchPathProof {
+                index: 0,
+                siblings: vec![[1u8; 32], [2u8; 32]],
+                leaf_rows: vec![vec![Mersenne31::ZERO; 6]],
+                leaf_keccs: vec![],
+                leaf_digests: vec![[0u8; 32]],
+                sib_compresses: vec![],
+                sib_layer_digests: vec![[0u8; 32], [0u8; 32]],
+                inject_compresses: vec![],
+                inject_digests: vec![],
+                inject_leaf_indices: vec![],
+            },
+            commit_indices: vec![0, 1],
+            commit_siblings: vec![vec![[3u8; 32]], vec![[4u8; 32], [5u8; 32]]],
+            commit_paths: vec![
+                FriMmcsPathProof {
+                    depth: 1,
+                    leaf_width: 6,
+                    leaf_digest: [0u8; 32],
+                    layer_digests: vec![[0u8; 32]],
+                    fold_stark: vec![],
+                    leaf_keccak: Keccak256StarkProof {
+                        msg_len: 24,
+                        digest: [0u8; 32],
+                        stark: vec![],
+                    },
+                    compress_starks: vec![],
+                },
+                FriMmcsPathProof {
+                    depth: 2,
+                    leaf_width: 6,
+                    leaf_digest: [0u8; 32],
+                    layer_digests: vec![[0u8; 32], [0u8; 32]],
+                    fold_stark: vec![],
+                    leaf_keccak: Keccak256StarkProof {
+                        msg_len: 24,
+                        digest: [0u8; 32],
+                        stark: vec![],
+                    },
+                    compress_starks: vec![],
+                },
+            ],
+        }];
+        let groups = LeafMmcsFoldGroups {
+            chal_first_layer: vec![MmcsGroupFoldProof::Keccak(KeccakGroupFoldProof {
+                path_count: 1,
+                depth: 2,
+                leaf_width: 6,
+                group_stark: vec![1],
+            })],
+            chal_commit: vec![MmcsGroupFoldProof::Keccak(KeccakGroupFoldProof {
+                path_count: 1,
+                depth: 1,
+                leaf_width: 6,
+                group_stark: vec![1],
+            })],
+            ..Default::default()
+        };
+        let saved = strip_chal_mmcs_siblings_for_groups(&mut bundle, &groups);
+        // first_layer 2 sibs + commit depth-1 (1 sib); depth-2 commit kept
+        assert_eq!(saved, 32 * (2 + 1));
+        assert!(bundle[0].commit_siblings[0].is_empty());
+        assert_eq!(bundle[0].commit_siblings[1].len(), 2);
+    }
+
+    #[test]
+    fn strip_chal_merged_fl_commit_clears_all_siblings() {
+        let mut bundle = vec![FriChalMmcsQueryProof {
+            first_layer: FriChalBatchPathProof {
+                index: 0,
+                siblings: vec![[1u8; 32], [2u8; 32]],
+                leaf_rows: vec![],
+                leaf_keccs: vec![],
+                leaf_digests: vec![],
+                sib_compresses: vec![],
+                sib_layer_digests: vec![],
+                inject_compresses: vec![],
+                inject_digests: vec![],
+                inject_leaf_indices: vec![],
+            },
+            commit_siblings: vec![vec![[3u8; 32]], vec![[4u8; 32], [5u8; 32]]],
+            commit_indices: vec![0, 0],
+            commit_paths: vec![
+                FriMmcsPathProof {
+                    depth: 1,
+                    leaf_width: 6,
+                    leaf_digest: [0u8; 32],
+                    layer_digests: vec![[0u8; 32]],
+                    fold_stark: vec![],
+                    leaf_keccak: Keccak256StarkProof {
+                        msg_len: 24,
+                        digest: [0u8; 32],
+                        stark: vec![],
+                    },
+                    compress_starks: vec![],
+                },
+                FriMmcsPathProof {
+                    depth: 2,
+                    leaf_width: 6,
+                    leaf_digest: [0u8; 32],
+                    layer_digests: vec![[0u8; 32], [0u8; 32]],
+                    fold_stark: vec![],
+                    leaf_keccak: Keccak256StarkProof {
+                        msg_len: 24,
+                        digest: [0u8; 32],
+                        stark: vec![],
+                    },
+                    compress_starks: vec![],
+                },
+            ],
+        }];
+        let groups = LeafMmcsFoldGroups {
+            chal_commit: vec![MmcsGroupFoldProof::Keccak(KeccakGroupFoldProof {
+                path_count: 3,
+                depth: 2,
+                leaf_width: 6,
+                group_stark: vec![1],
+            })],
+            ..Default::default()
+        };
+        let saved = strip_chal_mmcs_siblings_for_groups(&mut bundle, &groups);
+        assert_eq!(saved, 32 * (2 + 1 + 2));
+        assert!(bundle[0].first_layer.siblings.is_empty());
+        assert!(bundle[0].commit_siblings.iter().all(|s| s.is_empty()));
     }
 }

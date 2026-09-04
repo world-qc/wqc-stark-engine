@@ -1,0 +1,14 @@
+{
+  "benchmark": "idle_leaf_pcs_poseidon_mmcs_groups",
+  "leaf_pcs_bytes_keccak": 2499186,
+  "leaf_pcs_poseidon_estimate_bytes": 722986,
+  "mmcs_groups_stark_bytes_keccak": 2400773,
+  "mmcs_groups_stark_bytes_poseidon_estimate": 624573,
+  "mmcs_groups_stark_saved_bytes": 1776200,
+  "poseidon_groups_measured": 4,
+  "poseidon_groups_skipped_wide": 0,
+  "reference_keccak_root_bytes": 5022410,
+  "reference_mmcs_groups_per_side": 2400773,
+  "reference_sweep": "low/chunk24",
+  "security_level": "low"
+}

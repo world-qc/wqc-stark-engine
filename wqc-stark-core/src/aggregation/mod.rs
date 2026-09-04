@@ -253,6 +253,50 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
             s.deep_ro,
             s.ood,
         );
+        for (i, cert) in bundle.certs.iter().enumerate() {
+            let g = &cert.mmcs_groups;
+            let fmt = |label: &str, gs: &[crate::plonky3_stark::recursion::MmcsGroupFoldProof]| {
+                if gs.is_empty() {
+                    return;
+                }
+                let sizes: Vec<String> = gs
+                    .iter()
+                    .map(|x| {
+                        format!(
+                            "n={} d={} w={} stark={}",
+                            x.path_count(),
+                            x.depth(),
+                            x.leaf_width(),
+                            x.group_stark_len()
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "[M4c size]   cert{i} {label}: {} group(s) [{}]",
+                    gs.len(),
+                    sizes.join("; ")
+                );
+            };
+            fmt("val_trace", &g.val_trace);
+            fmt("val_quot", &g.val_quot);
+            fmt("val_quot_batch", &g.val_quot_batch);
+            fmt("chal_first_layer", &g.chal_first_layer);
+            fmt("chal_commit", &g.chal_commit);
+            if g.pcs_combined {
+                eprintln!("[M4c size]   cert{i} pcs_combined=true (val+chal in val_trace)");
+            }
+            let xs = &cert.fri_fold_groups.fold_xs_by_log_h;
+            eprintln!(
+                "[M4c size]   cert{i} fri_fold: y={} xs={} (log_h={:?})",
+                cert.fri_fold_groups
+                    .fold_ys
+                    .as_ref()
+                    .map(|y| y.group_stark.len())
+                    .unwrap_or(0),
+                xs.iter().map(|x| x.group_stark.len()).sum::<usize>(),
+                xs.iter().map(|x| x.log_folded_height).collect::<Vec<_>>(),
+            );
+        }
     } else if pcs.agg_cert.is_some() {
         eprintln!("[M4c size] compose {side} agg PCS present (nested)");
     } else {
@@ -291,7 +335,7 @@ fn pcs_for_child(
     prebuilt_pcs: Option<&[u8]>,
 ) -> Result<ChildPcs, String> {
     if let Some(agg) = child_aggregation_transcript(child) {
-        let cert = cert_for_child_agg(agg)?;
+        let cert = pcs_opening_for_child_agg(agg)?;
         return Ok(ChildPcs {
             kind: REC_KIND_AGG,
             agg_cert: Some(cert),
@@ -358,7 +402,9 @@ fn child_supports_leaf_pcs(child: &[u8]) -> bool {
 }
 
 #[cfg(feature = "plonky3-stark")]
-fn cert_for_child_agg(agg: &[u8]) -> Result<crate::plonky3_stark::AggPcsCertificate, String> {
+fn pcs_opening_for_child_agg(
+    agg: &[u8],
+) -> Result<crate::plonky3_stark::AggPcsCertificate, String> {
     use crate::plonky3_stark::parse_agg_v4_header_any;
 
     let header = parse_agg_v4_header_any(agg)
@@ -654,7 +700,7 @@ fn pcs_from_embedded_or_build(
                 leaf_bundle: None,
             });
         }
-        let cert = cert_for_child_agg(agg)?;
+        let cert = pcs_opening_for_child_agg(agg)?;
         return Ok(ChildPcs {
             kind: REC_KIND_AGG,
             agg_cert: Some(cert),

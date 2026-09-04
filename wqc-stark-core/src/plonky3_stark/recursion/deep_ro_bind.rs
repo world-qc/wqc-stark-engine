@@ -5,14 +5,19 @@ use p3_field::PrimeCharacteristicRing;
 use p3_uni_stark::{Proof, StarkGenericConfig};
 
 use crate::plonky3_stark::aggregation_air::AGG_WIDTH;
-use crate::plonky3_stark::config::{devnet_circle_config, Challenge, WqcStarkConfig};
+use crate::plonky3_stark::config::{
+    devnet_circle_config, Challenge, WqcStarkConfig, DEVNET_FRI_NUM_QUERIES,
+};
 
-use super::deep_ro_air::{generate_deep_ro_proof, verify_deep_ro_proof, DeepRoStepProof};
+use super::deep_ro_air::{
+    generate_deep_ro_proof_with_queries, verify_deep_ro_proof, DeepRoStepProof,
+};
 use super::deep_ro_leaf_trace_air::{
-    generate_deep_ro_leaf_trace_proof, verify_deep_ro_leaf_trace_proof, DeepRoLeafTraceStepProof,
+    generate_deep_ro_leaf_trace_proof_with_queries, verify_deep_ro_leaf_trace_proof,
+    DeepRoLeafTraceStepProof,
 };
 use super::deep_ro_trace_air::{
-    generate_deep_ro_trace_proof, verify_deep_ro_trace_proof, DeepRoTraceStepProof,
+    generate_deep_ro_trace_proof_with_queries, verify_deep_ro_trace_proof, DeepRoTraceStepProof,
 };
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{AGG_FRI_PROVEN_QUERIES, LEAF_FRI_PROVEN_QUERIES};
@@ -67,6 +72,14 @@ fn fold_y_offset_for_query(
 pub fn deep_ro_quot_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
     query: usize,
+) -> Result<DeepRoStepProof, String> {
+    deep_ro_quot_from_agg_proof_with_queries(proof, query, DEVNET_FRI_NUM_QUERIES)
+}
+
+pub fn deep_ro_quot_from_agg_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    query: usize,
+    num_queries: usize,
 ) -> Result<DeepRoStepProof, String> {
     let chal = replay_agg_fri_challenges(proof)?;
     let view = decode_pcs_view(proof)?;
@@ -129,7 +142,17 @@ pub fn deep_ro_quot_from_agg_proof(
         .ok_or_else(|| "missing lambda for quot height".to_string())?;
 
     let log_n = quot_log_height - log_blowup;
-    generate_deep_ro_proof(p.x, p.y, chal.batch_alpha, px, pz, lambda, log_n, chal.zeta)
+    generate_deep_ro_proof_with_queries(
+        p.x,
+        p.y,
+        chal.batch_alpha,
+        px,
+        pz,
+        lambda,
+        log_n,
+        chal.zeta,
+        num_queries,
+    )
 }
 
 /// Prove DeepRo for AggregationAir FRI query 0 quotient batch.
@@ -257,6 +280,14 @@ pub fn deep_ro_trace_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
     query: usize,
 ) -> Result<DeepRoTraceStepProof, String> {
+    deep_ro_trace_from_agg_proof_with_queries(proof, query, DEVNET_FRI_NUM_QUERIES)
+}
+
+pub fn deep_ro_trace_from_agg_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    query: usize,
+    num_queries: usize,
+) -> Result<DeepRoTraceStepProof, String> {
     let chal = replay_agg_fri_challenges(proof)?;
     let view = decode_pcs_view(proof)?;
     if query >= chal.query_indices.len() {
@@ -332,7 +363,7 @@ pub fn deep_ro_trace_from_agg_proof(
         .ok_or_else(|| "missing lambda for trace height".to_string())?;
 
     let log_n = trace_log_height - log_blowup;
-    generate_deep_ro_trace_proof(
+    generate_deep_ro_trace_proof_with_queries(
         p.x,
         p.y,
         chal.batch_alpha,
@@ -343,6 +374,7 @@ pub fn deep_ro_trace_from_agg_proof(
         log_n,
         zeta,
         zeta_next,
+        num_queries,
     )
 }
 
@@ -484,6 +516,13 @@ pub fn bind_deep_ro_trace_to_fold_y(
 pub fn deep_ro_bundle_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
 ) -> Result<AggDeepRoBundle, String> {
+    deep_ro_bundle_from_agg_proof_with_queries(proof, DEVNET_FRI_NUM_QUERIES)
+}
+
+pub fn deep_ro_bundle_from_agg_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    num_queries: usize,
+) -> Result<AggDeepRoBundle, String> {
     let chal = replay_agg_fri_challenges(proof)?;
     let proven_queries = chal.query_indices.len();
     if proven_queries == 0 || proven_queries > AGG_FRI_PROVEN_QUERIES {
@@ -494,13 +533,13 @@ pub fn deep_ro_bundle_from_agg_proof(
     let mut deep_ros = Vec::with_capacity(proven_queries);
     let mut deep_ro_traces = Vec::with_capacity(proven_queries);
     for q in 0..proven_queries {
-        let deep = deep_ro_quot_from_agg_proof(proof, q)
+        let deep = deep_ro_quot_from_agg_proof_with_queries(proof, q, num_queries)
             .map_err(|e| format!("DeepRo quot query {q}: {e}"))?;
         if !verify_deep_ro_proof(&deep) {
             return Err(format!("DeepRo self-check failed at query {q}"));
         }
         deep_ros.push(deep);
-        let deep_tr = deep_ro_trace_from_agg_proof(proof, q)
+        let deep_tr = deep_ro_trace_from_agg_proof_with_queries(proof, q, num_queries)
             .map_err(|e| format!("DeepRoTrace query {q}: {e}"))?;
         if !verify_deep_ro_trace_proof(&deep_tr) {
             return Err(format!("DeepRoTrace self-check failed at query {q}"));
@@ -566,10 +605,20 @@ fn fold_y_offset_for_query_width(
 }
 
 /// Prove DeepRo for leaf FRI quotient batch at `query` (W=3, any main-trace width).
+#[allow(dead_code)] // convenience wrapper; cert path uses *_with_queries
 pub fn deep_ro_quot_from_proof(
     proof: &Proof<WqcStarkConfig>,
     query: usize,
     trace_width: usize,
+) -> Result<DeepRoStepProof, String> {
+    deep_ro_quot_from_proof_with_queries(proof, query, trace_width, DEVNET_FRI_NUM_QUERIES)
+}
+
+pub fn deep_ro_quot_from_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    query: usize,
+    trace_width: usize,
+    num_queries: usize,
 ) -> Result<DeepRoStepProof, String> {
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
@@ -632,14 +681,34 @@ pub fn deep_ro_quot_from_proof(
         .ok_or_else(|| "missing lambda for quot height".to_string())?;
 
     let log_n = quot_log_height - log_blowup;
-    generate_deep_ro_proof(p.x, p.y, chal.batch_alpha, px, pz, lambda, log_n, chal.zeta)
+    generate_deep_ro_proof_with_queries(
+        p.x,
+        p.y,
+        chal.batch_alpha,
+        px,
+        pz,
+        lambda,
+        log_n,
+        chal.zeta,
+        num_queries,
+    )
 }
 
 /// Prove DeepRoLeafTrace for leaf FRI trace batch at `query`.
+#[allow(dead_code)] // convenience wrapper; cert path uses *_with_queries
 pub fn deep_ro_leaf_trace_from_proof(
     proof: &Proof<WqcStarkConfig>,
     query: usize,
     trace_width: usize,
+) -> Result<DeepRoLeafTraceStepProof, String> {
+    deep_ro_leaf_trace_from_proof_with_queries(proof, query, trace_width, DEVNET_FRI_NUM_QUERIES)
+}
+
+pub fn deep_ro_leaf_trace_from_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    query: usize,
+    trace_width: usize,
+    num_queries: usize,
 ) -> Result<DeepRoLeafTraceStepProof, String> {
     let chal = replay_fri_challenges(proof, trace_width)?;
     let view = decode_pcs_view(proof)?;
@@ -709,7 +778,7 @@ pub fn deep_ro_leaf_trace_from_proof(
         .ok_or_else(|| "missing lambda for trace height".to_string())?;
 
     let log_n = trace_log_height - log_blowup;
-    generate_deep_ro_leaf_trace_proof(
+    generate_deep_ro_leaf_trace_proof_with_queries(
         p.x,
         p.y,
         chal.batch_alpha,
@@ -720,6 +789,7 @@ pub fn deep_ro_leaf_trace_from_proof(
         log_n,
         zeta,
         zeta_next,
+        num_queries,
     )
 }
 
@@ -973,6 +1043,14 @@ pub fn deep_ro_bundle_from_leaf_proof(
     proof: &Proof<WqcStarkConfig>,
     trace_width: usize,
 ) -> Result<LeafDeepRoBundle, String> {
+    deep_ro_bundle_from_leaf_proof_with_queries(proof, trace_width, DEVNET_FRI_NUM_QUERIES)
+}
+
+pub fn deep_ro_bundle_from_leaf_proof_with_queries(
+    proof: &Proof<WqcStarkConfig>,
+    trace_width: usize,
+    num_queries: usize,
+) -> Result<LeafDeepRoBundle, String> {
     let chal = replay_fri_challenges(proof, trace_width)?;
     let proven_queries = chal.query_indices.len();
     if proven_queries == 0 || proven_queries > LEAF_FRI_PROVEN_QUERIES {
@@ -983,14 +1061,15 @@ pub fn deep_ro_bundle_from_leaf_proof(
     let mut deep_ros = Vec::with_capacity(proven_queries);
     let mut deep_ro_traces = Vec::with_capacity(proven_queries);
     for q in 0..proven_queries {
-        let deep = deep_ro_quot_from_proof(proof, q, trace_width)
+        let deep = deep_ro_quot_from_proof_with_queries(proof, q, trace_width, num_queries)
             .map_err(|e| format!("DeepRo quot query {q}: {e}"))?;
         if !verify_deep_ro_proof(&deep) {
             return Err(format!("DeepRo self-check failed at query {q}"));
         }
         deep_ros.push(deep);
-        let deep_tr = deep_ro_leaf_trace_from_proof(proof, q, trace_width)
-            .map_err(|e| format!("DeepRoLeafTrace query {q}: {e}"))?;
+        let deep_tr =
+            deep_ro_leaf_trace_from_proof_with_queries(proof, q, trace_width, num_queries)
+                .map_err(|e| format!("DeepRoLeafTrace query {q}: {e}"))?;
         if !verify_deep_ro_leaf_trace_proof(&deep_tr) {
             return Err(format!("DeepRoLeafTrace self-check failed at query {q}"));
         }

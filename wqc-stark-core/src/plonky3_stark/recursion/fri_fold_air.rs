@@ -263,6 +263,44 @@ pub fn fri_fold_step_limbs_x(
     })
 }
 
+pub(crate) fn fri_fold_x_native_ok(proof: &FriFoldStepProof) -> bool {
+    let beta = limbs_to_challenge(proof.beta_limbs);
+    let v0 = limbs_to_challenge(proof.v0_limbs);
+    let v1 = limbs_to_challenge(proof.v1_limbs);
+    let out = limbs_to_challenge(proof.out_limbs);
+    let expect_t = fold_x_twiddle_inv(proof.index as usize, proof.log_folded_height as usize);
+    if proof.t_inv != expect_t {
+        return false;
+    }
+    let expect_out = fold_x_row(
+        proof.index as usize,
+        proof.log_folded_height as usize,
+        beta,
+        v0,
+        v1,
+    );
+    out == expect_out
+}
+
+pub(crate) fn fri_fold_y_native_ok(proof: &FriFoldStepProof) -> bool {
+    let beta = limbs_to_challenge(proof.beta_limbs);
+    let v0 = limbs_to_challenge(proof.v0_limbs);
+    let v1 = limbs_to_challenge(proof.v1_limbs);
+    let out = limbs_to_challenge(proof.out_limbs);
+    let expect_t = fold_y_twiddle_inv(proof.index as usize, proof.log_folded_height as usize);
+    if proof.t_inv != expect_t {
+        return false;
+    }
+    let expect_out = fold_y_row(
+        proof.index as usize,
+        proof.log_folded_height as usize,
+        beta,
+        v0,
+        v1,
+    );
+    out == expect_out
+}
+
 /// Native twiddle + fold algebra for a fold_x step (ignores `fold_stark`).
 pub fn verify_fri_fold_x_native(proof: &FriFoldStepProof) -> bool {
     let beta = limbs_to_challenge(proof.beta_limbs);

@@ -33,6 +33,8 @@ mod keccak_f_native;
 mod keccak_merkle_air;
 mod leaf_pcs_cert;
 mod merkle_keccak;
+mod merkle_poseidon2;
+mod mmcs_group_fold;
 mod ood_air;
 mod ood_bind;
 mod ood_fold;
@@ -41,6 +43,10 @@ mod ood_native;
 mod opening_cert;
 mod pcs_geom;
 mod pcs_memory;
+mod poseidon2_group_m4b;
+mod poseidon2_perm_air;
+mod poseidon2_spike;
+mod poseidon_merkle_migration;
 mod prove;
 mod prove_workspace;
 mod transcript_v5;
@@ -81,11 +87,13 @@ pub use fri_fold_bind::{
     LEAF_FRI_PROVEN_QUERIES, MAX_FRI_PROVEN_QUERIES,
 };
 pub use fri_fold_group::{
-    generate_fri_fold_group_proof, verify_fri_fold_group_proof, FriFoldGroupAir, FriFoldGroupProof,
-    FRI_FOLD_GROUP_MAX_STEPS, FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y,
+    generate_fri_fold_group_proof, generate_fri_fold_group_proof_with_queries,
+    verify_fri_fold_group_proof, FriFoldGroupAir, FriFoldGroupProof, FRI_FOLD_GROUP_MAX_STEPS,
+    FRI_FOLD_KIND_X, FRI_FOLD_KIND_Y, FRI_FOLD_KIND_YX,
 };
 pub use fri_fold_m4c::{
-    apply_leaf_fri_fold_m4c_folds, bind_fri_fold_with_groups, LeafFriFoldGroups, LEAF_FRI_FOLD_V,
+    apply_leaf_fri_fold_m4c_folds, apply_leaf_fri_fold_m4c_folds_with_queries,
+    bind_fri_fold_with_groups, LeafFriFoldGroups, LEAF_FRI_FOLD_V,
 };
 pub use fri_fs_replay::{
     circle_config_matching_proof, fri_queries_from_proof, replay_agg_fri_challenges,
@@ -100,13 +108,23 @@ pub use fri_mmcs_bind::{
     FriChalBatchPathProof, FriChalMmcsQueryProof, FriValMmcsQueryProof,
 };
 pub use fri_mmcs_group_m4b::{
-    generate_keccak_group_fold_proof, verify_keccak_group_fold_proof, KeccakGroupFoldProof,
-    MmcsGroupPathAir, MmcsPathStatement,
+    generate_keccak_group_fold_proof, generate_keccak_group_fold_proof_with_queries,
+    m4b_group_chunk, nested_fri_queries, verify_keccak_group_fold_proof, KeccakGroupFoldProof,
+    MmcsGroupPathAir, MmcsPathStatement, M4B_GROUP_CHUNK_DEFAULT, PCS_MMCS_GROUP_CHUNK_ENV,
+    PCS_NESTED_FRI_QUERIES_ENV,
 };
-pub use fri_mmcs_m4c::{LeafMmcsFoldGroups, LEAF_MMCS_FOLD_V};
+pub use fri_mmcs_m4c::{
+    apply_leaf_mmcs_m4c_folds, benchmark_poseidon_mmcs_groups, bind_leaf_mmcs_with_groups,
+    chal_mmcs_sibling_wire_bytes, collect_leaf_mmcs_group_statements,
+    hydrate_chal_mmcs_siblings_from_proof, hydrate_val_mmcs_siblings_from_proof,
+    mmcs_sibling_strip_enabled, strip_chal_mmcs_siblings_for_groups,
+    strip_val_mmcs_siblings_for_groups, val_mmcs_sibling_wire_bytes, LeafMmcsFoldGroups,
+    LeafMmcsGroupStatements, PoseidonMmcsBenchmarkReport, LEAF_MMCS_FOLD_V,
+    PCS_STRIP_MMCS_SIBLINGS_ENV,
+};
 pub use fri_mmcs_path::{
     generate_fri_mmcs_path_proof, generate_fri_mmcs_path_proof_drop_nested,
-    verify_fri_mmcs_path_proof, FriMmcsFoldAir, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
+    verify_fri_mmcs_path_proof, FriMmcsPathProof, FRI_MMCS_MAX_DEPTH,
 };
 pub use fri_mmcs_path_m4a::{
     generate_fri_mmcs_batched_path_proof, verify_fri_mmcs_batched_path_proof,
@@ -124,13 +142,20 @@ pub use keccak_merkle_air::{
     MerkleFoldAir, MERKLE_FOLD_DEPTH,
 };
 pub use leaf_pcs_cert::{
-    build_encoded_leaf_pcs_bundle_from_child, build_leaf_pcs_bundle_from_child,
-    build_leaf_pcs_certificate, leaf_bundle_stark_sizes, leaf_bundle_stmt_digest,
-    leaf_pcs_stark_sizes, leaf_stmt_digest, verify_leaf_pcs_bundle, verify_leaf_pcs_certificate,
-    LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
+    benchmark_poseidon_mmcs_from_child, build_encoded_leaf_pcs_bundle_from_child,
+    build_leaf_pcs_bundle_from_child, build_leaf_pcs_certificate, leaf_bundle_stark_sizes,
+    leaf_bundle_stmt_digest, leaf_pcs_stark_sizes, leaf_stmt_digest, verify_leaf_pcs_bundle,
+    verify_leaf_pcs_certificate, LeafPcsBundle, LeafPcsCertificate, LeafPcsStarkSizes,
 };
 pub use merkle_keccak::{
-    compress_digests, hash_lde_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
+    compress_digests, hash_lde_leaf, hash_val_leaf, verify_agg_merkle_path, AGG_LDE_MERKLE_DEPTH,
+};
+pub use merkle_poseidon2::{
+    compress_digests_poseidon, hash_val_leaf_poseidon, merkle_root_from_path_poseidon,
+};
+pub use mmcs_group_fold::{
+    mmcs_group_hash_kind, poseidon_group_width_supported, MmcsGroupFoldProof, MmcsGroupHashKind,
+    MMCS_GROUP_HASH_KECCAK, MMCS_GROUP_HASH_POSEIDON, PCS_MMCS_HASH_ENV,
 };
 pub use ood_air::{
     generate_ood_proof, verify_ood_proof, OodAirKind, OodCheckAir, OodStepProof,
@@ -157,6 +182,17 @@ pub use pcs_geom::{
 pub use pcs_memory::{
     budget_bytes_from_env, estimate_pcs_peak_bytes, plan_pcs_memory, PcsMemoryPlan,
     PcsMemoryPolicy, PCS_MEMORY_ERR_PREFIX,
+};
+pub use poseidon2_group_m4b::{
+    generate_poseidon_group_fold_proof, generate_poseidon_group_fold_proof_with_queries,
+    verify_poseidon_group_fold_proof, PoseidonGroupFoldProof, PoseidonMmcsGroupPathAir,
+};
+pub use poseidon2_perm_air::{
+    generate_poseidon2_perm_proof, verify_poseidon2_perm_proof, Poseidon2PermAir,
+    POSEIDON2_PERM_ROWS, POSEIDON2_PERM_WIDTH,
+};
+pub use poseidon_merkle_migration::{
+    mmcs_merkle_mode, poseidon_group_spike_active, poseidon_native_mmcs_active, MmcsMerkleMode,
 };
 pub use prove::{
     append_rec_tail, generate_recursive_aggregation_proof, has_rec_tail, split_rec_tail,

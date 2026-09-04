@@ -263,7 +263,7 @@ mod tests {
     use p3_keccak::Keccak256Hash;
     use p3_symmetric::CryptographicHasher;
 
-    use crate::plonky3_stark::recursion::merkle_keccak::{compress_digests, hash_lde_leaf};
+    use crate::plonky3_stark::recursion::merkle_keccak::{compress_digests_keccak, hash_lde_leaf};
 
     #[test]
     fn keccak256_matches_p3() {
@@ -287,7 +287,7 @@ mod tests {
         let right = [7u8; 32];
         assert_eq!(
             keccak256_compress(left, right),
-            compress_digests(left, right)
+            compress_digests_keccak(left, right)
         );
 
         let row: Vec<_> = (0..AGG_WIDTH)
