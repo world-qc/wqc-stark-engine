@@ -7,9 +7,8 @@
 //! 2. **`WQC_PCS_MMCS_GROUP_CHUNK`** → fewer/larger group STARKs (sublinear wire savings;
 //!    chunk40 helps when fri_num_queries > chunk; exhausted at 40q/chunk40 = 1 group/cat)
 //! 3. Group AIR / public-value shrink — both Mmcs group AIRs pack publics by actual
-//!    depth with a shared-root header and chain layer digests through segment
-//!    transitions; FriFold groups hoist a shared `beta`. These cut publics ~4x but
-//!    barely move `group_stark`, which is dominated by nested FRI commitments.
+//!    depth/width with shared-root header and width/depth onehots; FriFold groups
+//!    hoist a shared `beta`. Poseidon can merge mixed-width val_trace+quot paths.
 //! 4. Wire dedup — leaf/layer digests omitted from PCS wire and recomputed at verify
 //!    (mmcs fold wire v6; path + chal-batch stubs); FriFold residual limbs omitted when
 //!    groups cover them (FriFold wire v2). This is where PCS metadata shrinks.

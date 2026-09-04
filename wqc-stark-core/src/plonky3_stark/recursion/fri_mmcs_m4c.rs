@@ -369,6 +369,14 @@ fn group_eligible(stmts: &[MmcsPathStatement]) -> bool {
         .all(|s| s.row.len() == width && !s.siblings.is_empty())
 }
 
+/// Poseidon-only: allow mixed leaf widths (pad-to-max + width_onehot in the AIR).
+fn group_eligible_poseidon_mixed(stmts: &[MmcsPathStatement]) -> bool {
+    !stmts.is_empty()
+        && stmts
+            .iter()
+            .all(|s| poseidon_group_width_supported(s.row.len()) && !s.siblings.is_empty())
+}
+
 fn depths_homogeneous(stmts: &[MmcsPathStatement]) -> bool {
     let depth = stmts[0].siblings.len();
     stmts.iter().all(|s| s.siblings.len() == depth)
@@ -410,6 +418,33 @@ fn try_group_chunked(
             }
         };
         groups.push(g);
+    }
+    groups.shrink_to_fit();
+    Ok(groups)
+}
+
+/// Fold val_trace + val_quot_batch into as few Poseidon STARKs as possible (mixed width).
+fn try_group_val_combined(
+    stmts: &[MmcsPathStatement],
+    num_queries: usize,
+) -> Result<Vec<MmcsGroupFoldProof>, String> {
+    if mmcs_group_hash_kind() != MmcsGroupHashKind::Poseidon {
+        return Ok(Vec::new());
+    }
+    if !group_eligible_poseidon_mixed(stmts) {
+        return Ok(Vec::new());
+    }
+    if stmts.len() <= M4B_MAX_PATHS {
+        return Ok(vec![MmcsGroupFoldProof::Poseidon(
+            generate_poseidon_group_fold_proof_with_queries(stmts, num_queries)?,
+        )]);
+    }
+    let chunk = M4B_MAX_PATHS.min(m4b_group_chunk().max(1));
+    let mut groups = Vec::with_capacity(stmts.len().div_ceil(chunk));
+    for c in stmts.chunks(chunk) {
+        groups.push(MmcsGroupFoldProof::Poseidon(
+            generate_poseidon_group_fold_proof_with_queries(c, num_queries)?,
+        ));
     }
     groups.shrink_to_fit();
     Ok(groups)
@@ -805,38 +840,74 @@ pub fn apply_leaf_mmcs_m4c_folds(
     let num_queries = nested_fri_queries(outer_queries);
 
     let trace_stmts = collect_val_trace_stmts(proof, trace_width, &bundle.val)?;
-    let trace_groups = try_group_chunked(&trace_stmts, num_queries)?;
-    if !trace_groups.is_empty() {
-        for qp in &mut bundle.val {
-            strip_fri_mmcs_path_starks(&mut qp.trace_path);
-        }
-        groups.val_trace = trace_groups;
-    }
-
-    if let Some(quot_stmts) = collect_val_quot_stmts(proof, trace_width, &bundle.val)? {
-        let quot_groups = try_group_chunked(&quot_stmts, num_queries)?;
-        if !quot_groups.is_empty() {
-            for qp in &mut bundle.val {
-                strip_fri_mmcs_path_starks(&mut qp.quot_path);
-            }
-            groups.val_quot = quot_groups;
-        }
+    let quot_single = collect_val_quot_stmts(proof, trace_width, &bundle.val)?;
+    let batch_opt = if quot_single.is_none() {
+        collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)?
     } else {
-        // Multi-chunk stub path — strip always.
-        for qp in &mut bundle.val {
-            if qp.quot_batch.is_some() {
-                strip_fri_mmcs_path_starks(&mut qp.quot_path);
-            }
-        }
-        if let Some(batch_stmts) = collect_val_quot_batch_stmts(proof, trace_width, &bundle.val)? {
-            let batch_groups = try_group_chunked(&batch_stmts, num_queries)?;
-            if !batch_groups.is_empty() {
+        None
+    };
+
+    let mut val_merged = false;
+    if let Some(ref batch_stmts) = batch_opt {
+        if !batch_stmts.is_empty() && !trace_stmts.is_empty() {
+            let mut val_all = Vec::with_capacity(trace_stmts.len() + batch_stmts.len());
+            val_all.extend_from_slice(&trace_stmts);
+            val_all.extend_from_slice(batch_stmts);
+            let merged = try_group_val_combined(&val_all, num_queries)?;
+            if !merged.is_empty() {
                 for qp in &mut bundle.val {
+                    strip_fri_mmcs_path_starks(&mut qp.trace_path);
                     if let Some(ref mut batch) = qp.quot_batch {
                         strip_chal_batch_starks(batch);
                     }
                 }
-                groups.val_quot_batch = batch_groups;
+                groups.val_trace = merged;
+                val_merged = true;
+            }
+        }
+    }
+
+    if !val_merged {
+        let trace_groups = try_group_chunked(&trace_stmts, num_queries)?;
+        if !trace_groups.is_empty() {
+            for qp in &mut bundle.val {
+                strip_fri_mmcs_path_starks(&mut qp.trace_path);
+            }
+            groups.val_trace = trace_groups;
+        }
+
+        if let Some(quot_stmts) = quot_single {
+            let quot_groups = try_group_chunked(&quot_stmts, num_queries)?;
+            if !quot_groups.is_empty() {
+                for qp in &mut bundle.val {
+                    strip_fri_mmcs_path_starks(&mut qp.quot_path);
+                }
+                groups.val_quot = quot_groups;
+            }
+        } else {
+            // Multi-chunk stub path — strip always.
+            for qp in &mut bundle.val {
+                if qp.quot_batch.is_some() {
+                    strip_fri_mmcs_path_starks(&mut qp.quot_path);
+                }
+            }
+            if let Some(batch_stmts) = batch_opt {
+                let batch_groups = try_group_chunked(&batch_stmts, num_queries)?;
+                if !batch_groups.is_empty() {
+                    for qp in &mut bundle.val {
+                        if let Some(ref mut batch) = qp.quot_batch {
+                            strip_chal_batch_starks(batch);
+                        }
+                    }
+                    groups.val_quot_batch = batch_groups;
+                }
+            }
+        }
+    } else {
+        // Merged path still clears unused single-quot stub STARKs when present.
+        for qp in &mut bundle.val {
+            if qp.quot_batch.is_some() {
+                strip_fri_mmcs_path_starks(&mut qp.quot_path);
             }
         }
     }
@@ -1212,9 +1283,42 @@ fn bind_val_with_groups(
         init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
     let quot_chunk_domains = quot_parent.split_domains(num_quot);
 
-    if !groups.val_trace.is_empty() {
-        let stmts = collect_val_trace_stmts(proof, trace_width, bundle)?;
-        verify_group_chunks(&stmts, &groups.val_trace, "val trace")?;
+    let trace_stmts = collect_val_trace_stmts(proof, trace_width, bundle)?;
+    let batch_opt = collect_val_quot_batch_stmts(proof, trace_width, bundle)?;
+    let batch_n = batch_opt.as_ref().map(|s| s.len()).unwrap_or(0);
+    let val_trace_n: usize = groups
+        .val_trace
+        .iter()
+        .map(|g| g.path_count() as usize)
+        .sum();
+    let val_merged = groups.val_quot_batch.is_empty()
+        && groups.val_quot.is_empty()
+        && !groups.val_trace.is_empty()
+        && batch_n > 0
+        && val_trace_n == trace_stmts.len() + batch_n;
+
+    if val_merged {
+        let mut all = Vec::with_capacity(trace_stmts.len() + batch_n);
+        all.extend_from_slice(&trace_stmts);
+        all.extend_from_slice(batch_opt.as_ref().unwrap());
+        verify_group_chunks(&all, &groups.val_trace, "val trace+quot_batch")?;
+        for (q, qp) in bundle.iter().enumerate() {
+            let query_index = chal.query_indices[q];
+            let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
+            let row = &input.input_openings[0].opened_values[0];
+            let t_idx = query_index >> (log_global_max_height - trace_log_height);
+            if !verify_fri_mmcs_path_digests(
+                row,
+                &qp.trace_siblings,
+                t_idx,
+                &trace_root,
+                &qp.trace_path,
+            ) {
+                return Err(format!("q{q}: stripped trace digests"));
+            }
+        }
+    } else if !groups.val_trace.is_empty() {
+        verify_group_chunks(&trace_stmts, &groups.val_trace, "val trace")?;
         for (q, qp) in bundle.iter().enumerate() {
             let query_index = chal.query_indices[q];
             let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
@@ -1239,7 +1343,8 @@ fn bind_val_with_groups(
     }
 
     if !groups.val_quot_batch.is_empty() {
-        let stmts = collect_val_quot_batch_stmts(proof, trace_width, bundle)?
+        let stmts = batch_opt
+            .clone()
             .ok_or_else(|| "val quot batch group present but statements unavailable".to_string())?;
         verify_group_chunks(&stmts, &groups.val_quot_batch, "val quot batch")?;
     }
@@ -1301,7 +1406,7 @@ fn bind_val_with_groups(
             if qp.quot_index as usize != q_idx {
                 return Err(format!("q{q}: quot batch index mismatch"));
             }
-            if !groups.val_quot_batch.is_empty() {
+            if !groups.val_quot_batch.is_empty() || val_merged {
                 if !verify_chal_batch_path_digests(
                     &input.input_openings[1].opened_values,
                     &fl_dims,
