@@ -810,3 +810,76 @@ mod wrap_ood_shot_golden {
         }
     }
 }
+
+#[cfg(test)]
+mod wrap_ood_born_golden {
+    use super::*;
+    use crate::plonky3_stark::config::Challenge;
+    use crate::plonky3_stark::distribution_air::{
+        DistributionAir, COL_IM, COL_RE,
+    };
+    use crate::plonky3_stark::recursion::fri_fold_native::challenge_to_limbs;
+    use crate::plonky3_stark::recursion::ood_fold::fold_ood_native;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_mersenne_31::Mersenne31 as Val;
+
+    #[test]
+    fn emit_born_ood_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_ood_born_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_ood_born_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let air = DistributionAir {
+            dim: 1,
+            num_outcomes: 2,
+        };
+        let w = air.width();
+        let mut local = vec![Challenge::ZERO; w];
+        let mut next = vec![Challenge::ZERO; w];
+        local[COL_RE] = Challenge::new([Val::from_u32(3), Val::ZERO, Val::ZERO]);
+        local[COL_IM] = Challenge::new([Val::from_u32(4), Val::ZERO, Val::ZERO]);
+        next[COL_RE] = local[COL_RE];
+        next[COL_IM] = local[COL_IM];
+        local[air.col_sel(0)] = Challenge::ONE;
+        next[air.col_sel(0)] = Challenge::ONE;
+        local[air.col_mass(0)] = Challenge::new([Val::from_u32(24), Val::ZERO, Val::ZERO]);
+        next[air.col_mass(0)] = local[air.col_mass(0)];
+
+        let alpha = Challenge::new([Val::from_u32(9), Val::from_u32(2), Val::from_u32(3)]);
+        let inv_van = Challenge::new([Val::from_u32(3), Val::from_u32(4), Val::from_u32(5)]);
+        let folded = fold_ood_native(
+            OodAirKind::Distribution,
+            2,
+            1,
+            &local,
+            &next,
+            Challenge::ONE,  // is_first
+            Challenge::ZERO, // is_last
+            Challenge::ZERO, // is_transition
+            alpha,
+        );
+        let quot = folded * inv_van;
+        let folded_l = challenge_to_limbs(folded);
+        let quot_l = challenge_to_limbs(quot);
+
+        let want_folded: Vec<u32> = v["folded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        let want_quot: Vec<u32> = v["quotient"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        for i in 0..3 {
+            assert_eq!(folded_l[i].as_canonical_u32(), want_folded[i]);
+            assert_eq!(quot_l[i].as_canonical_u32(), want_quot[i]);
+        }
+    }
+}

@@ -1,0 +1,21 @@
+{
+  "statement": "thick_ood_born_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine fold_ood_native(Distribution) / fold_distribution_in_circuit",
+  "measured_at": "2026-09-05",
+  "kind": "distribution",
+  "num_outcomes": 2,
+  "width": 9,
+  "scale": 10000,
+  "alpha": [9, 2, 3],
+  "is_first_row": [1, 0, 0],
+  "is_last_row": [0, 0, 0],
+  "is_transition": [0, 0, 0],
+  "inv_vanishing": [3, 4, 5],
+  "re": 3,
+  "im": 4,
+  "mass0": 24,
+  "folded": [1834117649, 564625647, 53515651],
+  "quotient": [1360954319, 1778304224, 852219551],
+  "notes": "K=2 fixed cut; first-row mass[0] off-by-one vs |amp|²"
+}
