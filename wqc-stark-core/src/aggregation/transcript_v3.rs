@@ -175,3 +175,38 @@ mod tests {
         assert_eq!(header.left_child_hash, header2.left_child_hash);
     }
 }
+
+#[cfg(test)]
+mod wrap_child_audit_golden {
+    use super::child_digest;
+
+    #[test]
+    fn emit_child_audit_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_child_audit_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_child_audit_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let left: Vec<u8> = (0u8..64).collect();
+        let right: Vec<u8> = (64u8..128).collect();
+        let got_left = child_digest(&left);
+        let got_right = child_digest(&right);
+
+        let want_left: Vec<u8> = v["left_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_right: Vec<u8> = v["right_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(got_left.as_slice(), want_left.as_slice());
+        assert_eq!(got_right.as_slice(), want_right.as_slice());
+    }
+}
