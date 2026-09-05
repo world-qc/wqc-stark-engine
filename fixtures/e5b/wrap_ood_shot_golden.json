@@ -1,0 +1,20 @@
+{
+  "statement": "thick_ood_shot_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine fold_ood_native(ShotSampling) / fold_shot_sampling_in_circuit",
+  "measured_at": "2026-09-05",
+  "kind": "shot_sampling",
+  "width": 26,
+  "gap_bits": 20,
+  "scale": 1000,
+  "alpha": [9, 2, 3],
+  "inv_vanishing": [3, 4, 5],
+  "p0": 500,
+  "p1": 500,
+  "u": 400,
+  "outcome": 0,
+  "gap": 99998,
+  "folded": [9, 2, 3],
+  "quotient": [137, 117, 62],
+  "notes": "Bernoulli gap off-by-one → folded equals alpha; Born OOD still open"
+}

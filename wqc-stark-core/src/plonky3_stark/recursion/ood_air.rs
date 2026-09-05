@@ -735,3 +735,78 @@ mod wrap_ood_unitary_golden {
         }
     }
 }
+
+#[cfg(test)]
+mod wrap_ood_shot_golden {
+    use super::*;
+    use crate::air::shot_sampling::SHOT_SAMPLING_GAP_BITS;
+    use crate::plonky3_stark::config::Challenge;
+    use crate::plonky3_stark::recursion::fri_fold_native::challenge_to_limbs;
+    use crate::plonky3_stark::recursion::ood_fold::fold_ood_native;
+    use crate::plonky3_stark::shot_sampling_air::{
+        SHOT_SAMPLING_AIR_WIDTH, SHOT_SAMPLING_COL_GAP, SHOT_SAMPLING_COL_GAP_BITS,
+        SHOT_SAMPLING_COL_IS_PAD, SHOT_SAMPLING_COL_OUTCOME, SHOT_SAMPLING_COL_P0,
+        SHOT_SAMPLING_COL_P1, SHOT_SAMPLING_COL_U,
+    };
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_mersenne_31::Mersenne31 as Val;
+
+    #[test]
+    fn emit_shot_ood_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_ood_shot_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_ood_shot_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let gap: u32 = 99998;
+        let mut local = vec![Challenge::ZERO; SHOT_SAMPLING_AIR_WIDTH];
+        local[SHOT_SAMPLING_COL_P0] = Challenge::new([Val::from_u32(500), Val::ZERO, Val::ZERO]);
+        local[SHOT_SAMPLING_COL_P1] = Challenge::new([Val::from_u32(500), Val::ZERO, Val::ZERO]);
+        local[SHOT_SAMPLING_COL_U] = Challenge::new([Val::from_u32(400), Val::ZERO, Val::ZERO]);
+        local[SHOT_SAMPLING_COL_OUTCOME] = Challenge::ZERO;
+        local[SHOT_SAMPLING_COL_GAP] = Challenge::new([Val::from_u32(gap), Val::ZERO, Val::ZERO]);
+        for i in 0..SHOT_SAMPLING_GAP_BITS {
+            let bit = (gap >> i) & 1;
+            local[SHOT_SAMPLING_COL_GAP_BITS + i] =
+                Challenge::new([Val::from_u32(bit), Val::ZERO, Val::ZERO]);
+        }
+        local[SHOT_SAMPLING_COL_IS_PAD] = Challenge::ZERO;
+        let next = local.clone();
+
+        let alpha = Challenge::new([Val::from_u32(9), Val::from_u32(2), Val::from_u32(3)]);
+        let inv_van = Challenge::new([Val::from_u32(3), Val::from_u32(4), Val::from_u32(5)]);
+        let folded = fold_ood_native(
+            OodAirKind::ShotSampling,
+            0,
+            1,
+            &local,
+            &next,
+            Challenge::ZERO,
+            Challenge::ZERO,
+            Challenge::ONE,
+            alpha,
+        );
+        let quot = folded * inv_van;
+        let folded_l = challenge_to_limbs(folded);
+        let quot_l = challenge_to_limbs(quot);
+
+        let want_folded: Vec<u32> = v["folded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        let want_quot: Vec<u32> = v["quotient"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        for i in 0..3 {
+            assert_eq!(folded_l[i].as_canonical_u32(), want_folded[i]);
+            assert_eq!(quot_l[i].as_canonical_u32(), want_quot[i]);
+        }
+    }
+}
