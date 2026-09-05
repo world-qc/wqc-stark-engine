@@ -674,3 +674,64 @@ mod wrap_ood_golden {
         }
     }
 }
+
+#[cfg(test)]
+mod wrap_ood_unitary_golden {
+    use super::*;
+    use crate::plonky3_stark::config::Challenge;
+    use crate::plonky3_stark::recursion::fri_fold_native::challenge_to_limbs;
+    use crate::plonky3_stark::recursion::ood_fold::fold_ood_native;
+    use crate::trace_spec::AIR_WIDTH;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_mersenne_31::Mersenne31 as Val;
+
+    #[test]
+    fn emit_unitary_ood_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_ood_unitary_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_ood_unitary_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let mut local = vec![Challenge::ZERO; AIR_WIDTH];
+        let mut next = vec![Challenge::ZERO; AIR_WIDTH];
+        local[20] = Challenge::ONE; // link
+        next[15] = Challenge::new([Val::from_u32(5), Val::ZERO, Val::ZERO]);
+
+        let alpha = Challenge::new([Val::from_u32(9), Val::from_u32(2), Val::from_u32(3)]);
+        let is_trans = Challenge::ONE;
+        let inv_van = Challenge::new([Val::from_u32(3), Val::from_u32(4), Val::from_u32(5)]);
+        let folded = fold_ood_native(
+            OodAirKind::Unitary,
+            0,
+            1,
+            &local,
+            &next,
+            Challenge::ZERO,
+            Challenge::ZERO,
+            is_trans,
+            alpha,
+        );
+        let quot = folded * inv_van;
+        let folded_l = challenge_to_limbs(folded);
+        let quot_l = challenge_to_limbs(quot);
+
+        let want_folded: Vec<u32> = v["folded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        let want_quot: Vec<u32> = v["quotient"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        for i in 0..3 {
+            assert_eq!(folded_l[i].as_canonical_u32(), want_folded[i]);
+            assert_eq!(quot_l[i].as_canonical_u32(), want_quot[i]);
+        }
+    }
+}
