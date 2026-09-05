@@ -1,0 +1,20 @@
+{
+  "statement": "thick_unified_v0",
+  "gate": "e5b-3d",
+  "source": "compose thin settle + thick_mmcs_v0 + thick_fri_v0 + thick_ood_v0 + thick_child_audit_v0",
+  "measured_at": "2026-09-06",
+  "components": [
+    "thin_wrap_v0 settle PI bind",
+    "thick_mmcs_v0 ValMmcs leaf+path",
+    "thick_fri_v0 fold_y+fold_x log_h=3",
+    "thick_ood_v0 Aggregation OOD",
+    "thick_child_audit_v0 SHA3-256 digest bind"
+  ],
+  "mmcs_path_root": [252, 223, 46, 18, 33, 6, 216, 18, 96, 23, 106, 7, 135, 42, 76, 118, 214, 136, 185, 32, 177, 34, 87, 68, 65, 20, 94, 100, 114, 12, 127, 75],
+  "fri_fold_y_out": [1833882531, 1104419935, 1083967864],
+  "fri_fold_x_out": [559677532, 1378615361, 459538457],
+  "ood_folded": [1244492532, 255900976, 492923880],
+  "child_left_digest": [200, 173, 71, 143, 78, 29, 217, 212, 125, 252, 59, 152, 87, 8, 217, 45, 177, 248, 219, 72, 254, 156, 221, 212, 89, 230, 60, 50, 31, 73, 4, 2],
+  "child_right_digest": [16, 78, 238, 82, 218, 76, 63, 172, 252, 140, 32, 79, 216, 211, 248, 149, 91, 186, 179, 164, 113, 32, 83, 15, 35, 191, 221, 97, 77, 85, 236, 34],
+  "notes": "Aggregation host-PCS spine composition; RecAgg AIR/FRI, Chal multi-query, leaf OODs, recursive verify_child_proof, Settlement VK deferred — not ≡ verify_root_proof"
+}
