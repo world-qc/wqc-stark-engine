@@ -1,0 +1,16 @@
+{
+  "statement": "thick_ood_v0",
+  "gate": "e5b-3c",
+  "source": "wqc-stark-engine verify_ood_proof host-only (AggregationAir fold_ood_native)",
+  "measured_at": "2026-09-05",
+  "kind": "aggregation",
+  "width": 66,
+  "alpha": [9, 2, 3],
+  "is_transition": [1, 0, 0],
+  "inv_vanishing": [3, 4, 5],
+  "trace_local_digest0": [0, 0, 0],
+  "trace_next_digest0": [7, 0, 0],
+  "ok_flags": [1, 1],
+  "folded": [1244492532, 255900976, 492923880],
+  "quotient": [662126773, 888900880, 134903616]
+}
