@@ -1,14 +1,21 @@
 {
   "statement": "thick_unified_v0",
   "gate": "e5b-3d",
-  "source": "compose thin settle + thick_mmcs_v0 + thick_fri_v0 + thick_ood_v0 + thick_child_audit_v0",
+  "source": "compose thin + ValMmcs + FriFold + AggOOD + child-audit + RecAgg AIR + Chal path/batch + Unitary/Shot/Born OOD",
   "measured_at": "2026-09-06",
+  "approx_r1cs": 2684170,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
     "thick_fri_v0 fold_y+fold_x log_h=3",
     "thick_ood_v0 Aggregation OOD",
-    "thick_child_audit_v0 SHA3-256 digest bind"
+    "thick_child_audit_v0 SHA3-256 digest bind",
+    "thick_recagg_air_v0 RecAgg AIR fold+quotient",
+    "thick_chal_mmcs_v0 ChallengeMmcs single-matrix",
+    "thick_chal_mmcs_batch_v0 Agg Chal 8+4 inject",
+    "thick_ood_unitary_v0 Unitary leaf OOD",
+    "thick_ood_shot_v0 ShotSampling leaf OOD",
+    "thick_ood_born_v0 Born Distribution OOD K=2"
   ],
   "mmcs_path_root": [252, 223, 46, 18, 33, 6, 216, 18, 96, 23, 106, 7, 135, 42, 76, 118, 214, 136, 185, 32, 177, 34, 87, 68, 65, 20, 94, 100, 114, 12, 127, 75],
   "fri_fold_y_out": [1833882531, 1104419935, 1083967864],
@@ -16,5 +23,11 @@
   "ood_folded": [1244492532, 255900976, 492923880],
   "child_left_digest": [200, 173, 71, 143, 78, 29, 217, 212, 125, 252, 59, 152, 87, 8, 217, 45, 177, 248, 219, 72, 254, 156, 221, 212, 89, 230, 60, 50, 31, 73, 4, 2],
   "child_right_digest": [16, 78, 238, 82, 218, 76, 63, 172, 252, 140, 32, 79, 216, 211, 248, 149, 91, 186, 179, 164, 113, 32, 83, 15, 35, 191, 221, 97, 77, 85, 236, 34],
-  "notes": "Aggregation host-PCS spine composition; RecAgg AIR/FRI, Chal multi-query, leaf OODs, recursive verify_child_proof, Settlement VK deferred — not ≡ verify_root_proof"
+  "recagg_folded": [1018199624, 321937488, 1212829844],
+  "chal_path_root": [251, 14, 235, 85, 237, 26, 227, 6, 115, 85, 115, 127, 32, 148, 72, 37, 249, 54, 124, 108, 40, 125, 162, 109, 179, 37, 134, 59, 161, 171, 172, 25],
+  "chal_batch_root": [117, 122, 115, 119, 16, 187, 183, 48, 251, 246, 77, 7, 129, 132, 138, 113, 80, 166, 67, 43, 29, 32, 10, 109, 185, 174, 212, 48, 62, 254, 199, 36],
+  "unitary_folded": [25, 0, 0],
+  "shot_folded": [9, 2, 3],
+  "born_folded": [1834117649, 564625647, 53515651],
+  "notes": "Full E5b-3d gadget fold-in; RecAgg FRI/Mmcs, Chal multi-query beyond batch, recursive verify_child_proof, Settlement VK deferred — not ≡ verify_root_proof"
 }

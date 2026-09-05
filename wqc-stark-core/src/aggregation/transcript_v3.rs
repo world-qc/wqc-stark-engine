@@ -259,5 +259,29 @@ mod wrap_unified_golden {
             32,
             "mmcs root"
         );
+        assert_eq!(
+            v["recagg_folded"].as_array().unwrap().len(),
+            3,
+            "recagg folded"
+        );
+        assert_eq!(
+            v["chal_path_root"].as_array().unwrap().len(),
+            32,
+            "chal path"
+        );
+        assert_eq!(
+            v["chal_batch_root"].as_array().unwrap().len(),
+            32,
+            "chal batch"
+        );
+        assert_eq!(
+            v["unitary_folded"].as_array().unwrap().len(),
+            3,
+            "unitary"
+        );
+        assert_eq!(v["shot_folded"].as_array().unwrap().len(), 3, "shot");
+        assert_eq!(v["born_folded"].as_array().unwrap().len(), 3, "born");
+        let comps = v["components"].as_array().unwrap();
+        assert!(comps.len() >= 11, "expected full gadget fold-in");
     }
 }
