@@ -440,3 +440,55 @@ mod tests {
         assert!(!verify_fri_fold_proof(&proof)); // x-twiddle check must fail
     }
 }
+
+
+#[cfg(test)]
+mod wrap_fri_fold_golden {
+    use super::*;
+    use crate::plonky3_stark::config::Challenge;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_mersenne_31::Mersenne31 as Val;
+
+    #[test]
+    fn emit_fold_xy_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_fri_fold_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fold_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let beta = Challenge::new([Val::from_u32(11), Val::from_u32(22), Val::from_u32(33)]);
+        let v0 = Challenge::new([Val::from_u32(1), Val::from_u32(2), Val::from_u32(3)]);
+        let v1 = Challenge::new([Val::from_u32(4), Val::from_u32(5), Val::from_u32(6)]);
+        let index = 1usize;
+        let log_h = 3usize;
+
+        let step_x = fri_fold_step_limbs_x(index, log_h, beta, v0, v1).expect("x");
+        assert!(verify_fri_fold_x_native(&step_x));
+        let step_y = fri_fold_step_limbs_y(index, log_h, beta, v0, v1).expect("y");
+        assert!(verify_fri_fold_y_native(&step_y));
+
+        let want_tx = v["fold_x"]["t_inv"].as_u64().unwrap() as u32;
+        let want_ty = v["fold_y"]["t_inv"].as_u64().unwrap() as u32;
+        assert_eq!(step_x.t_inv.as_canonical_u32(), want_tx);
+        assert_eq!(step_y.t_inv.as_canonical_u32(), want_ty);
+
+        let want_out_x: Vec<u32> = v["fold_x"]["out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        let want_out_y: Vec<u32> = v["fold_y"]["out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        for i in 0..3 {
+            assert_eq!(step_x.out_limbs[i].as_canonical_u32(), want_out_x[i]);
+            assert_eq!(step_y.out_limbs[i].as_canonical_u32(), want_out_y[i]);
+        }
+    }
+}
