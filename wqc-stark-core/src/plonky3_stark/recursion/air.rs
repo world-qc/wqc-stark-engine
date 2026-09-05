@@ -105,3 +105,103 @@ where
         let _ = zero;
     }
 }
+
+#[cfg(test)]
+mod wrap_recagg_air_golden {
+    use super::*;
+    use crate::plonky3_stark::config::{Challenge, WqcStarkConfig};
+    use crate::plonky3_stark::recursion::fri_fold_native::challenge_to_limbs;
+    use p3_air::{Air, RowWindow};
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_matrix::dense::RowMajorMatrixView;
+    use p3_matrix::stack::VerticalPair;
+    use p3_mersenne_31::Mersenne31 as Val;
+    use p3_uni_stark::VerifierConstraintFolder;
+
+    fn fold_recagg(
+        local: &[Challenge],
+        next: &[Challenge],
+        is_transition: Challenge,
+        alpha: Challenge,
+    ) -> Challenge {
+        let main = VerticalPair::new(
+            RowMajorMatrixView::new_row(local),
+            RowMajorMatrixView::new_row(next),
+        );
+        let empty: &[Challenge] = &[];
+        let preprocessed = VerticalPair::new(
+            RowMajorMatrixView::new(empty, 0),
+            RowMajorMatrixView::new(empty, 0),
+        );
+        let preprocessed_window = RowWindow::from_two_rows(empty, empty);
+        let mut folder: VerifierConstraintFolder<'_, WqcStarkConfig> = VerifierConstraintFolder {
+            main,
+            preprocessed,
+            preprocessed_window,
+            periodic_values: &[],
+            public_values: &[],
+            is_first_row: Challenge::ZERO,
+            is_last_row: Challenge::ZERO,
+            is_transition,
+            alpha,
+            accumulator: Challenge::ZERO,
+        };
+        RecursiveAggregationAir.eval(&mut folder);
+        folder.accumulator
+    }
+
+    #[test]
+    fn emit_recagg_air_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_recagg_air_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_recagg_air_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let mut local = vec![Challenge::ZERO; REC_AGG_WIDTH];
+        for i in 0..REC_AGG_WIDTH {
+            local[i] = Challenge::new([
+                Val::from_u32(((i * 17 + 3) % 251) as u32),
+                Val::ZERO,
+                Val::ZERO,
+            ]);
+        }
+        local[REC_LEFT_OK_COL] = Challenge::ONE;
+        local[REC_RIGHT_OK_COL] = Challenge::ONE;
+        local[REC_LEFT_PCS_OK_COL] = Challenge::ONE;
+        local[REC_RIGHT_PCS_OK_COL] = Challenge::ONE;
+        local[REC_LEFT_KIND_COL] = Challenge::ZERO;
+        local[REC_RIGHT_KIND_COL] = Challenge::ONE;
+        local[REC_RIGHT_AGG_ROW_COL + AGG_LEFT_OK_COL] = Challenge::ONE;
+        local[REC_RIGHT_AGG_ROW_COL + AGG_RIGHT_OK_COL] = Challenge::ONE;
+
+        let mut next = local.clone();
+        next[0] = Challenge::new([Val::from_u32(9), Val::ZERO, Val::ZERO]);
+
+        let alpha = Challenge::new([Val::from_u32(9), Val::from_u32(2), Val::from_u32(3)]);
+        let is_trans = Challenge::ONE;
+        let inv_van = Challenge::new([Val::from_u32(3), Val::from_u32(4), Val::from_u32(5)]);
+        let folded = fold_recagg(&local, &next, is_trans, alpha);
+        let quot = folded * inv_van;
+        let folded_l = challenge_to_limbs(folded);
+        let quot_l = challenge_to_limbs(quot);
+
+        let want_folded: Vec<u32> = v["folded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        let want_quot: Vec<u32> = v["quotient"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        for i in 0..3 {
+            assert_eq!(folded_l[i].as_canonical_u32(), want_folded[i]);
+            assert_eq!(quot_l[i].as_canonical_u32(), want_quot[i]);
+        }
+    }
+}

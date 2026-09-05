@@ -1,0 +1,16 @@
+{
+  "statement": "thick_recagg_air_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine RecursiveAggregationAir::eval / VerifierConstraintFolder fold",
+  "measured_at": "2026-09-05",
+  "width": 330,
+  "left_kind": 0,
+  "right_kind": 1,
+  "alpha": [9, 2, 3],
+  "is_transition": [1, 0, 0],
+  "inv_vanishing": [3, 4, 5],
+  "trace_next_col0": [9, 0, 0],
+  "folded": [1018199624, 321937488, 1212829844],
+  "quotient": [999894600, 999618708, 1427303016],
+  "notes": "AIR fold gadget only — not full RecAgg Plonky3 FRI, child-audit, or Settlement VK cutover"
+}

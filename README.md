@@ -157,7 +157,7 @@ Born recursion supports outcome dimension K≤21 (AIR width W≤68). Protocol de
 ## Roadmap
 
 - **Pre-wrap size KPI signed off (2026-09-04):** idle two-leaf Poseidon nested=outer / chunk40 host-only Mmcs/FriFold/OOD — `173_483` B ≤500 KB (`fixtures/e5b/poseidon-compose-default-chunk40.json`).
-- **SNARK wrap of $\pi_{\text{Root}}$:** thin toolchain done in **[`wqc-snark-wrap`](https://github.com/world-qc/wqc-snark-wrap)** (E5b-2a–2c; E5b-2d thin KPIs). **E5b-3a/3b/3c Done** (ValMmcs → FriFold → Aggregation OOD); next **E5b-3d** RecAgg/audit (`on-chain_settlement_scope.md` §7.2 / §7.6). Wrap goldens in `fixtures/e5b/wrap_*_golden.json`. This repo stays the STARK engine / authoritative off-chain verify.
+- **SNARK wrap of $\pi_{\text{Root}}$:** thin toolchain done in **[`wqc-snark-wrap`](https://github.com/world-qc/wqc-snark-wrap)** (E5b-2a–2c; E5b-2d thin KPIs). **E5b-3a/3b/3c Done**; **E5b-3d Partial** (RecAgg AIR fold); wrap gate still needs FRI/Mmcs + child-audit + VK (`on-chain_settlement_scope.md` §7.2 / §7.6). Wrap goldens in `fixtures/e5b/wrap_*_golden.json`. This repo stays the STARK engine / authoritative off-chain verify.
 - **Root footprint shrink (Poseidon compose, idle two-leaf):**
   - Keccak-era documented baseline ≈ **10.2 MiB** (`fixtures/e5b/baseline.json` regression reference)
   - Production nested=outer / chunk40 ≈ **169 KiB** (`173_483` B) — **PASS ≤500 KB**
