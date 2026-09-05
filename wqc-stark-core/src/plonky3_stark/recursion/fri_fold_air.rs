@@ -441,7 +441,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod wrap_fri_fold_golden {
     use super::*;

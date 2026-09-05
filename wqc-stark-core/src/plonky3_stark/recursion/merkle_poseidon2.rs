@@ -165,3 +165,49 @@ mod wrap_golden {
         assert_eq!(root.as_slice(), want_root.as_slice());
     }
 }
+
+#[cfg(test)]
+mod wrap_chal_mmcs_golden {
+    use super::*;
+    use crate::plonky3_stark::config_poseidon::pack_digest;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_mersenne_31::Mersenne31;
+
+    #[test]
+    fn emit_chal_mmcs_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_chal_mmcs_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_chal_mmcs_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        // Flatten EF3×2 → 6×M31 (ChallengeMmcs single-matrix leaf).
+        let row = vec![
+            Mersenne31::from_u32(1),
+            Mersenne31::from_u32(2),
+            Mersenne31::from_u32(3),
+            Mersenne31::from_u32(4),
+            Mersenne31::from_u32(5),
+            Mersenne31::from_u32(6),
+        ];
+        let leaf = hash_val_leaf_poseidon(&row);
+        let sibling = pack_digest([Mersenne31::from_u32(7); 8]);
+        let root = merkle_root_from_path_poseidon(leaf, &[sibling], 0);
+
+        let want_leaf: Vec<u8> = v["leaf_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_root: Vec<u8> = v["path_root"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(leaf.as_slice(), want_leaf.as_slice());
+        assert_eq!(root.as_slice(), want_root.as_slice());
+    }
+}

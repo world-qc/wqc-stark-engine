@@ -815,9 +815,7 @@ mod wrap_ood_shot_golden {
 mod wrap_ood_born_golden {
     use super::*;
     use crate::plonky3_stark::config::Challenge;
-    use crate::plonky3_stark::distribution_air::{
-        DistributionAir, COL_IM, COL_RE,
-    };
+    use crate::plonky3_stark::distribution_air::{DistributionAir, COL_IM, COL_RE};
     use crate::plonky3_stark::recursion::fri_fold_native::challenge_to_limbs;
     use crate::plonky3_stark::recursion::ood_fold::fold_ood_native;
     use p3_field::{PrimeCharacteristicRing, PrimeField32};

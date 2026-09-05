@@ -160,8 +160,8 @@ mod wrap_recagg_air_golden {
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
 
         let mut local = vec![Challenge::ZERO; REC_AGG_WIDTH];
-        for i in 0..REC_AGG_WIDTH {
-            local[i] = Challenge::new([
+        for (i, item) in local.iter_mut().enumerate().take(REC_AGG_WIDTH) {
+            *item = Challenge::new([
                 Val::from_u32(((i * 17 + 3) % 251) as u32),
                 Val::ZERO,
                 Val::ZERO,
