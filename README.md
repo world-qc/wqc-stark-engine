@@ -98,7 +98,7 @@ cargo test -p wqc-stark-core --features plonky3-stark --release -- --ignored --t
 # Single test (faster feedback; e.g. 2-leaf compose size ~85 min)
 cargo test -p wqc-stark-core --features plonky3-stark --release unitary_trajectory_compose_roundtrip -- --ignored --nocapture
 
-# E5b shrink: full idle two-leaf RecAgg regression (see CONTRIBUTING.md)
+# Shrink regression: full idle two-leaf RecAgg (see CONTRIBUTING.md)
 cargo test -p wqc-stark-core --features plonky3-stark --release \
   idle_two_leaf_rec_agg_compose_under_regression_ceiling -- --ignored --exact --nocapture
 ```
@@ -156,8 +156,9 @@ Born recursion supports outcome dimension K≤21 (AIR width W≤68). Protocol de
 
 ## Roadmap
 
-- **E5b-1b signed off (2026-09-04):** pre-wrap shrink gate ≤500 KB met on idle two-leaf Poseidon nested=outer / chunk40 host-only Mmcs/FriFold/OOD — `173_483` B (`fixtures/e5b/poseidon-compose-default-chunk40.json`). Next: E5b-2a SNARK wrap.
-- **E5b shrink (Poseidon compose, idle two-leaf):**
+- **Pre-wrap size KPI signed off (2026-09-04):** idle two-leaf Poseidon nested=outer / chunk40 host-only Mmcs/FriFold/OOD — `173_483` B ≤500 KB (`fixtures/e5b/poseidon-compose-default-chunk40.json`).
+- **SNARK wrap of $\pi_{\text{Root}}$:** thin toolchain done in **[`wqc-snark-wrap`](https://github.com/world-qc/wqc-snark-wrap)** (E5b-2a–2c; E5b-2d thin KPIs); thicken toward `verify_root_proof` parity is next. This repo stays the STARK engine / authoritative off-chain verify.
+- **Root footprint shrink (Poseidon compose, idle two-leaf):**
   - Keccak-era documented baseline ≈ **10.2 MiB** (`fixtures/e5b/baseline.json` regression reference)
   - Production nested=outer / chunk40 ≈ **169 KiB** (`173_483` B) — **PASS ≤500 KB**
   - `low`/8q ≈ **38 KiB** (`39_386` B)
