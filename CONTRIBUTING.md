@@ -91,7 +91,7 @@ Idle two-leaf root proof size is tracked toward the 500 KB pre-wrap gate (`wqc-c
 
 **Pre-wrap size KPI signed off (2026-09-04):** production profile Poseidon nested=outer / `WQC_PCS_MMCS_GROUP_CHUNK=40`, host-only Mmcs/FriFold/OOD → `root_bytes = 173_483` (≤ `512_000`). Evidence fixture `fixtures/e5b/poseidon-compose-default-chunk40.json`; CI lock `poseidon_default_chunk40_fixture_under_shrink_gate`. KPI is idle two-leaf only; `fixtures/e5b/baseline.json` remains the Keccak-era regression reference (~10.7 MiB), not the shrink-gate number.
 
-**Wrap status (sibling repos):** thin Groth16 toolchain (E5b-2a–2c) and thin KPI locks (E5b-2d partial) live in [`wqc-snark-wrap`](https://github.com/world-qc/wqc-snark-wrap) + `wqc-contracts` (§7.5). Next is thicken toward bit-for-bit parity with this engine’s `verify_root_proof`; mainnet wrap gate remains blocked until thick parity + audit + target L2 gas. Until then, keep `verify_root_proof` / FFI as the authoritative root check (E5a challenge path).
+**Wrap status (sibling repos):** thin Groth16 toolchain (E5b-2a–2c) and thin KPI locks (E5b-2d partial) live in [`wqc-snark-wrap`](https://github.com/world-qc/wqc-snark-wrap) + `wqc-contracts` (§7.5). **E5b-3** thickens toward bit-for-bit parity with this engine’s `verify_root_proof` (scope §7.2 / §7.6). **E5b-3a** host Poseidon2 ValMmcs goldens: `fixtures/e5b/wrap_poseidon2_mmcs_golden.json` (locked by `poseidon2_default_permute_and_mmcs_golden`). Mainnet wrap gate remains blocked until E5b-3d + audit + target L2 gas. Until then, keep `verify_root_proof` / FFI as the authoritative root check (E5a challenge path).
 
 Fast PR checks:
 
