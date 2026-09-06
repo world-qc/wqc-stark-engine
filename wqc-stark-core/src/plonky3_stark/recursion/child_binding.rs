@@ -325,3 +325,95 @@ mod wrap_leaf_bind_born_golden {
         assert_ne!(bind.stark_digest, sha3_32(&transcript));
     }
 }
+
+#[cfg(test)]
+mod wrap_leaf_bind_traj_golden {
+    use super::*;
+    use crate::aggregation::TRAJ_LEAF_MARKER;
+    use crate::plonky3_stark::transcript_trajectory_stark::{
+        TRAJ_MARG_STARK_INNER_MARKER, TRAJ_SHOT_STARK_INNER_MARKER, TRAJ_STARK_TAIL_MARKER,
+    };
+
+    fn encode_mini_traj(marg_payload: &[u8], shot_payload: &[u8]) -> Vec<u8> {
+        assert_eq!(marg_payload.len(), 8);
+        assert_eq!(shot_payload.len(), 8);
+
+        let mut marg = Vec::with_capacity(50);
+        marg.extend_from_slice(b"t\0");
+        marg.extend_from_slice(TRAJ_MARG_STARK_INNER_MARKER);
+        marg.extend_from_slice(&[b'a', 0, b'b', 0, b'c', 0]);
+        marg.extend_from_slice(&8u32.to_le_bytes());
+        marg.extend_from_slice(marg_payload);
+        assert_eq!(marg.len(), 50);
+
+        let mut shot = Vec::with_capacity(66);
+        shot.extend_from_slice(b"t\0");
+        shot.extend_from_slice(TRAJ_SHOT_STARK_INNER_MARKER);
+        shot.extend_from_slice(&[b'd', 0]);
+        shot.extend_from_slice(&[0u8; 20]);
+        shot.extend_from_slice(&8u32.to_le_bytes());
+        shot.extend_from_slice(shot_payload);
+        assert_eq!(shot.len(), 66);
+
+        let mut bundle = Vec::with_capacity(128);
+        bundle.extend_from_slice(&1u32.to_le_bytes());
+        bundle.extend_from_slice(&(marg.len() as u32).to_le_bytes());
+        bundle.extend_from_slice(&marg);
+        bundle.extend_from_slice(&(shot.len() as u32).to_le_bytes());
+        bundle.extend_from_slice(&shot);
+        assert_eq!(bundle.len(), 128);
+
+        let mut out = Vec::with_capacity(171);
+        out.extend_from_slice(b"t\0");
+        out.extend_from_slice(TRAJ_LEAF_MARKER);
+        out.extend_from_slice(TRAJ_STARK_TAIL_MARKER);
+        out.extend_from_slice(&(bundle.len() as u32).to_le_bytes());
+        out.extend_from_slice(&bundle);
+        assert_eq!(out.len(), 171);
+        out
+    }
+
+    #[test]
+    fn emit_leaf_bind_traj_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_leaf_bind_traj_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_leaf_bind_traj_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_leaf_bind_traj_v0");
+        assert_eq!(v["mini_traj_len"].as_u64().unwrap(), 171);
+        assert_eq!(TRAJ_LEAF_MARKER.len(), 18);
+        assert_eq!(TRAJ_STARK_TAIL_MARKER.len(), 19);
+        assert_eq!(TRAJ_MARG_STARK_INNER_MARKER.len(), 30);
+        assert_eq!(TRAJ_SHOT_STARK_INNER_MARKER.len(), 30);
+
+        let marg = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let shot = [9u8, 10, 11, 12, 13, 14, 15, 16];
+        let transcript = encode_mini_traj(&marg, &shot);
+        let bind = child_stark_binding(&transcript);
+        assert_eq!(bind.kind, REC_KIND_LEAF);
+
+        let mut concat = Vec::with_capacity(16);
+        concat.extend_from_slice(&marg);
+        concat.extend_from_slice(&shot);
+
+        let want_container: Vec<u8> = v["container_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_stark: Vec<u8> = v["stark_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(sha3_32(&transcript).as_slice(), want_container.as_slice());
+        assert_eq!(bind.stark_digest.as_slice(), want_stark.as_slice());
+        assert_eq!(bind.stark_digest, sha3_32(&concat));
+        assert_ne!(bind.stark_digest, sha3_32(&transcript));
+    }
+}

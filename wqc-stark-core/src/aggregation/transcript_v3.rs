@@ -433,6 +433,19 @@ mod wrap_unified_golden {
             32,
             "leaf-bind born stark"
         );
+        assert_eq!(
+            v["leaf_bind_traj_container_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind traj container"
+        );
+        assert_eq!(
+            v["leaf_bind_traj_stark_digest"].as_array().unwrap().len(),
+            32,
+            "leaf-bind traj stark"
+        );
         let comps = v["components"].as_array().unwrap();
         assert!(
             comps
@@ -446,6 +459,12 @@ mod wrap_unified_golden {
             }),
             "expected leaf-bind born fold-in"
         );
-        assert!(comps.len() >= 15, "expected leaf-bind born fold-in");
+        assert!(
+            comps.iter().any(|c| {
+                c.as_str() == Some("thick_leaf_bind_traj_v0 Traj leaf stark_digest bind")
+            }),
+            "expected leaf-bind traj fold-in"
+        );
+        assert!(comps.len() >= 16, "expected leaf-bind traj fold-in");
     }
 }
