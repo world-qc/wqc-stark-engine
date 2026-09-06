@@ -260,3 +260,68 @@ mod wrap_leaf_bind_unitary_golden {
         assert_ne!(bind.stark_digest, sha3_32(&transcript));
     }
 }
+
+#[cfg(test)]
+mod wrap_leaf_bind_born_golden {
+    use super::*;
+    use crate::aggregation::BORN_LEAF_MARKER;
+    use crate::plonky3_stark::transcript_born::{BORN_STARK_INNER_MARKER, BORN_STARK_TAIL_MARKER};
+
+    fn encode_mini_born(payload: &[u8]) -> Vec<u8> {
+        assert_eq!(payload.len(), 8);
+        let mut inner = Vec::with_capacity(37);
+        inner.extend_from_slice(b"t\0");
+        inner.extend_from_slice(BORN_STARK_INNER_MARKER);
+        inner.extend_from_slice(&[b'p', 0, b's', 0]);
+        inner.extend_from_slice(&8u32.to_le_bytes());
+        inner.extend_from_slice(payload);
+        assert_eq!(inner.len(), 37);
+
+        let mut out = Vec::with_capacity(79);
+        out.extend_from_slice(b"t\0");
+        out.extend_from_slice(BORN_LEAF_MARKER);
+        out.extend_from_slice(BORN_STARK_TAIL_MARKER);
+        out.extend_from_slice(&(inner.len() as u32).to_le_bytes());
+        out.extend_from_slice(&inner);
+        assert_eq!(out.len(), 79);
+        out
+    }
+
+    #[test]
+    fn emit_leaf_bind_born_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_leaf_bind_born_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_leaf_bind_born_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_leaf_bind_born_v0");
+        assert_eq!(v["mini_born_len"].as_u64().unwrap(), 79);
+        assert_eq!(BORN_LEAF_MARKER.len(), 18);
+        assert_eq!(BORN_STARK_TAIL_MARKER.len(), 18);
+        assert_eq!(BORN_STARK_INNER_MARKER.len(), 19);
+
+        let payload = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let transcript = encode_mini_born(&payload);
+        let bind = child_stark_binding(&transcript);
+        assert_eq!(bind.kind, REC_KIND_LEAF);
+
+        let want_container: Vec<u8> = v["container_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_stark: Vec<u8> = v["stark_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(sha3_32(&transcript).as_slice(), want_container.as_slice());
+        assert_eq!(bind.stark_digest.as_slice(), want_stark.as_slice());
+        assert_eq!(bind.stark_digest, sha3_32(&payload));
+        assert_ne!(bind.stark_digest, sha3_32(&transcript));
+    }
+}

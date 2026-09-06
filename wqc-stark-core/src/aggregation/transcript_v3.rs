@@ -420,6 +420,19 @@ mod wrap_unified_golden {
             32,
             "leaf-bind unitary stark"
         );
+        assert_eq!(
+            v["leaf_bind_born_container_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind born container"
+        );
+        assert_eq!(
+            v["leaf_bind_born_stark_digest"].as_array().unwrap().len(),
+            32,
+            "leaf-bind born stark"
+        );
         let comps = v["components"].as_array().unwrap();
         assert!(
             comps
@@ -427,6 +440,12 @@ mod wrap_unified_golden {
                 .any(|c| c.as_str() == Some("thick_child_verify_d2_v0 depth-2 compose recurse")),
             "expected child-verify-d2 fold-in"
         );
-        assert!(comps.len() >= 14, "expected leaf-bind unitary fold-in");
+        assert!(
+            comps.iter().any(|c| {
+                c.as_str() == Some("thick_leaf_bind_born_v0 Born leaf stark_digest bind")
+            }),
+            "expected leaf-bind born fold-in"
+        );
+        assert!(comps.len() >= 15, "expected leaf-bind born fold-in");
     }
 }
