@@ -249,11 +249,7 @@ mod wrap_unified_golden {
             3,
             "fri y out"
         );
-        assert_eq!(
-            v["ood_folded"].as_array().unwrap().len(),
-            3,
-            "ood folded"
-        );
+        assert_eq!(v["ood_folded"].as_array().unwrap().len(), 3, "ood folded");
         assert_eq!(
             v["mmcs_path_root"].as_array().unwrap().len(),
             32,
@@ -274,14 +270,15 @@ mod wrap_unified_golden {
             32,
             "chal batch"
         );
-        assert_eq!(
-            v["unitary_folded"].as_array().unwrap().len(),
-            3,
-            "unitary"
-        );
+        assert_eq!(v["unitary_folded"].as_array().unwrap().len(), 3, "unitary");
         assert_eq!(v["shot_folded"].as_array().unwrap().len(), 3, "shot");
         assert_eq!(v["born_folded"].as_array().unwrap().len(), 3, "born");
+        assert_eq!(
+            v["recagg_mmcs_path_root"].as_array().unwrap().len(),
+            32,
+            "recagg mmcs"
+        );
         let comps = v["components"].as_array().unwrap();
-        assert!(comps.len() >= 11, "expected full gadget fold-in");
+        assert!(comps.len() >= 12, "expected RecAgg Mmcs fold-in");
     }
 }
