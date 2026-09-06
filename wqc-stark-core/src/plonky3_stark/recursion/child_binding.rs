@@ -203,3 +203,60 @@ mod tests {
         assert_eq!(a.kind, REC_KIND_LEAF);
     }
 }
+
+#[cfg(test)]
+mod wrap_leaf_bind_unitary_golden {
+    use super::*;
+    use crate::transcript::V2_MARKER;
+
+    fn encode_mini_unitary(payload: &[u8]) -> Vec<u8> {
+        assert_eq!(payload.len(), 8);
+        let mut out = Vec::with_capacity(43);
+        out.extend_from_slice(b"t");
+        out.extend_from_slice(V2_MARKER);
+        out.extend_from_slice(&[b'c', 0, b'n', 0, b'0', 0, b'h', 0]);
+        out.extend_from_slice(&8u32.to_le_bytes());
+        out.extend_from_slice(payload);
+        assert_eq!(out.len(), 43);
+        out
+    }
+
+    #[test]
+    fn emit_leaf_bind_unitary_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_leaf_bind_unitary_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_leaf_bind_unitary_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(
+            v["statement"].as_str().unwrap(),
+            "thick_leaf_bind_unitary_v0"
+        );
+        assert_eq!(v["mini_unitary_len"].as_u64().unwrap(), 43);
+        assert_eq!(V2_MARKER.len(), 22);
+
+        let payload = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let transcript = encode_mini_unitary(&payload);
+        let bind = child_stark_binding(&transcript);
+        assert_eq!(bind.kind, REC_KIND_LEAF);
+
+        let want_container: Vec<u8> = v["container_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_stark: Vec<u8> = v["stark_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(sha3_32(&transcript).as_slice(), want_container.as_slice());
+        assert_eq!(bind.stark_digest.as_slice(), want_stark.as_slice());
+        assert_eq!(bind.stark_digest, sha3_32(&payload));
+        assert_ne!(bind.stark_digest, sha3_32(&transcript));
+    }
+}

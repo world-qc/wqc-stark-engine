@@ -337,7 +337,23 @@ mod wrap_unified_golden {
             32,
             "child-verify right"
         );
+        assert_eq!(
+            v["leaf_bind_unitary_container_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind unitary container"
+        );
+        assert_eq!(
+            v["leaf_bind_unitary_stark_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind unitary stark"
+        );
         let comps = v["components"].as_array().unwrap();
-        assert!(comps.len() >= 13, "expected child-verify fold-in");
+        assert!(comps.len() >= 14, "expected leaf-bind unitary fold-in");
     }
 }
