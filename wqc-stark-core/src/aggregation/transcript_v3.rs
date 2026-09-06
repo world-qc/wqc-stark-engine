@@ -454,6 +454,12 @@ mod wrap_unified_golden {
             "expected fri-varlog fold-in"
         );
         assert!(
+            comps.iter().any(|c| {
+                c.as_str() == Some("thick_fri_pack_v0 N=4 fold_y+fold_x same log_h=3")
+            }),
+            "expected fri-pack fold-in"
+        );
+        assert!(
             comps
                 .iter()
                 .any(|c| c.as_str() == Some("thick_child_verify_d2_v0 depth-2 compose recurse")),
@@ -471,6 +477,6 @@ mod wrap_unified_golden {
             }),
             "expected leaf-bind traj fold-in"
         );
-        assert!(comps.len() >= 16, "expected leaf-bind traj fold-in");
+        assert!(comps.len() >= 17, "expected fri-pack fold-in");
     }
 }

@@ -1,0 +1,25 @@
+{
+  "statement": "thick_fri_pack_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine verify_fri_fold_{x,y}_native N>1 same log_h pack",
+  "measured_at": "2026-09-07",
+  "approx_r1cs": 94737,
+  "n": 4,
+  "log_h": 3,
+  "beta": [11, 22, 33],
+  "v0": [1, 2, 3],
+  "v1": [4, 5, 6],
+  "fold_y": [
+    {"index": 0, "t_inv": 1518526074, "out": [313601121, 1043063719, 1063515792]},
+    {"index": 1, "t_inv": 628957573, "out": [1833882531, 1104419935, 1083967864]},
+    {"index": 2, "t_inv": 987072176, "out": [674056781, 2118565194, 2137844166]},
+    {"index": 3, "t_inv": 1160411471, "out": [1473426871, 28918460, 9639490]}
+  ],
+  "fold_x": [
+    {"index": 0, "t_inv": 1899133673, "out": [241698322, 1819240107, 2038069137]},
+    {"index": 1, "t_inv": 1177558791, "out": [559677532, 1378615361, 459538457]},
+    {"index": 2, "t_inv": 685780700, "out": [1079081165, 1407820392, 1900929232]},
+    {"index": 3, "t_inv": 1492471381, "out": [753646183, 191372952, 1495446752]}
+  ],
+  "notes": "N=4 same-log_h FriFold unlock; FS bind / DeepRo / N=40 / full RecAgg PCS deferred"
+}

@@ -550,3 +550,72 @@ mod wrap_fri_varlog_golden {
         }
     }
 }
+
+#[cfg(test)]
+mod wrap_fri_pack_golden {
+    use super::*;
+    use crate::plonky3_stark::config::Challenge;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_mersenne_31::Mersenne31 as Val;
+
+    #[test]
+    fn emit_fold_xy_pack_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_fri_pack_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_pack_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let beta = Challenge::new([Val::from_u32(11), Val::from_u32(22), Val::from_u32(33)]);
+        let v0 = Challenge::new([Val::from_u32(1), Val::from_u32(2), Val::from_u32(3)]);
+        let v1 = Challenge::new([Val::from_u32(4), Val::from_u32(5), Val::from_u32(6)]);
+        let log_h = v["log_h"].as_u64().unwrap() as usize;
+        let n = v["n"].as_u64().unwrap() as usize;
+        assert_eq!(log_h, 3);
+        assert_eq!(n, 4);
+
+        let fold_y = v["fold_y"].as_array().unwrap();
+        let fold_x = v["fold_x"].as_array().unwrap();
+        assert_eq!(fold_y.len(), n);
+        assert_eq!(fold_x.len(), n);
+
+        for i in 0..n {
+            let idx_y = fold_y[i]["index"].as_u64().unwrap() as usize;
+            let idx_x = fold_x[i]["index"].as_u64().unwrap() as usize;
+            assert_eq!(idx_y, i);
+            assert_eq!(idx_x, i);
+
+            let step_y = fri_fold_step_limbs_y(idx_y, log_h, beta, v0, v1).expect("y");
+            assert!(verify_fri_fold_y_native(&step_y));
+            let step_x = fri_fold_step_limbs_x(idx_x, log_h, beta, v0, v1).expect("x");
+            assert!(verify_fri_fold_x_native(&step_x));
+
+            assert_eq!(
+                step_y.t_inv.as_canonical_u32(),
+                fold_y[i]["t_inv"].as_u64().unwrap() as u32
+            );
+            assert_eq!(
+                step_x.t_inv.as_canonical_u32(),
+                fold_x[i]["t_inv"].as_u64().unwrap() as u32
+            );
+
+            let want_y: Vec<u32> = fold_y[i]["out"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect();
+            let want_x: Vec<u32> = fold_x[i]["out"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect();
+            for j in 0..3 {
+                assert_eq!(step_y.out_limbs[j].as_canonical_u32(), want_y[j]);
+                assert_eq!(step_x.out_limbs[j].as_canonical_u32(), want_x[j]);
+            }
+        }
+    }
+}
