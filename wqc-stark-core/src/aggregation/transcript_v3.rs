@@ -448,6 +448,12 @@ mod wrap_unified_golden {
         );
         let comps = v["components"].as_array().unwrap();
         assert!(
+            comps.iter().any(|c| {
+                c.as_str() == Some("thick_fri_varlog_v0 fold_y@4 + fold_x@2 log_h mux")
+            }),
+            "expected fri-varlog fold-in"
+        );
+        assert!(
             comps
                 .iter()
                 .any(|c| c.as_str() == Some("thick_child_verify_d2_v0 depth-2 compose recurse")),

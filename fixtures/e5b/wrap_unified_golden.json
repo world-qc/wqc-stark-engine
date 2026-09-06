@@ -1,13 +1,13 @@
 {
   "statement": "thick_unified_v0",
   "gate": "e5b-3d",
-  "source": "compose thin + ValMmcs + FriFold + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
-  "measured_at": "2026-09-06",
-  "approx_r1cs": 7195704,
+  "source": "compose thin + ValMmcs + FriVarLog + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
+  "measured_at": "2026-09-07",
+  "approx_r1cs": 7261414,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
-    "thick_fri_v0 fold_y+fold_x log_h=3",
+    "thick_fri_varlog_v0 fold_y@4 + fold_x@2 log_h mux",
     "thick_ood_v0 Aggregation OOD",
     "thick_child_audit_v0 SHA3-256 digest bind",
     "thick_recagg_air_v0 RecAgg AIR fold+quotient",
@@ -22,6 +22,7 @@
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
+  "notes": "FriFold upgraded to variable log_h mux; N>1 query packs / FS bind / full RecAgg PCS still deferred",
   "mmcs_path_root": [
     252,
     223,
@@ -56,15 +57,17 @@
     127,
     75
   ],
+  "fri_fold_y_log_h": 4,
   "fri_fold_y_out": [
-    1833882531,
-    1104419935,
-    1083967864
+    1587806120,
+    768868293,
+    1687945199
   ],
+  "fri_fold_x_log_h": 2,
   "fri_fold_x_out": [
-    559677532,
-    1378615361,
-    459538457
+    313601121,
+    1043063719,
+    1063515792
   ],
   "ood_folded": [
     1244492532,
@@ -329,7 +332,7 @@
     41,
     188
   ],
-  "notes": "All shipped E5b-3 gadgets incl. RecAgg ValMmcs + depth-2 child-verify + unitary/Born/Traj leaf binds; RecAgg FRI multi-query / full Plonky3 PCS, depth\u22653 / variable compose / full leaf verify, Settlement VK deferred \u2014 not \u2261 verify_root_proof",
+  "notes": "All shipped E5b-3 gadgets incl. RecAgg ValMmcs + depth-2 child-verify + unitary/Born/Traj leaf binds + FriVarLog; N>1 query packs / FS bind / full RecAgg Plonky3 PCS, depth≥3 / variable compose / full leaf verify, Settlement VK deferred — not ≡ verify_root_proof",
   "leaf_bind_unitary_container_digest": [
     168,
     179,

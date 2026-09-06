@@ -1,0 +1,23 @@
+{
+  "statement": "thick_fri_varlog_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine verify_fri_fold_{x,y}_native with muxed log_folded_height",
+  "measured_at": "2026-09-07",
+  "approx_r1cs": 89394,
+  "allowed_log_h": [2, 3, 4, 5],
+  "index": 1,
+  "beta": [11, 22, 33],
+  "v0": [1, 2, 3],
+  "v1": [4, 5, 6],
+  "fold_y": {
+    "log_h": 4,
+    "t_inv": 969924856,
+    "out": [1587806120, 768868293, 1687945199]
+  },
+  "fold_x": {
+    "log_h": 2,
+    "t_inv": 1518526074,
+    "out": [313601121, 1043063719, 1063515792]
+  },
+  "notes": "Variable log_h FriFold unlock for RecAgg FRI multi-query; N>1 query packs / FS bind / DeepRo / full PCS deferred"
+}
