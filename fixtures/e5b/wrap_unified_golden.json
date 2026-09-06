@@ -1,9 +1,9 @@
 {
   "statement": "thick_unified_v0",
   "gate": "e5b-3d",
-  "source": "compose thin + ValMmcs + FriFold + AggOOD + child-audit + RecAgg AIR + RecAgg ValMmcs + Chal path/batch + Unitary/Shot/Born OOD",
+  "source": "compose thin + ValMmcs + FriFold + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify one-level",
   "measured_at": "2026-09-06",
-  "approx_r1cs": 5681438,
+  "approx_r1cs": 6044669,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
@@ -16,7 +16,8 @@
     "thick_chal_mmcs_batch_v0 Agg Chal 8+4 inject",
     "thick_ood_unitary_v0 Unitary leaf OOD",
     "thick_ood_shot_v0 ShotSampling leaf OOD",
-    "thick_ood_born_v0 Born Distribution OOD K=2"
+    "thick_ood_born_v0 Born Distribution OOD K=2",
+    "thick_child_verify_v0 one-level compose recurse"
   ],
   "mmcs_path_root": [252, 223, 46, 18, 33, 6, 216, 18, 96, 23, 106, 7, 135, 42, 76, 118, 214, 136, 185, 32, 177, 34, 87, 68, 65, 20, 94, 100, 114, 12, 127, 75],
   "fri_fold_y_out": [1833882531, 1104419935, 1083967864],
@@ -31,5 +32,7 @@
   "unitary_folded": [25, 0, 0],
   "shot_folded": [9, 2, 3],
   "born_folded": [1834117649, 564625647, 53515651],
-  "notes": "All shipped E5b-3 gadgets incl. RecAgg ValMmcs; RecAgg FRI multi-query / full Plonky3 PCS, Chal multi-query beyond batch, recursive verify_child_proof, Settlement VK deferred — not ≡ verify_root_proof"
+  "child_verify_left_digest": [122, 60, 29, 220, 118, 37, 76, 19, 37, 228, 190, 71, 98, 147, 209, 38, 9, 101, 242, 116, 131, 216, 94, 23, 152, 248, 89, 93, 64, 78, 102, 143],
+  "child_verify_right_digest": [211, 202, 2, 114, 95, 202, 176, 179, 212, 3, 246, 54, 138, 207, 121, 232, 154, 252, 64, 81, 23, 186, 122, 134, 212, 255, 25, 94, 79, 153, 170, 118],
+  "notes": "All shipped E5b-3 gadgets incl. RecAgg ValMmcs + one-level child-verify; RecAgg FRI multi-query / full Plonky3 PCS, multi-level / leaf Plonky3, Settlement VK deferred — not ≡ verify_root_proof"
 }

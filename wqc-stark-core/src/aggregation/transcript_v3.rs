@@ -327,7 +327,17 @@ mod wrap_unified_golden {
             32,
             "recagg mmcs"
         );
+        assert_eq!(
+            v["child_verify_left_digest"].as_array().unwrap().len(),
+            32,
+            "child-verify left"
+        );
+        assert_eq!(
+            v["child_verify_right_digest"].as_array().unwrap().len(),
+            32,
+            "child-verify right"
+        );
         let comps = v["components"].as_array().unwrap();
-        assert!(comps.len() >= 12, "expected RecAgg Mmcs fold-in");
+        assert!(comps.len() >= 13, "expected child-verify fold-in");
     }
 }
