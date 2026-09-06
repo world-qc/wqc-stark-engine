@@ -261,6 +261,73 @@ mod wrap_child_verify_golden {
 }
 
 #[cfg(test)]
+mod wrap_child_verify_d2_golden {
+    use super::{child_digest, encode_compose_v3, is_compose_v3, V3_COMPOSE_MARKER};
+
+    fn encode_mini(left_gc: &[u8], right_gc: &[u8]) -> Vec<u8> {
+        encode_compose_v3("p", "L", "", left_gc, right_gc)
+    }
+
+    fn encode_d2(left_mid: &[u8], right_mid: &[u8]) -> Vec<u8> {
+        let out = encode_compose_v3("p", "L", "", left_mid, right_mid);
+        assert_eq!(out.len(), 311);
+        out
+    }
+
+    #[test]
+    fn emit_child_verify_d2_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_child_verify_d2_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_child_verify_d2_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_child_verify_d2_v0");
+        assert_eq!(V3_COMPOSE_MARKER.len(), 16);
+        assert_eq!(v["d2_outer_len"].as_u64().unwrap(), 311);
+        assert_eq!(v["d2_mid_len"].as_u64().unwrap(), 109);
+
+        let left = encode_d2(
+            &encode_mini(&[1, 2, 3, 4, 5, 6, 7, 8], &[9, 10, 11, 12, 13, 14, 15, 16]),
+            &encode_mini(
+                &[17, 18, 19, 20, 21, 22, 23, 24],
+                &[25, 26, 27, 28, 29, 30, 31, 32],
+            ),
+        );
+        let right = encode_d2(
+            &encode_mini(
+                &[33, 34, 35, 36, 37, 38, 39, 40],
+                &[41, 42, 43, 44, 45, 46, 47, 48],
+            ),
+            &encode_mini(
+                &[49, 50, 51, 52, 53, 54, 55, 56],
+                &[57, 58, 59, 60, 61, 62, 63, 64],
+            ),
+        );
+        assert!(is_compose_v3(&left));
+        assert!(is_compose_v3(&right));
+
+        let want_left: Vec<u8> = v["left_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_right: Vec<u8> = v["right_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(child_digest(&left).as_slice(), want_left.as_slice());
+        assert_eq!(child_digest(&right).as_slice(), want_right.as_slice());
+        assert_eq!(v["left_kind"].as_u64().unwrap(), 1);
+        assert_eq!(v["right_kind"].as_u64().unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
 mod wrap_unified_golden {
     use super::child_digest;
 
@@ -330,12 +397,12 @@ mod wrap_unified_golden {
         assert_eq!(
             v["child_verify_left_digest"].as_array().unwrap().len(),
             32,
-            "child-verify left"
+            "child-verify-d2 left"
         );
         assert_eq!(
             v["child_verify_right_digest"].as_array().unwrap().len(),
             32,
-            "child-verify right"
+            "child-verify-d2 right"
         );
         assert_eq!(
             v["leaf_bind_unitary_container_digest"]
@@ -354,6 +421,12 @@ mod wrap_unified_golden {
             "leaf-bind unitary stark"
         );
         let comps = v["components"].as_array().unwrap();
+        assert!(
+            comps
+                .iter()
+                .any(|c| c.as_str() == Some("thick_child_verify_d2_v0 depth-2 compose recurse")),
+            "expected child-verify-d2 fold-in"
+        );
         assert!(comps.len() >= 14, "expected leaf-bind unitary fold-in");
     }
 }
