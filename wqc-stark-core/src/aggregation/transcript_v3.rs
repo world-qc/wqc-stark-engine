@@ -212,6 +212,55 @@ mod wrap_child_audit_golden {
 }
 
 #[cfg(test)]
+mod wrap_child_verify_golden {
+    use super::{child_digest, encode_compose_v3, is_compose_v3, V3_COMPOSE_MARKER};
+
+    fn encode_mini(left_gc: &[u8], right_gc: &[u8]) -> Vec<u8> {
+        encode_compose_v3("p", "L", "", left_gc, right_gc)
+    }
+
+    #[test]
+    fn emit_child_verify_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_child_verify_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_child_verify_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(V3_COMPOSE_MARKER.len(), 16);
+        assert_eq!(v["mini_compose_len"].as_u64().unwrap(), 109);
+
+        let left = encode_mini(&[1, 2, 3, 4, 5, 6, 7, 8], &[9, 10, 11, 12, 13, 14, 15, 16]);
+        let right = encode_mini(
+            &[17, 18, 19, 20, 21, 22, 23, 24],
+            &[25, 26, 27, 28, 29, 30, 31, 32],
+        );
+        assert_eq!(left.len(), 109);
+        assert_eq!(right.len(), 109);
+        assert!(is_compose_v3(&left));
+        assert!(is_compose_v3(&right));
+
+        let want_left: Vec<u8> = v["left_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_right: Vec<u8> = v["right_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(child_digest(&left).as_slice(), want_left.as_slice());
+        assert_eq!(child_digest(&right).as_slice(), want_right.as_slice());
+        assert_eq!(v["left_kind"].as_u64().unwrap(), 1);
+        assert_eq!(v["right_kind"].as_u64().unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
 mod wrap_unified_golden {
     use super::child_digest;
 
