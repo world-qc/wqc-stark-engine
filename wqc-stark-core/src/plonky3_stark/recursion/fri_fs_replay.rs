@@ -979,7 +979,13 @@ mod tests {
 
         use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 
-        use crate::plonky3_stark::recursion::fri_fold_native::{challenge_to_limbs, fold_x_row};
+        use crate::plonky3_stark::recursion::deep_ro_native::{
+            deep_ro_trace_witness, deep_ro_w3_witness, ef_from_projective_line,
+        };
+        use crate::plonky3_stark::recursion::fri_fold_native::{
+            cfft_permute_index, challenge_to_limbs, fold_x_row, fold_y_row, fold_y_twiddle_inv,
+            standard_nth_point,
+        };
         use crate::plonky3_stark::recursion::fri_mmcs_bind::fri_chal_mmcs_bundle_from_agg_proof;
         use crate::plonky3_stark::recursion::fri_ro::reconstruct_query_ro;
         use crate::plonky3_stark::recursion::merkle_keccak::compress_digests;
@@ -999,6 +1005,18 @@ mod tests {
             .expect("fri1");
         let chal_bundle = fri_chal_mmcs_bundle_from_agg_proof(&proof).expect("chal mmcs");
         assert_eq!(chal_bundle.len(), chal.query_indices.len());
+        assert_eq!(view.lambdas.len(), 2, "trace+quot heights");
+
+        let zeta_next = init_trace_domain.next_point(chal.zeta).expect("zeta_next");
+        let (at_x, at_y) = ef_from_projective_line(chal.zeta);
+        let (atn_x, atn_y) = ef_from_projective_line(zeta_next);
+        let limbs_u32 = |c: Challenge| -> Vec<u32> {
+            challenge_to_limbs(c)
+                .iter()
+                .map(|x| x.as_canonical_u32())
+                .collect()
+        };
+        let val_u32 = |v: Val| v.as_canonical_u32();
 
         let flatten_u32 = |evals: &[Challenge; 2]| -> Vec<u32> {
             let mut out = Vec::with_capacity(6);
@@ -1012,6 +1030,17 @@ mod tests {
 
         let mut chal_first_layer = Vec::with_capacity(4);
         let mut chal_commit = Vec::with_capacity(4);
+        let mut deep_ro = Vec::with_capacity(4);
+        let trace_next = proof.opened_values.trace_next.as_ref().expect("trace_next");
+        let mut px_trace = [Val::ZERO; AGG_WIDTH];
+        let mut pz_local = [Challenge::ZERO; AGG_WIDTH];
+        let mut pz_next = [Challenge::ZERO; AGG_WIDTH];
+        pz_local[..AGG_WIDTH].copy_from_slice(&proof.opened_values.trace_local[..AGG_WIDTH]);
+        pz_next[..AGG_WIDTH].copy_from_slice(&trace_next[..AGG_WIDTH]);
+        let mut px_quot = [Val::ZERO; 3];
+        let mut pz_quot = [Challenge::ZERO; 3];
+        pz_quot.copy_from_slice(&proof.opened_values.quotient_chunks[0][..3]);
+
         for (q, bundle) in chal_bundle.iter().take(4).enumerate() {
             let qi = chal.query_indices[q];
             let fl = &bundle.first_layer;
@@ -1048,6 +1077,107 @@ mod tests {
                 idx /= 2;
             }
             assert_eq!(dig, fl_root, "q{q} first-layer root");
+
+            let (_, fold_ys) =
+                reconstruct_query_ro(&proof, &chal, &view, q, AGG_WIDTH).expect("ro");
+            assert_eq!(fold_ys.len(), 2, "short+tall");
+            let short_flat = flatten_u32(&[fold_ys[0].v0, fold_ys[0].v1]);
+            let tall_flat = flatten_u32(&[fold_ys[1].v0, fold_ys[1].v1]);
+            assert_eq!(short_flat, short, "q{q} Flatten(fold_y short)==FL short");
+            assert_eq!(tall_flat, tall, "q{q} Flatten(fold_y tall)==FL tall");
+
+            let input =
+                decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
+            px_trace[..AGG_WIDTH]
+                .copy_from_slice(&input.input_openings[0].opened_values[0][..AGG_WIDTH]);
+            px_quot.copy_from_slice(&input.input_openings[1].opened_values[0][..3]);
+            let orig_t = cfft_permute_index(qi >> y_shift, trace_log_height);
+            let pt = standard_nth_point(trace_log_height, orig_t);
+            let orig_q = cfft_permute_index(qi >> quot_shift, quot_log_height);
+            let pq = standard_nth_point(quot_log_height, orig_q);
+            let tw = deep_ro_trace_witness(
+                chal.batch_alpha,
+                pt.x,
+                pt.y,
+                chal.zeta,
+                zeta_next,
+                &px_trace,
+                &pz_local,
+                &pz_next,
+                view.lambdas[0],
+                proof.degree_bits,
+            );
+            let qw = deep_ro_w3_witness(
+                chal.batch_alpha,
+                pq.x,
+                pq.y,
+                chal.zeta,
+                px_quot,
+                pz_quot,
+                view.lambdas[1],
+                proof.degree_bits + 1, // quot orig_size = log_h - blowup = 3
+            );
+            let pair_short = (qi >> y_shift) & 1;
+            let pair_tall = (qi >> quot_shift) & 1;
+            let lc_short = if pair_short == 0 {
+                fold_ys[0].v0
+            } else {
+                fold_ys[0].v1
+            };
+            let lc_tall = if pair_tall == 0 {
+                fold_ys[1].v0
+            } else {
+                fold_ys[1].v1
+            };
+            assert_eq!(tw.out, lc_short, "q{q} DeepRo trace == FL λc short");
+            assert_eq!(qw.out, lc_tall, "q{q} DeepRo quot == FL λc tall");
+            assert_eq!(tw.at_x, at_x);
+            assert_eq!(tw.at_y, at_y);
+            assert_eq!(qw.at_x, at_x);
+            assert_eq!(qw.at_y, at_y);
+
+            let t_inv_short = fold_y_twiddle_inv(fold_ys[0].index, fold_ys[0].log_folded_height);
+            let t_inv_tall = fold_y_twiddle_inv(fold_ys[1].index, fold_ys[1].log_folded_height);
+            let out_short = fold_y_row(
+                fold_ys[0].index,
+                fold_ys[0].log_folded_height,
+                chal.bivariate_beta,
+                fold_ys[0].v0,
+                fold_ys[0].v1,
+            );
+            let out_tall = fold_y_row(
+                fold_ys[1].index,
+                fold_ys[1].log_folded_height,
+                chal.bivariate_beta,
+                fold_ys[1].v0,
+                fold_ys[1].v1,
+            );
+
+            deep_ro.push(serde_json::json!({
+                "sx_trace": val_u32(pt.x),
+                "sy_trace": val_u32(pt.y),
+                "sx_quot": val_u32(pq.x),
+                "sy_quot": val_u32(pq.y),
+                "v_n_trace": val_u32(tw.v_n),
+                "v_n_quot": val_u32(qw.v_n),
+                "out_pre_trace0": limbs_u32(tw.deep0.out_pre),
+                "out_pre_trace1": limbs_u32(tw.deep1.out_pre),
+                "out_pre_quot": limbs_u32(qw.out_pre),
+                "deep_out_trace": limbs_u32(tw.out),
+                "deep_out_quot": limbs_u32(qw.out),
+                "fold_y_short": {
+                    "index": fold_ys[0].index as u32,
+                    "log_h": fold_ys[0].log_folded_height as u32,
+                    "t_inv": t_inv_short.as_canonical_u32(),
+                    "out": limbs_u32(out_short),
+                },
+                "fold_y_tall": {
+                    "index": fold_ys[1].index as u32,
+                    "log_h": fold_ys[1].log_folded_height as u32,
+                    "t_inv": t_inv_tall.as_canonical_u32(),
+                    "out": limbs_u32(out_tall),
+                },
+            }));
 
             chal_first_layer.push(serde_json::json!({
                 "tall_row": tall,
@@ -1111,9 +1241,9 @@ mod tests {
         let golden = serde_json::json!({
             "statement": "thick_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "AggregationAir low-security Trace/Quot ValMmcs + first-layer/FRI-commit Chal Mmcs bound to FriFsChal QueryIndex",
+            "source": "AggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y bind",
             "measured_at": "2026-09-07",
-            "approx_r1cs": 12620918,
+            "approx_r1cs": 14171275,
             "agg_width": AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -1139,7 +1269,14 @@ mod tests {
             "quot_mmcs": quot_mmcs,
             "chal_first_layer": chal_first_layer,
             "chal_commit": chal_commit,
-            "notes": "FriFsChal N=4 + Trace/Quot ValMmcs + Chal first-layer 8+4 + FRI commit×2; DeepRo/N=8/40/≡verify_root_proof deferred; not folded into unified"
+            "zeta_next": limbs_u32(zeta_next),
+            "lambdas": [limbs_u32(view.lambdas[0]), limbs_u32(view.lambdas[1])],
+            "at_x": limbs_u32(at_x),
+            "at_y": limbs_u32(at_y),
+            "atn_x": limbs_u32(atn_x),
+            "atn_y": limbs_u32(atn_y),
+            "deep_ro": deep_ro,
+            "notes": "FriFsChal N=4 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y bind; N=8/40/≡verify_root_proof deferred; not folded into unified"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1179,7 +1316,10 @@ mod tests {
         assert_eq!(v["chal_fl_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 4);
         assert_eq!(v["chal_commit"].as_array().unwrap().len(), 4);
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 12620918);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 14171275);
+        assert_eq!(v["deep_ro"].as_array().unwrap().len(), 4);
+        assert_eq!(v["lambdas"].as_array().unwrap().len(), 2);
+        assert_eq!(v["zeta_next"].as_array().unwrap().len(), 3);
 
         let ctx = AggregationContext {
             parent_task_id: "parent",
