@@ -3,7 +3,7 @@
   "gate": "e5b-3d",
   "source": "compose thin + ValMmcs + FriVarLog + FriFsChal + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-07",
-  "approx_r1cs": 9254940,
+  "approx_r1cs": 9619970,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
@@ -23,7 +23,7 @@
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
-  "notes": "FriVarLog + FriFsChal (D1..D6 sample_algebra MaxReflush=2; FriFold Beta=betas[0]) folded; full STARK observe auth / DeepRo / N=40 deferred \u2014 not \u2261 verify_root_proof",
+  "notes": "FriVarLog + FriFsChal (D1..D6 sample_algebra MaxReflush=3; FriFold Beta=betas[0]) folded; full STARK observe auth / DeepRo / N=40 deferred \u2014 not \u2261 verify_root_proof",
   "mmcs_path_root": [
     252,
     223,

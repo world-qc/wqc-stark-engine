@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 254281,
+  "approx_r1cs": 315024,
   "chal_intra": [
     10,
     20,
@@ -113,14 +113,22 @@
     0,
     0,
     0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
     0
   ],
-  "max_algebra_draws": 24,
-  "max_algebra_reflush": 2,
+  "max_algebra_draws": 32,
+  "max_algebra_reflush": 3,
   "measured_at": "2026-09-07",
-  "notes": "Standalone reject/re-flush gadget with MaxReflush=2 digest-chain capacity; Agg chal_v0 folds same bound. Full STARK observe auth / N=40 / \u2261 verify_root_proof deferred",
+  "notes": "Standalone reject/re-flush gadget with MaxReflush=3 digest-chain capacity; Agg chal_v0 folds same bound. Full STARK observe auth / N=40 / \u2261 verify_root_proof deferred",
   "reflush_draws": 11,
   "reflushes": 1,
-  "source": "synthetic SerializingChallenger M31 reject + HashChallenger Keccak(Di) re-flush (MaxReflush=2 capacity)",
+  "source": "synthetic SerializingChallenger M31 reject + HashChallenger Keccak(Di) re-flush (MaxReflush=3 capacity)",
   "statement": "thick_fri_fs_chal_rej_v0"
 }
