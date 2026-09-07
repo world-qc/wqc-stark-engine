@@ -887,6 +887,11 @@ mod tests {
         let chal = replay_agg_fri_challenges(&proof).expect("replay");
         assert_eq!(proof.degree_bits, 2);
         assert_eq!(&chal.query_indices[..4], &[3usize, 12, 6, 2]);
+        assert_eq!(
+            proof.opened_values.quotient_chunks.len(),
+            1,
+            "Agg single quot chunk"
+        );
 
         let view = decode_pcs_view(&proof).expect("pcs");
         let config = circle_config_matching_proof(&proof).expect("cfg");
@@ -904,51 +909,95 @@ mod tests {
         let y_shift = log_global_max_height - trace_log_height;
         assert_eq!(y_shift, 1, "Agg low ValMmcs index shift");
 
+        // Single quot chunk: disjoint domain then split (matches fri_mmcs_bind).
+        let num_quot = proof.opened_values.quotient_chunks.len();
+        assert_eq!(num_quot, 1);
+        let log_num_quot = num_quot.trailing_zeros() as usize;
+        let quot_parent =
+            init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
+        let quot_chunk_domains = quot_parent.split_domains(num_quot);
+        let quot_h = quot_chunk_domains[0].size() << log_blowup;
+        assert!(quot_h.is_power_of_two());
+        let quot_log_height = quot_h.trailing_zeros() as usize;
+        let quot_shift = log_global_max_height - quot_log_height;
+        assert_eq!(quot_h, 16);
+        assert_eq!(quot_log_height, 4);
+        assert_eq!(quot_shift, 0, "Agg low quot ValMmcs index shift");
+        assert_ne!(quot_shift, y_shift);
+
         let trace_root = *proof.commitments.trace.roots().first().expect("trace root");
+        let quot_root = *proof
+            .commitments
+            .quotient_chunks
+            .roots()
+            .first()
+            .expect("quot root");
         let mut val_mmcs = Vec::with_capacity(4);
+        let mut quot_mmcs = Vec::with_capacity(4);
         let mut trace_index = Vec::with_capacity(4);
+        let mut quot_index = Vec::with_capacity(4);
         for q in 0..4 {
             let qi = chal.query_indices[q];
             let input =
                 decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
             let trace_open = &input.input_openings[0];
+            let quot_open = &input.input_openings[1];
             let row = &trace_open.opened_values[0];
             assert_eq!(row.len(), AGG_WIDTH);
+            let quot_row = &quot_open.opened_values[0];
+            assert_eq!(quot_row.len(), 3, "EF_DIM");
+
             let t_idx = qi >> y_shift;
-            assert_eq!(t_idx, qi >> 1);
-            let leaf = hash_val_leaf(row);
-            let root = merkle_root_from_path(leaf, &trace_open.opening_proof, t_idx);
-            assert_eq!(root, trace_root, "q{q} ValMmcs root");
-            let leaf_row: Vec<u32> = row.iter().map(|x| x.as_canonical_u32()).collect();
-            let siblings: Vec<Vec<u8>> = trace_open
-                .opening_proof
-                .iter()
-                .map(|s| s.to_vec())
-                .collect();
-            assert_eq!(siblings.len(), trace_log_height);
+            let q_idx = qi >> quot_shift;
+            assert_eq!(q_idx, qi);
+            assert_eq!(
+                merkle_root_from_path(hash_val_leaf(row), &trace_open.opening_proof, t_idx),
+                trace_root,
+                "q{q} trace ValMmcs root"
+            );
+            assert_eq!(
+                merkle_root_from_path(hash_val_leaf(quot_row), &quot_open.opening_proof, q_idx),
+                quot_root,
+                "q{q} quot ValMmcs root"
+            );
+            assert_eq!(trace_open.opening_proof.len(), trace_log_height);
+            assert_eq!(quot_open.opening_proof.len(), quot_log_height);
+
             trace_index.push(t_idx as u32);
+            quot_index.push(q_idx as u32);
             val_mmcs.push(serde_json::json!({
-                "leaf_row": leaf_row,
-                "siblings": siblings,
+                "leaf_row": row.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>(),
+                "siblings": trace_open.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
                 "index": t_idx as u32,
+            }));
+            quot_mmcs.push(serde_json::json!({
+                "leaf_row": quot_row.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>(),
+                "siblings": quot_open.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
+                "index": q_idx as u32,
             }));
         }
 
         let golden = serde_json::json!({
             "statement": "thick_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "AggregationAir low-security Trace ValMmcs openings bound to FriFsChal QueryIndex",
+            "source": "AggregationAir low-security Trace+Quot ValMmcs openings bound to FriFsChal QueryIndex",
             "measured_at": "2026-09-07",
-            "approx_r1cs": 5877826,
+            "approx_r1cs": 7227422,
             "agg_width": AGG_WIDTH,
+            "quot_width": 3,
             "path_depth": trace_log_height,
+            "quot_path_depth": quot_log_height,
+            "quot_shift": quot_shift,
             "n": 4,
             "degree_bits": proof.degree_bits,
             "trace_root": trace_root.to_vec(),
+            "quot_root": quot_root.to_vec(),
             "query_index": &chal.query_indices[..4],
             "trace_index": trace_index,
+            "quot_index": quot_index,
             "val_mmcs": val_mmcs,
-            "notes": "FriFsChal N=4 + TraceRoot Poseidon2 ValMmcs (W=66); quot/first-layer/FRI commit Mmcs, N=8/40, DeepRo, ≡ verify_root_proof deferred; not folded into unified"
+            "quot_mmcs": quot_mmcs,
+            "notes": "FriFsChal N=4 + TraceRoot W=66 (depth=3,shift=1) + QuotRoot W=3 (depth=4,shift=0) Poseidon2 ValMmcs; first-layer/FRI commit Mmcs, N=8/40, DeepRo, ≡ verify_root_proof deferred; not folded into unified"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -977,10 +1026,13 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_auth_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_auth_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 5877826);
         assert_eq!(v["agg_width"].as_u64().unwrap(), AGG_WIDTH as u64);
+        assert_eq!(v["quot_width"].as_u64().unwrap(), 3);
         assert_eq!(v["n"].as_u64().unwrap(), 4);
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
+        assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 4);
+        assert_eq!(v["quot_shift"].as_u64().unwrap(), 0);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 7227422);
 
         let ctx = AggregationContext {
             parent_task_id: "parent",
@@ -1007,27 +1059,51 @@ mod tests {
         let trace_height = init_trace_domain.size() << log_blowup;
         let trace_log_height = trace_height.trailing_zeros() as usize;
         let y_shift = log_global_max_height - trace_log_height;
+        let num_quot = proof.opened_values.quotient_chunks.len();
+        let log_num_quot = num_quot.trailing_zeros() as usize;
+        let quot_parent =
+            init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
+        let quot_chunk_domains = quot_parent.split_domains(num_quot);
+        let quot_h = quot_chunk_domains[0].size() << log_blowup;
+        let quot_log_height = quot_h.trailing_zeros() as usize;
+        let quot_shift = log_global_max_height - quot_log_height;
         let trace_root = *proof.commitments.trace.roots().first().expect("trace root");
+        let quot_root = *proof
+            .commitments
+            .quotient_chunks
+            .roots()
+            .first()
+            .expect("quot root");
 
-        let want_root: Vec<u8> = v["trace_root"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| x.as_u64().unwrap() as u8)
-            .collect();
-        assert_eq!(want_root.as_slice(), trace_root.as_slice());
+        let bytes = |key: &str| -> Vec<u8> {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u8)
+                .collect()
+        };
+        assert_eq!(bytes("trace_root").as_slice(), trace_root.as_slice());
+        assert_eq!(bytes("quot_root").as_slice(), quot_root.as_slice());
 
         let qis = v["query_index"].as_array().unwrap();
         let tis = v["trace_index"].as_array().unwrap();
+        let qis_mmcs = v["quot_index"].as_array().unwrap();
         let paths = v["val_mmcs"].as_array().unwrap();
+        let quot_paths = v["quot_mmcs"].as_array().unwrap();
         assert_eq!(paths.len(), 4);
+        assert_eq!(quot_paths.len(), 4);
         for q in 0..4 {
-            assert_eq!(qis[q].as_u64().unwrap() as usize, chal.query_indices[q]);
-            let t_idx = chal.query_indices[q] >> y_shift;
+            let qi = chal.query_indices[q];
+            assert_eq!(qis[q].as_u64().unwrap() as usize, qi);
+            let t_idx = qi >> y_shift;
+            let q_idx = qi >> quot_shift;
             assert_eq!(tis[q].as_u64().unwrap() as usize, t_idx);
+            assert_eq!(qis_mmcs[q].as_u64().unwrap() as usize, q_idx);
             let input =
                 decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
             let row = &input.input_openings[0].opened_values[0];
+            let quot_row = &input.input_openings[1].opened_values[0];
             let leaf_row: Vec<u32> = paths[q]["leaf_row"]
                 .as_array()
                 .unwrap()
@@ -1038,21 +1114,40 @@ mod tests {
             for (a, b) in leaf_row.iter().zip(row.iter()) {
                 assert_eq!(*a, b.as_canonical_u32());
             }
-            let sibs = paths[q]["siblings"].as_array().unwrap();
-            assert_eq!(sibs.len(), trace_log_height);
-            assert_eq!(sibs.len(), input.input_openings[0].opening_proof.len());
-            for (i, sib) in sibs.iter().enumerate() {
-                let bytes: Vec<u8> = sib
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|x| x.as_u64().unwrap() as u8)
-                    .collect();
-                assert_eq!(
-                    bytes.as_slice(),
-                    input.input_openings[0].opening_proof[i].as_slice()
-                );
+            let q_leaf: Vec<u32> = quot_paths[q]["leaf_row"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect();
+            assert_eq!(q_leaf.len(), 3);
+            for (a, b) in q_leaf.iter().zip(quot_row.iter()) {
+                assert_eq!(*a, b.as_canonical_u32());
             }
+            let check_sibs = |json: &serde_json::Value, proof: &[[u8; 32]], depth: usize| {
+                let sibs = json["siblings"].as_array().unwrap();
+                assert_eq!(sibs.len(), depth);
+                assert_eq!(sibs.len(), proof.len());
+                for (i, sib) in sibs.iter().enumerate() {
+                    let b: Vec<u8> = sib
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_u64().unwrap() as u8)
+                        .collect();
+                    assert_eq!(b.as_slice(), proof[i].as_slice());
+                }
+            };
+            check_sibs(
+                &paths[q],
+                &input.input_openings[0].opening_proof,
+                trace_log_height,
+            );
+            check_sibs(
+                &quot_paths[q],
+                &input.input_openings[1].opening_proof,
+                quot_log_height,
+            );
             assert_eq!(
                 merkle_root_from_path(
                     hash_val_leaf(row),
@@ -1060,6 +1155,14 @@ mod tests {
                     t_idx
                 ),
                 trace_root
+            );
+            assert_eq!(
+                merkle_root_from_path(
+                    hash_val_leaf(quot_row),
+                    &input.input_openings[1].opening_proof,
+                    q_idx
+                ),
+                quot_root
             );
         }
     }
