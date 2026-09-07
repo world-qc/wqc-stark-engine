@@ -1,14 +1,14 @@
 {
   "statement": "thick_unified_v0",
   "gate": "e5b-3d",
-  "source": "compose thin + ValMmcs + FriVarLog + FriFsObserve + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
+  "source": "compose thin + ValMmcs + FriVarLog + FriFsChal + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-07",
-  "approx_r1cs": 8520952,
+  "approx_r1cs": 8521606,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
     "thick_fri_varlog_v0 fold_y@4 + fold_x@2 log_h mux",
-    "thick_fri_fs_observe_v0 6-flush ChainDigest + sample_bits + FriFold",
+    "thick_fri_fs_chal_v0 D1..D6 sample_algebra + FriFold",
     "thick_ood_v0 Aggregation OOD",
     "thick_child_audit_v0 SHA3-256 digest bind",
     "thick_recagg_air_v0 RecAgg AIR fold+quotient",
@@ -23,23 +23,7 @@
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
-  "notes": "FriVarLog + FriFsObserve (Agg 6-flush ChainDigest + query sponge) folded; full STARK observe auth / N=40 / DeepRo / full RecAgg PCS still deferred",
-  "fri_fs_observe_n": 4,
-  "fri_fs_observe_query_index": [3, 12, 6, 2],
-  "fri_fs_observe_pow_witness": 15,
-  "fri_fs_observe_final_poly": [0, 0, 0],
-  "fri_fs_observe_y_outs": [
-    [1833882531, 1104419935, 1083967864],
-    [1065991117, 737993852, 245997954],
-    [1473426871, 28918460, 9639490],
-    [1833882531, 1104419935, 1083967864]
-  ],
-  "fri_fs_observe_x_outs": [
-    [241698322, 1819240107, 2038069137],
-    [753646183, 191372952, 1495446752],
-    [559677532, 1378615361, 459538457],
-    [241698322, 1819240107, 2038069137]
-  ],
+  "notes": "FriVarLog + FriFsChal (D1..D6 sample_algebra + query sponge; FriFold Beta=betas[0]) folded; full STARK observe auth / DeepRo / N=40 / full RecAgg Plonky3 PCS, depth>=3 / variable compose / full leaf verify, Settlement VK deferred \u2014 not \u2261 verify_root_proof",
   "mmcs_path_root": [
     252,
     223,
@@ -349,7 +333,6 @@
     41,
     188
   ],
-  "notes": "All shipped E5b-3 gadgets incl. FriVarLog + FriFsObserve (6-flush ChainDigest + sample_bits) + RecAgg ValMmcs + depth-2 child-verify + unitary/Born/Traj leaf binds; full STARK observe auth / DeepRo / N=40 / full RecAgg Plonky3 PCS, depth≥3 / variable compose / full leaf verify, Settlement VK deferred — not ≡ verify_root_proof",
   "leaf_bind_unitary_container_digest": [
     168,
     179,
@@ -553,5 +536,94 @@
     231,
     128,
     202
+  ],
+  "fri_fs_chal_n": 4,
+  "fri_fs_chal_query_index": [
+    3,
+    12,
+    6,
+    2
+  ],
+  "fri_fs_chal_pow_witness": 15,
+  "fri_fs_chal_final_poly": [
+    0,
+    0,
+    0
+  ],
+  "fri_fs_chal_constraint_alpha": [
+    1145516332,
+    1988267564,
+    2108017976
+  ],
+  "fri_fs_chal_zeta": [
+    317524578,
+    609935332,
+    787355939
+  ],
+  "fri_fs_chal_batch_alpha": [
+    644089120,
+    1714400368,
+    628198229
+  ],
+  "fri_fs_chal_bivariate_beta": [
+    1427761566,
+    1938317995,
+    1800512093
+  ],
+  "fri_fs_chal_betas": [
+    [
+      493398447,
+      2123768958,
+      465197249
+    ],
+    [
+      1458275500,
+      1328089020,
+      1722614083
+    ]
+  ],
+  "fri_fs_chal_y_outs": [
+    [
+      1906545810,
+      897167175,
+      1495757894
+    ],
+    [
+      1638292072,
+      2023420091,
+      1581866260
+    ],
+    [
+      1890153304,
+      1754791448,
+      221615375
+    ],
+    [
+      1906545810,
+      897167175,
+      1495757894
+    ]
+  ],
+  "fri_fs_chal_x_outs": [
+    [
+      1965343543,
+      616506836,
+      561273451
+    ],
+    [
+      297869807,
+      921901208,
+      1179533591
+    ],
+    [
+      1652534401,
+      601843421,
+      1833447261
+    ],
+    [
+      1965343543,
+      616506836,
+      561273451
+    ]
   ]
 }

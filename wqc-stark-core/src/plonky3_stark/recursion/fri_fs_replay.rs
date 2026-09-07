@@ -626,10 +626,151 @@ mod tests {
         assert_eq!(sample_bits(&d7, &mut off, 8), 0);
         let want_qi = v["query_index"].as_array().unwrap();
         for item in want_qi.iter().take(4) {
-            assert_eq!(
-                sample_bits(&d7, &mut off, 4) as u64,
-                item.as_u64().unwrap()
-            );
+            assert_eq!(sample_bits(&d7, &mut off, 4) as u64, item.as_u64().unwrap());
         }
+    }
+
+    #[test]
+    fn lock_fri_fs_chal_golden() {
+        use p3_field::{BasedVectorSpace, PrimeField32};
+        use sha3::{Digest, Keccak256};
+
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_fri_fs_chal_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_chal_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_chal_v0");
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1391834);
+
+        fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u8)
+                .collect()
+        }
+        fn ef3(v: &serde_json::Value, key: &str) -> [u32; 3] {
+            let a = v[key].as_array().unwrap();
+            [
+                a[0].as_u64().unwrap() as u32,
+                a[1].as_u64().unwrap() as u32,
+                a[2].as_u64().unwrap() as u32,
+            ]
+        }
+        fn ef3_rows(v: &serde_json::Value, key: &str) -> Vec<[u32; 3]> {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    let a = row.as_array().unwrap();
+                    [
+                        a[0].as_u64().unwrap() as u32,
+                        a[1].as_u64().unwrap() as u32,
+                        a[2].as_u64().unwrap() as u32,
+                    ]
+                })
+                .collect()
+        }
+        fn push_u32(out: &mut Vec<u8>, x: u32) {
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+        fn keccak(msg: &[u8]) -> [u8; 32] {
+            Keccak256::digest(msg).into()
+        }
+        fn sample_base_m31(d: &[u8; 32], off: &mut usize) -> u32 {
+            let mut b = [0u8; 4];
+            for i in 0..4 {
+                b[i] = d[31 - *off - i];
+            }
+            *off += 4;
+            let u = u32::from_le_bytes(b) & 0x7fff_ffff;
+            assert_ne!(u, 0x7fff_ffff, "M31 reject");
+            u
+        }
+        fn sample_algebra(d: &[u8; 32]) -> [u32; 3] {
+            let mut off = 0usize;
+            [
+                sample_base_m31(d, &mut off),
+                sample_base_m31(d, &mut off),
+                sample_base_m31(d, &mut off),
+            ]
+        }
+
+        let degree_bits = v["degree_bits"].as_u64().unwrap() as u32;
+        let mut m1 = Vec::new();
+        push_u32(&mut m1, degree_bits);
+        push_u32(&mut m1, degree_bits);
+        push_u32(&mut m1, 0);
+        m1.extend_from_slice(&bytes(&v, "trace_root"));
+        let d1 = keccak(&m1);
+        assert_eq!(sample_algebra(&d1), ef3(&v, "constraint_alpha"));
+
+        let d2 = keccak(&[d1.as_slice(), bytes(&v, "quot_root").as_slice()].concat());
+        assert_eq!(sample_algebra(&d2), ef3(&v, "zeta"));
+
+        let mut m3 = Vec::new();
+        m3.extend_from_slice(&d2);
+        for row in ef3_rows(&v, "trace_local")
+            .iter()
+            .chain(ef3_rows(&v, "trace_next").iter())
+            .chain(ef3_rows(&v, "quot_open").iter())
+        {
+            for limb in row {
+                push_u32(&mut m3, *limb);
+            }
+        }
+        let d3 = keccak(&m3);
+        assert_eq!(sample_algebra(&d3), ef3(&v, "batch_alpha"));
+
+        let d4 = keccak(&[d3.as_slice(), bytes(&v, "first_layer_root").as_slice()].concat());
+        assert_eq!(sample_algebra(&d4), ef3(&v, "bivariate_beta"));
+        let d5 = keccak(&[d4.as_slice(), bytes(&v, "fri_commit0").as_slice()].concat());
+        let d6 = keccak(&[d5.as_slice(), bytes(&v, "fri_commit1").as_slice()].concat());
+        let betas = v["betas"].as_array().unwrap();
+        let b0 = [
+            betas[0][0].as_u64().unwrap() as u32,
+            betas[0][1].as_u64().unwrap() as u32,
+            betas[0][2].as_u64().unwrap() as u32,
+        ];
+        let b1 = [
+            betas[1][0].as_u64().unwrap() as u32,
+            betas[1][1].as_u64().unwrap() as u32,
+            betas[1][2].as_u64().unwrap() as u32,
+        ];
+        assert_eq!(sample_algebra(&d5), b0);
+        assert_eq!(sample_algebra(&d6), b1);
+        assert_eq!(d6.as_slice(), bytes(&v, "chain_digest").as_slice());
+
+        // Live Agg replay must match golden challenge limbs.
+        let ctx = AggregationContext {
+            parent_task_id: "parent",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            security_level: "low",
+        };
+        let transcript = generate_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_agg_fri_challenges(&proof).expect("replay");
+        let limbs = |c: &Challenge| -> [u32; 3] {
+            let s = BasedVectorSpace::<Val>::as_basis_coefficients_slice(c);
+            [
+                s[0].as_canonical_u32(),
+                s[1].as_canonical_u32(),
+                s[2].as_canonical_u32(),
+            ]
+        };
+        assert_eq!(limbs(&chal.constraint_alpha), ef3(&v, "constraint_alpha"));
+        assert_eq!(limbs(&chal.zeta), ef3(&v, "zeta"));
+        assert_eq!(limbs(&chal.batch_alpha), ef3(&v, "batch_alpha"));
+        assert_eq!(limbs(&chal.bivariate_beta), ef3(&v, "bivariate_beta"));
+        assert_eq!(limbs(&chal.betas[0]), b0);
+        assert_eq!(limbs(&chal.betas[1]), b1);
     }
 }
