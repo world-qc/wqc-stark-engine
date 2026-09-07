@@ -642,7 +642,7 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_chal_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_chal_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1759303);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2125167);
 
         fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
             v[key]
@@ -785,9 +785,10 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_chal_rej_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_chal_rej_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 193509);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 254281);
         assert_eq!(v["reflushes"].as_u64().unwrap(), 1);
-        assert_eq!(v["max_algebra_reflush"].as_u64().unwrap(), 1);
+        assert_eq!(v["max_algebra_reflush"].as_u64().unwrap(), 2);
+        assert_eq!(v["max_algebra_draws"].as_u64().unwrap(), 24);
 
         fn bytes(v: &serde_json::Value, key: &str) -> [u8; 32] {
             let a = v[key].as_array().unwrap();
