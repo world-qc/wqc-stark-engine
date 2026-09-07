@@ -1,6 +1,6 @@
 {
   "agg_width": 66,
-  "approx_r1cs": 2490198,
+  "approx_r1cs": 2645314,
   "batch_alpha": [
     644089120,
     1714400368,
@@ -135,6 +135,26 @@
       1965343543,
       616506836,
       561273451
+    ],
+    [
+      1652534401,
+      601843421,
+      1833447261
+    ],
+    [
+      1652534401,
+      601843421,
+      1833447261
+    ],
+    [
+      1965343543,
+      616506836,
+      561273451
+    ],
+    [
+      318370372,
+      1351202543,
+      1265907214
     ]
   ],
   "fold_y_outs": [
@@ -157,6 +177,26 @@
       1906545810,
       897167175,
       1495757894
+    ],
+    [
+      257330348,
+      392692206,
+      1925868281
+    ],
+    [
+      257330348,
+      392692206,
+      1925868281
+    ],
+    [
+      240937842,
+      1250316479,
+      651725762
+    ],
+    [
+      1336074178,
+      1270193078,
+      1672080574
     ]
   ],
   "fri_commit0": [
@@ -228,14 +268,19 @@
     111
   ],
   "gate": "e5b-3d",
-  "measured_at": "2026-09-07",
-  "notes": "D1..D6 sample_algebra with MaxReflush=3 capacity (Agg golden zero-reject); FriFold Beta=betas[0]; chaining advances on re-flush; full STARK observe auth / N=40 / \u2261 verify_root_proof deferred",
+  "max_algebra_reflush": 3,
+  "measured_at": "2026-09-08",
+  "notes": "D1..D6 sample_algebra with MaxReflush=3 capacity (Agg golden zero-reject); FriFold Beta=betas[0]; chaining advances on re-flush; full STARK observe auth / N=8 Agg low; N=40 / ≡ verify_root_proof deferred",
   "pow_witness": 15,
   "query_index": [
     3,
     12,
     6,
-    2
+    2,
+    5,
+    4,
+    0,
+    9
   ],
   "quot_open": [
     [
@@ -992,6 +1037,5 @@
     317524578,
     609935332,
     787355939
-  ],
-  "max_algebra_reflush": 3
+  ]
 }

@@ -573,7 +573,7 @@ mod wrap_fri_pack_golden {
         let log_h = v["log_h"].as_u64().unwrap() as usize;
         let n = v["n"].as_u64().unwrap() as usize;
         assert_eq!(log_h, 3);
-        assert_eq!(n, 4);
+        assert_eq!(n, 8);
 
         let fold_y = v["fold_y"].as_array().unwrap();
         let fold_x = v["fold_x"].as_array().unwrap();
@@ -644,7 +644,7 @@ mod wrap_fri_fs_golden {
         let y_shift = v["y_shift"].as_u64().unwrap() as usize;
         let x_shift = v["x_shift"].as_u64().unwrap() as usize;
         assert_eq!(log_h, 3);
-        assert_eq!(n, 4);
+        assert_eq!(n, 8);
         assert_eq!(y_shift, 1);
         assert_eq!(x_shift, 2);
 
@@ -767,9 +767,20 @@ mod wrap_fri_fs_sponge_golden {
         let v1 = Challenge::new([Val::from_u32(4), Val::from_u32(5), Val::from_u32(6)]);
         let fold_y = v["fold_y"].as_array().unwrap();
         let fold_x = v["fold_x"].as_array().unwrap();
+        let n = v["n"].as_u64().unwrap() as usize;
+        assert_eq!(n, 8);
+        assert_eq!(qis.len(), n);
+        assert_eq!(fold_y.len(), n);
+        assert_eq!(fold_x.len(), n);
 
-        for i in 0..4 {
-            let qi = sample_bits_from_digest(&digest_arr, &mut off, 4) as usize;
+        // PoW + N draws: 1+N=9 > 8 → re-flush Di'=Keccak(Di) after 8 draws.
+        let mut dig = digest_arr;
+        for i in 0..n {
+            if off == 32 {
+                dig = Keccak256::digest(dig).into();
+                off = 0;
+            }
+            let qi = sample_bits_from_digest(&dig, &mut off, 4) as usize;
             assert_eq!(qi, qis[i].as_u64().unwrap() as usize);
             let idx_y = qi >> y_shift;
             let idx_x = qi >> x_shift;

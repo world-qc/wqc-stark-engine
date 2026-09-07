@@ -437,13 +437,22 @@ mod tests {
             u & ((1 << bits) - 1)
         };
         assert_eq!(sample_bits(&d7, &mut off, 8), 0, "pow");
-        for i in 0..4 {
+        // N=8: PoW + 7 queries from d7, then Di'=Keccak(d7) for qi[7].
+        for i in 0..7 {
             assert_eq!(
                 sample_bits(&d7, &mut off, 4),
                 chal.query_indices[i],
                 "qi[{i}]"
             );
         }
+        assert_eq!(off, 32);
+        let d7b: [u8; 32] = keccak(&d7);
+        let mut off2 = 0usize;
+        assert_eq!(
+            sample_bits(&d7b, &mut off2, 4),
+            chal.query_indices[7],
+            "qi[7] after reflush"
+        );
 
         let mut trace_local = Vec::new();
         for c in &proof.opened_values.trace_local {
@@ -479,7 +488,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "AggregationAir HashChallenger 6-flush ChainDigest + query PoW sample_bits",
             "measured_at": "2026-09-07",
-            "approx_r1cs": 1391180,
+            "approx_r1cs": 1546272,
             "agg_width": 66,
             "degree_bits": degree_bits,
             "flush_lens": [44, 64, 1652, 64, 64, 64],
@@ -494,8 +503,8 @@ mod tests {
             "chain_digest": chain.to_vec(),
             "final_poly": fp,
             "pow_witness": pow,
-            "query_index": &chal.query_indices[..4],
-            "notes": "Absorb-only mid-state (no in-circuit α/ζ/β sample); full STARK observe auth / N=40 / ≡ verify_root_proof deferred"
+            "query_index": &chal.query_indices[..8],
+            "notes": "Absorb-only mid-state (no in-circuit α/ζ/β sample); N=8 Agg low; N=40 / ≡ verify_root_proof deferred"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -521,7 +530,7 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_observe_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_observe_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1391180);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1546272);
         assert_eq!(v["degree_bits"].as_u64().unwrap(), 2);
         assert_eq!(v["agg_width"].as_u64().unwrap(), 66);
 
@@ -625,8 +634,17 @@ mod tests {
         let mut off = 0usize;
         assert_eq!(sample_bits(&d7, &mut off, 8), 0);
         let want_qi = v["query_index"].as_array().unwrap();
-        for item in want_qi.iter().take(4) {
-            assert_eq!(sample_bits(&d7, &mut off, 4) as u64, item.as_u64().unwrap());
+        assert_eq!(want_qi.len(), 8);
+        let mut dig = d7;
+        for item in want_qi {
+            if off == 32 {
+                dig = keccak(&dig);
+                off = 0;
+            }
+            assert_eq!(
+                sample_bits(&dig, &mut off, 4) as u64,
+                item.as_u64().unwrap()
+            );
         }
     }
 
@@ -642,7 +660,7 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_chal_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_chal_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2490198);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2645314);
 
         fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
             v[key]
@@ -886,6 +904,7 @@ mod tests {
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_agg_fri_challenges(&proof).expect("replay");
         assert_eq!(proof.degree_bits, 2);
+        assert_eq!(chal.query_indices.len(), 8);
         assert_eq!(&chal.query_indices[..4], &[3usize, 12, 6, 2]);
         assert_eq!(
             proof.opened_values.quotient_chunks.len(),
@@ -932,11 +951,11 @@ mod tests {
             .roots()
             .first()
             .expect("quot root");
-        let mut val_mmcs = Vec::with_capacity(4);
-        let mut quot_mmcs = Vec::with_capacity(4);
-        let mut trace_index = Vec::with_capacity(4);
-        let mut quot_index = Vec::with_capacity(4);
-        for q in 0..4 {
+        let mut val_mmcs = Vec::with_capacity(8);
+        let mut quot_mmcs = Vec::with_capacity(8);
+        let mut trace_index = Vec::with_capacity(8);
+        let mut quot_index = Vec::with_capacity(8);
+        for q in 0..8 {
             let qi = chal.query_indices[q];
             let input =
                 decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
@@ -1028,9 +1047,9 @@ mod tests {
             out
         };
 
-        let mut chal_first_layer = Vec::with_capacity(4);
-        let mut chal_commit = Vec::with_capacity(4);
-        let mut deep_ro = Vec::with_capacity(4);
+        let mut chal_first_layer = Vec::with_capacity(8);
+        let mut chal_commit = Vec::with_capacity(8);
+        let mut deep_ro = Vec::with_capacity(8);
         let trace_next = proof.opened_values.trace_next.as_ref().expect("trace_next");
         let mut px_trace = [Val::ZERO; AGG_WIDTH];
         let mut pz_local = [Challenge::ZERO; AGG_WIDTH];
@@ -1041,7 +1060,7 @@ mod tests {
         let mut pz_quot = [Challenge::ZERO; 3];
         pz_quot.copy_from_slice(&proof.opened_values.quotient_chunks[0][..3]);
 
-        for (q, bundle) in chal_bundle.iter().take(4).enumerate() {
+        for (q, bundle) in chal_bundle.iter().take(8).enumerate() {
             let qi = chal.query_indices[q];
             let fl = &bundle.first_layer;
             // Note: FriChalBatchPathProof.index is post-walk cap (0); use QI>>1.
@@ -1243,7 +1262,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "AggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y bind",
             "measured_at": "2026-09-07",
-            "approx_r1cs": 14171275,
+            "approx_r1cs": 26007171,
             "agg_width": AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -1255,14 +1274,14 @@ mod tests {
             "chal_fl_heights": [8, 4],
             "chal_commit_shifts": [2, 3],
             "chal_commit_depths": [2, 1],
-            "n": 4,
+            "n": 8,
             "degree_bits": proof.degree_bits,
             "trace_root": trace_root.to_vec(),
             "quot_root": quot_root.to_vec(),
             "first_layer_root": fl_root.to_vec(),
             "fri_commit0": fri0.to_vec(),
             "fri_commit1": fri1.to_vec(),
-            "query_index": &chal.query_indices[..4],
+            "query_index": &chal.query_indices[..8],
             "trace_index": trace_index,
             "quot_index": quot_index,
             "val_mmcs": val_mmcs,
@@ -1276,7 +1295,7 @@ mod tests {
             "atn_x": limbs_u32(atn_x),
             "atn_y": limbs_u32(atn_y),
             "deep_ro": deep_ro,
-            "notes": "FriFsChal N=4 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y bind; N=8/40/≡verify_root_proof deferred; not folded into unified"
+            "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y bind; N=40/≡verify_root_proof deferred; not folded into unified"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1307,19 +1326,20 @@ mod tests {
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_auth_v0");
         assert_eq!(v["agg_width"].as_u64().unwrap(), AGG_WIDTH as u64);
         assert_eq!(v["quot_width"].as_u64().unwrap(), 3);
-        assert_eq!(v["n"].as_u64().unwrap(), 4);
+        assert_eq!(v["n"].as_u64().unwrap(), 8);
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 4);
         assert_eq!(v["quot_shift"].as_u64().unwrap(), 0);
         assert_eq!(v["chal_leaf_width"].as_u64().unwrap(), 6);
         assert_eq!(v["chal_fl_shift"].as_u64().unwrap(), 1);
         assert_eq!(v["chal_fl_depth"].as_u64().unwrap(), 3);
-        assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 4);
-        assert_eq!(v["chal_commit"].as_array().unwrap().len(), 4);
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 14171275);
-        assert_eq!(v["deep_ro"].as_array().unwrap().len(), 4);
+        assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 8);
+        assert_eq!(v["chal_commit"].as_array().unwrap().len(), 8);
+        assert_eq!(v["deep_ro"].as_array().unwrap().len(), 8);
         assert_eq!(v["lambdas"].as_array().unwrap().len(), 2);
         assert_eq!(v["zeta_next"].as_array().unwrap().len(), 3);
+        // approx_r1cs locked after Go remmeasure (N=8)
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 26007171);
 
         let ctx = AggregationContext {
             parent_task_id: "parent",
@@ -1378,9 +1398,9 @@ mod tests {
         let qis_mmcs = v["quot_index"].as_array().unwrap();
         let paths = v["val_mmcs"].as_array().unwrap();
         let quot_paths = v["quot_mmcs"].as_array().unwrap();
-        assert_eq!(paths.len(), 4);
-        assert_eq!(quot_paths.len(), 4);
-        for q in 0..4 {
+        assert_eq!(paths.len(), 8);
+        assert_eq!(quot_paths.len(), 8);
+        for q in 0..8 {
             let qi = chal.query_indices[q];
             assert_eq!(qis[q].as_u64().unwrap() as usize, qi);
             let t_idx = qi >> y_shift;
