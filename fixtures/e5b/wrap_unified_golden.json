@@ -3,7 +3,7 @@
   "gate": "e5b-3d",
   "source": "compose thin + ValMmcs + FriVarLog + FriFsChal + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-08",
-  "approx_r1cs": 9775086,
+  "approx_r1cs": 9790284,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",

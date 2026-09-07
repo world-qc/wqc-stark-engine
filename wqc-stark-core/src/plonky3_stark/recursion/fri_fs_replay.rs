@@ -1002,8 +1002,8 @@ mod tests {
             deep_ro_trace_witness, deep_ro_w3_witness, ef_from_projective_line,
         };
         use crate::plonky3_stark::recursion::fri_fold_native::{
-            cfft_permute_index, challenge_to_limbs, fold_x_row, fold_y_row, fold_y_twiddle_inv,
-            standard_nth_point,
+            cfft_permute_index, challenge_to_limbs, fold_x_row, fold_x_twiddle_inv, fold_y_row,
+            fold_y_twiddle_inv, standard_nth_point,
         };
         use crate::plonky3_stark::recursion::fri_mmcs_bind::fri_chal_mmcs_bundle_from_agg_proof;
         use crate::plonky3_stark::recursion::fri_ro::reconstruct_query_ro;
@@ -1172,40 +1172,6 @@ mod tests {
                 fold_ys[1].v1,
             );
 
-            deep_ro.push(serde_json::json!({
-                "sx_trace": val_u32(pt.x),
-                "sy_trace": val_u32(pt.y),
-                "sx_quot": val_u32(pq.x),
-                "sy_quot": val_u32(pq.y),
-                "v_n_trace": val_u32(tw.v_n),
-                "v_n_quot": val_u32(qw.v_n),
-                "out_pre_trace0": limbs_u32(tw.deep0.out_pre),
-                "out_pre_trace1": limbs_u32(tw.deep1.out_pre),
-                "out_pre_quot": limbs_u32(qw.out_pre),
-                "deep_out_trace": limbs_u32(tw.out),
-                "deep_out_quot": limbs_u32(qw.out),
-                "fold_y_short": {
-                    "index": fold_ys[0].index as u32,
-                    "log_h": fold_ys[0].log_folded_height as u32,
-                    "t_inv": t_inv_short.as_canonical_u32(),
-                    "out": limbs_u32(out_short),
-                },
-                "fold_y_tall": {
-                    "index": fold_ys[1].index as u32,
-                    "log_h": fold_ys[1].log_folded_height as u32,
-                    "t_inv": t_inv_tall.as_canonical_u32(),
-                    "out": limbs_u32(out_tall),
-                },
-            }));
-
-            chal_first_layer.push(serde_json::json!({
-                "tall_row": tall,
-                "short_row": short,
-                "siblings": fl.siblings.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
-                "index": fl_idx as u32,
-                "inject_after_step": 0,
-            }));
-
             let qp = &view.fri_proof.query_proofs[q];
             let openings = &qp.commit_phase_openings;
             assert_eq!(openings.len(), 2);
@@ -1217,6 +1183,7 @@ mod tests {
             let mut ro_iter = reduced.iter().peekable();
             let commit_roots = [fri0, fri1];
             let mut rounds = Vec::with_capacity(2);
+            let mut fold_xs = Vec::with_capacity(2);
             for (round, opening) in openings.iter().enumerate() {
                 if let Some(&&(lh, ro)) = ro_iter.peek() {
                     if lh == log_current {
@@ -1251,18 +1218,66 @@ mod tests {
                     "siblings": opening.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
                     "index": index as u32,
                 }));
-                folded_eval = fold_x_row(index, log_folded, chal.betas[round], evals[0], evals[1]);
+                let out = fold_x_row(index, log_folded, chal.betas[round], evals[0], evals[1]);
+                let t_inv = fold_x_twiddle_inv(index, log_folded);
+                fold_xs.push(serde_json::json!({
+                    "index": index as u32,
+                    "log_h": log_folded as u32,
+                    "t_inv": t_inv.as_canonical_u32(),
+                    "out": limbs_u32(out),
+                }));
+                folded_eval = out;
                 log_current = log_folded;
             }
+            assert_eq!(
+                folded_eval, view.fri_proof.final_poly,
+                "q{q} fold_x → FinalPoly"
+            );
+            assert!(ro_iter.next().is_none(), "q{q} unused RO");
             chal_commit.push(serde_json::json!(rounds));
+
+            deep_ro.push(serde_json::json!({
+                "sx_trace": val_u32(pt.x),
+                "sy_trace": val_u32(pt.y),
+                "sx_quot": val_u32(pq.x),
+                "sy_quot": val_u32(pq.y),
+                "v_n_trace": val_u32(tw.v_n),
+                "v_n_quot": val_u32(qw.v_n),
+                "out_pre_trace0": limbs_u32(tw.deep0.out_pre),
+                "out_pre_trace1": limbs_u32(tw.deep1.out_pre),
+                "out_pre_quot": limbs_u32(qw.out_pre),
+                "deep_out_trace": limbs_u32(tw.out),
+                "deep_out_quot": limbs_u32(qw.out),
+                "fold_y_short": {
+                    "index": fold_ys[0].index as u32,
+                    "log_h": fold_ys[0].log_folded_height as u32,
+                    "t_inv": t_inv_short.as_canonical_u32(),
+                    "out": limbs_u32(out_short),
+                },
+                "fold_y_tall": {
+                    "index": fold_ys[1].index as u32,
+                    "log_h": fold_ys[1].log_folded_height as u32,
+                    "t_inv": t_inv_tall.as_canonical_u32(),
+                    "out": limbs_u32(out_tall),
+                },
+                "fold_x": fold_xs,
+            }));
+
+            chal_first_layer.push(serde_json::json!({
+                "tall_row": tall,
+                "short_row": short,
+                "siblings": fl.siblings.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
+                "index": fl_idx as u32,
+                "inject_after_step": 0,
+            }));
         }
 
         let golden = serde_json::json!({
             "statement": "thick_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "AggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y bind",
-            "measured_at": "2026-09-07",
-            "approx_r1cs": 26007171,
+            "source": "AggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly",
+            "measured_at": "2026-09-08",
+            "approx_r1cs": 26966547,
             "agg_width": AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -1295,7 +1310,7 @@ mod tests {
             "atn_x": limbs_u32(atn_x),
             "atn_y": limbs_u32(atn_y),
             "deep_ro": deep_ro,
-            "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y bind; N=40/≡verify_root_proof deferred; not folded into unified"
+            "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; N=40/≡verify_root_proof deferred; not folded into unified"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1338,8 +1353,14 @@ mod tests {
         assert_eq!(v["deep_ro"].as_array().unwrap().len(), 8);
         assert_eq!(v["lambdas"].as_array().unwrap().len(), 2);
         assert_eq!(v["zeta_next"].as_array().unwrap().len(), 3);
-        // approx_r1cs locked after Go remmeasure (N=8)
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 26007171);
+        for q in 0..8 {
+            let fx = v["deep_ro"][q]["fold_x"].as_array().expect("fold_x");
+            assert_eq!(fx.len(), 2);
+            assert_eq!(fx[0]["log_h"].as_u64().unwrap(), 2);
+            assert_eq!(fx[1]["log_h"].as_u64().unwrap(), 1);
+        }
+        // approx_r1cs locked after Go remmeasure (N=8 + fold_x chain)
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 26966547);
 
         let ctx = AggregationContext {
             parent_task_id: "parent",

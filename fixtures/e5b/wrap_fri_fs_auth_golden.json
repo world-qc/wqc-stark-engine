@@ -1,6 +1,6 @@
 {
   "agg_width": 66,
-  "approx_r1cs": 26007171,
+  "approx_r1cs": 26966547,
   "at_x": [
     542507136,
     589928647,
@@ -2084,6 +2084,28 @@
         0,
         0
       ],
+      "fold_x": [
+        {
+          "index": 0,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 1160411471
+        },
+        {
+          "index": 0,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 991237807
+        }
+      ],
       "fold_y_short": {
         "index": 0,
         "log_h": 2,
@@ -2136,6 +2158,28 @@
         0,
         0,
         0
+      ],
+      "fold_x": [
+        {
+          "index": 3,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 1942501404
+        },
+        {
+          "index": 1,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 775648038
+        }
       ],
       "fold_y_short": {
         "index": 3,
@@ -2190,6 +2234,28 @@
         0,
         0
       ],
+      "fold_x": [
+        {
+          "index": 1,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 1518526074
+        },
+        {
+          "index": 0,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 991237807
+        }
+      ],
       "fold_y_short": {
         "index": 1,
         "log_h": 2,
@@ -2242,6 +2308,28 @@
         0,
         0,
         0
+      ],
+      "fold_x": [
+        {
+          "index": 0,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 1160411471
+        },
+        {
+          "index": 0,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 991237807
+        }
       ],
       "fold_y_short": {
         "index": 0,
@@ -2296,6 +2384,28 @@
         0,
         0
       ],
+      "fold_x": [
+        {
+          "index": 1,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 1518526074
+        },
+        {
+          "index": 0,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 991237807
+        }
+      ],
       "fold_y_short": {
         "index": 1,
         "log_h": 2,
@@ -2348,6 +2458,28 @@
         0,
         0,
         0
+      ],
+      "fold_x": [
+        {
+          "index": 1,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 1518526074
+        },
+        {
+          "index": 0,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 991237807
+        }
       ],
       "fold_y_short": {
         "index": 1,
@@ -2402,6 +2534,28 @@
         0,
         0
       ],
+      "fold_x": [
+        {
+          "index": 0,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 1160411471
+        },
+        {
+          "index": 0,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 991237807
+        }
+      ],
       "fold_y_short": {
         "index": 0,
         "log_h": 2,
@@ -2454,6 +2608,28 @@
         0,
         0,
         0
+      ],
+      "fold_x": [
+        {
+          "index": 2,
+          "log_h": 2,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 490549293
+        },
+        {
+          "index": 1,
+          "log_h": 1,
+          "out": [
+            0,
+            0,
+            0
+          ],
+          "t_inv": 775648038
+        }
       ],
       "fold_y_short": {
         "index": 2,
@@ -2616,7 +2792,7 @@
   ],
   "measured_at": "2026-09-08",
   "n": 8,
-  "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y bind; N=40/≡verify_root_proof deferred; not folded into unified",
+  "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x\u2192FinalPoly; N=40/\u2261verify_root_proof deferred; not folded into unified",
   "path_depth": 3,
   "query_index": [
     3,
@@ -3845,7 +4021,7 @@
   ],
   "quot_shift": 0,
   "quot_width": 3,
-  "source": "AggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y bind",
+  "source": "AggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo\u2192FL Flatten/fold_y + commit-phase fold_x\u2192FinalPoly",
   "statement": "thick_fri_fs_auth_v0",
   "trace_index": [
     1,
