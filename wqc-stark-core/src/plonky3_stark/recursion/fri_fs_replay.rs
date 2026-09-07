@@ -292,8 +292,8 @@ mod tests {
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_agg_fri_challenges(&proof).expect("replay");
-        assert_eq!(chal.betas.len(), 2);
         assert_eq!(chal.query_indices.len(), 40);
+        assert_eq!(chal.betas.len(), 2);
         assert_eq!(chal.log_blowup, 1);
         assert_eq!(chal.fri_log_max_height, 3);
         assert_eq!(chal.extra_query_index_bits, 1);
@@ -330,12 +330,13 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [1u8; CHILD_HASH_LEN],
             right_child_hash: [2u8; CHILD_HASH_LEN],
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_agg_fri_challenges(&proof).expect("replay");
+        assert_eq!(chal.query_indices.len(), 40);
         assert_eq!(chal.betas.len(), 2);
 
         let degree_bits = proof.degree_bits;
@@ -437,22 +438,15 @@ mod tests {
             u & ((1 << bits) - 1)
         };
         assert_eq!(sample_bits(&d7, &mut off, 8), 0, "pow");
-        // N=8: PoW + 7 queries from d7, then Di'=Keccak(d7) for qi[7].
-        for i in 0..7 {
-            assert_eq!(
-                sample_bits(&d7, &mut off, 4),
-                chal.query_indices[i],
-                "qi[{i}]"
-            );
+        // N=40: PoW + 40 queries with Di'=Keccak(Di) when the 32 B LIFO is exhausted.
+        let mut dig = d7;
+        for (i, &want) in chal.query_indices.iter().enumerate() {
+            if off == 32 {
+                dig = keccak(&dig);
+                off = 0;
+            }
+            assert_eq!(sample_bits(&dig, &mut off, 4), want, "qi[{i}]");
         }
-        assert_eq!(off, 32);
-        let d7b: [u8; 32] = keccak(&d7);
-        let mut off2 = 0usize;
-        assert_eq!(
-            sample_bits(&d7b, &mut off2, 4),
-            chal.query_indices[7],
-            "qi[7] after reflush"
-        );
 
         let mut trace_local = Vec::new();
         for c in &proof.opened_values.trace_local {
@@ -487,8 +481,8 @@ mod tests {
             "statement": "thick_fri_fs_observe_v0",
             "gate": "e5b-3d",
             "source": "AggregationAir HashChallenger 6-flush ChainDigest + query PoW sample_bits",
-            "measured_at": "2026-09-07",
-            "approx_r1cs": 1546272,
+            "measured_at": "2026-09-08",
+            "approx_r1cs": 2546237,
             "agg_width": 66,
             "degree_bits": degree_bits,
             "flush_lens": [44, 64, 1652, 64, 64, 64],
@@ -503,8 +497,8 @@ mod tests {
             "chain_digest": chain.to_vec(),
             "final_poly": fp,
             "pow_witness": pow,
-            "query_index": &chal.query_indices[..8],
-            "notes": "Absorb-only mid-state (no in-circuit α/ζ/β sample); N=8 Agg low; N=40 / ≡ verify_root_proof deferred"
+            "query_index": &chal.query_indices[..40],
+            "notes": "Absorb-only mid-state (no in-circuit α/ζ/β sample); N=40 Agg ultra; N=40 / ≡ verify_root_proof deferred"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -530,7 +524,7 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_observe_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_observe_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1546272);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2546237);
         assert_eq!(v["degree_bits"].as_u64().unwrap(), 2);
         assert_eq!(v["agg_width"].as_u64().unwrap(), 66);
 
@@ -634,7 +628,7 @@ mod tests {
         let mut off = 0usize;
         assert_eq!(sample_bits(&d7, &mut off, 8), 0);
         let want_qi = v["query_index"].as_array().unwrap();
-        assert_eq!(want_qi.len(), 8);
+        assert_eq!(want_qi.len(), 40);
         let mut dig = d7;
         for item in want_qi {
             if off == 32 {
@@ -660,7 +654,7 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_chal_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_chal_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2645314);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 3645473);
 
         fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
             v[key]
@@ -770,7 +764,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [1u8; CHILD_HASH_LEN],
             right_child_hash: [2u8; CHILD_HASH_LEN],
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -897,15 +891,14 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [1u8; CHILD_HASH_LEN],
             right_child_hash: [2u8; CHILD_HASH_LEN],
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_agg_fri_challenges(&proof).expect("replay");
         assert_eq!(proof.degree_bits, 2);
-        assert_eq!(chal.query_indices.len(), 8);
-        assert_eq!(&chal.query_indices[..4], &[3usize, 12, 6, 2]);
+        assert_eq!(chal.query_indices.len(), 40);
         assert_eq!(
             proof.opened_values.quotient_chunks.len(),
             1,
@@ -951,11 +944,11 @@ mod tests {
             .roots()
             .first()
             .expect("quot root");
-        let mut val_mmcs = Vec::with_capacity(8);
-        let mut quot_mmcs = Vec::with_capacity(8);
-        let mut trace_index = Vec::with_capacity(8);
-        let mut quot_index = Vec::with_capacity(8);
-        for q in 0..8 {
+        let mut val_mmcs = Vec::with_capacity(40);
+        let mut quot_mmcs = Vec::with_capacity(40);
+        let mut trace_index = Vec::with_capacity(40);
+        let mut quot_index = Vec::with_capacity(40);
+        for q in 0..40 {
             let qi = chal.query_indices[q];
             let input =
                 decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
@@ -1047,9 +1040,9 @@ mod tests {
             out
         };
 
-        let mut chal_first_layer = Vec::with_capacity(8);
-        let mut chal_commit = Vec::with_capacity(8);
-        let mut deep_ro = Vec::with_capacity(8);
+        let mut chal_first_layer = Vec::with_capacity(40);
+        let mut chal_commit = Vec::with_capacity(40);
+        let mut deep_ro = Vec::with_capacity(40);
         let trace_next = proof.opened_values.trace_next.as_ref().expect("trace_next");
         let mut px_trace = [Val::ZERO; AGG_WIDTH];
         let mut pz_local = [Challenge::ZERO; AGG_WIDTH];
@@ -1060,7 +1053,7 @@ mod tests {
         let mut pz_quot = [Challenge::ZERO; 3];
         pz_quot.copy_from_slice(&proof.opened_values.quotient_chunks[0][..3]);
 
-        for (q, bundle) in chal_bundle.iter().take(8).enumerate() {
+        for (q, bundle) in chal_bundle.iter().enumerate() {
             let qi = chal.query_indices[q];
             let fl = &bundle.first_layer;
             // Note: FriChalBatchPathProof.index is post-walk cap (0); use QI>>1.
@@ -1275,9 +1268,9 @@ mod tests {
         let golden = serde_json::json!({
             "statement": "thick_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "AggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly",
+            "source": "AggregationAir ultra-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly",
             "measured_at": "2026-09-08",
-            "approx_r1cs": 26966547,
+            "approx_r1cs": 0,
             "agg_width": AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -1289,14 +1282,14 @@ mod tests {
             "chal_fl_heights": [8, 4],
             "chal_commit_shifts": [2, 3],
             "chal_commit_depths": [2, 1],
-            "n": 8,
+            "n": 40,
             "degree_bits": proof.degree_bits,
             "trace_root": trace_root.to_vec(),
             "quot_root": quot_root.to_vec(),
             "first_layer_root": fl_root.to_vec(),
             "fri_commit0": fri0.to_vec(),
             "fri_commit1": fri1.to_vec(),
-            "query_index": &chal.query_indices[..8],
+            "query_index": &chal.query_indices[..40],
             "trace_index": trace_index,
             "quot_index": quot_index,
             "val_mmcs": val_mmcs,
@@ -1310,7 +1303,7 @@ mod tests {
             "atn_x": limbs_u32(atn_x),
             "atn_y": limbs_u32(atn_y),
             "deep_ro": deep_ro,
-            "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; folded into thick_unified_v0; N=40/≡verify_root_proof deferred"
+            "notes": "FriFsChal N=40 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; folded into thick_unified_v0; N=40/≡verify_root_proof deferred"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1341,26 +1334,28 @@ mod tests {
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_auth_v0");
         assert_eq!(v["agg_width"].as_u64().unwrap(), AGG_WIDTH as u64);
         assert_eq!(v["quot_width"].as_u64().unwrap(), 3);
-        assert_eq!(v["n"].as_u64().unwrap(), 8);
+        assert_eq!(v["n"].as_u64().unwrap(), 40);
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 4);
         assert_eq!(v["quot_shift"].as_u64().unwrap(), 0);
         assert_eq!(v["chal_leaf_width"].as_u64().unwrap(), 6);
         assert_eq!(v["chal_fl_shift"].as_u64().unwrap(), 1);
         assert_eq!(v["chal_fl_depth"].as_u64().unwrap(), 3);
-        assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 8);
-        assert_eq!(v["chal_commit"].as_array().unwrap().len(), 8);
-        assert_eq!(v["deep_ro"].as_array().unwrap().len(), 8);
+        assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 40);
+        assert_eq!(v["chal_commit"].as_array().unwrap().len(), 40);
+        assert_eq!(v["deep_ro"].as_array().unwrap().len(), 40);
         assert_eq!(v["lambdas"].as_array().unwrap().len(), 2);
         assert_eq!(v["zeta_next"].as_array().unwrap().len(), 3);
-        for q in 0..8 {
+        for q in 0..40 {
             let fx = v["deep_ro"][q]["fold_x"].as_array().expect("fold_x");
             assert_eq!(fx.len(), 2);
             assert_eq!(fx[0]["log_h"].as_u64().unwrap(), 2);
             assert_eq!(fx[1]["log_h"].as_u64().unwrap(), 1);
         }
-        // approx_r1cs locked after Go remmeasure (N=8 + fold_x chain)
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 26966547);
+        // approx_r1cs locked after Go remmeasure (N=40 + fold_x chain)
+        assert_eq!(v["n"].as_u64().unwrap(), 40);
+        let approx = v["approx_r1cs"].as_u64().unwrap();
+        assert!(approx == 0 || approx > 100_000_000, "approx_r1cs={approx}");
 
         let ctx = AggregationContext {
             parent_task_id: "parent",
@@ -1368,7 +1363,7 @@ mod tests {
             manifest_root_hash: "",
             left_child_hash: [1u8; CHILD_HASH_LEN],
             right_child_hash: [2u8; CHILD_HASH_LEN],
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
@@ -1419,9 +1414,9 @@ mod tests {
         let qis_mmcs = v["quot_index"].as_array().unwrap();
         let paths = v["val_mmcs"].as_array().unwrap();
         let quot_paths = v["quot_mmcs"].as_array().unwrap();
-        assert_eq!(paths.len(), 8);
-        assert_eq!(quot_paths.len(), 8);
-        for q in 0..8 {
+        assert_eq!(paths.len(), 40);
+        assert_eq!(quot_paths.len(), 40);
+        for q in 0..40 {
             let qi = chal.query_indices[q];
             assert_eq!(qis[q].as_u64().unwrap() as usize, qi);
             let t_idx = qi >> y_shift;

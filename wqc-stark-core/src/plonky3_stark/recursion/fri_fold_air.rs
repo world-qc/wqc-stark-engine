@@ -573,7 +573,7 @@ mod wrap_fri_pack_golden {
         let log_h = v["log_h"].as_u64().unwrap() as usize;
         let n = v["n"].as_u64().unwrap() as usize;
         assert_eq!(log_h, 3);
-        assert_eq!(n, 8);
+        assert_eq!(n, 40);
 
         let fold_y = v["fold_y"].as_array().unwrap();
         let fold_x = v["fold_x"].as_array().unwrap();
@@ -583,8 +583,9 @@ mod wrap_fri_pack_golden {
         for i in 0..n {
             let idx_y = fold_y[i]["index"].as_u64().unwrap() as usize;
             let idx_x = fold_x[i]["index"].as_u64().unwrap() as usize;
-            assert_eq!(idx_y, i);
-            assert_eq!(idx_x, i);
+            let want = i % (1 << log_h);
+            assert_eq!(idx_y, want);
+            assert_eq!(idx_x, want);
 
             let step_y = fri_fold_step_limbs_y(idx_y, log_h, beta, v0, v1).expect("y");
             assert!(verify_fri_fold_y_native(&step_y));
@@ -644,7 +645,7 @@ mod wrap_fri_fs_golden {
         let y_shift = v["y_shift"].as_u64().unwrap() as usize;
         let x_shift = v["x_shift"].as_u64().unwrap() as usize;
         assert_eq!(log_h, 3);
-        assert_eq!(n, 8);
+        assert_eq!(n, 40);
         assert_eq!(y_shift, 1);
         assert_eq!(x_shift, 2);
 
@@ -768,12 +769,12 @@ mod wrap_fri_fs_sponge_golden {
         let fold_y = v["fold_y"].as_array().unwrap();
         let fold_x = v["fold_x"].as_array().unwrap();
         let n = v["n"].as_u64().unwrap() as usize;
-        assert_eq!(n, 8);
+        assert_eq!(n, 40);
         assert_eq!(qis.len(), n);
         assert_eq!(fold_y.len(), n);
         assert_eq!(fold_x.len(), n);
 
-        // PoW + N draws: 1+N=9 > 8 → re-flush Di'=Keccak(Di) after 8 draws.
+        // PoW + N draws: 1+N=41 > 8 → re-flush Di'=Keccak(Di) after every 8 draws.
         let mut dig = digest_arr;
         for i in 0..n {
             if off == 32 {

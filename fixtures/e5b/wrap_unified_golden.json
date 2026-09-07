@@ -23,7 +23,7 @@
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
-  "notes": "FriVarLog + FriFsAuth (N=8 Agg low: FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x\u2192FinalPoly) folded; N=40 / full Plonky3 PCS / \u2261 verify_root_proof deferred",
+  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra: FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x\u2192FinalPoly) folded; full Plonky3 PCS / \u2261 verify_root_proof deferred",
   "mmcs_path_root": [
     252,
     223,
