@@ -642,7 +642,7 @@ mod tests {
         let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_chal_golden.json");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_chal_v0");
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1391834);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1759303);
 
         fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
             v[key]

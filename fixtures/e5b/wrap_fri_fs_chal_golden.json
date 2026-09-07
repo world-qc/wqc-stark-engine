@@ -1,6 +1,6 @@
 {
   "agg_width": 66,
-  "approx_r1cs": 1391834,
+  "approx_r1cs": 1759303,
   "batch_alpha": [
     644089120,
     1714400368,
@@ -229,7 +229,7 @@
   ],
   "gate": "e5b-3d",
   "measured_at": "2026-09-07",
-  "notes": "In-circuit sample_algebra from D1..D6 (zero-reject); FriFold Beta=betas[0]; full STARK observe auth / N=40 / ≡ verify_root_proof deferred",
+  "notes": "D1..D6 sample_algebra with MaxReflush=1 capacity (Agg golden zero-reject); FriFold Beta=betas[0]; chaining advances on re-flush; full STARK observe auth / N=40 / \u2261 verify_root_proof deferred",
   "pow_witness": 15,
   "query_index": [
     3,
@@ -288,7 +288,7 @@
     16,
     108
   ],
-  "source": "AggregationAir HashChallenger D1..D6 sample_algebra + query PoW + FriFold(betas[0])",
+  "source": "AggregationAir HashChallenger D1..D6 sample_algebra (reject/re-flush) + query PoW + FriFold(betas[0])",
   "statement": "thick_fri_fs_chal_v0",
   "trace_local": [
     [
@@ -992,5 +992,6 @@
     317524578,
     609935332,
     787355939
-  ]
+  ],
+  "max_algebra_reflush": 1
 }
