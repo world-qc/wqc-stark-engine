@@ -977,27 +977,169 @@ mod tests {
             }));
         }
 
+        use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+
+        use crate::plonky3_stark::recursion::fri_fold_native::{challenge_to_limbs, fold_x_row};
+        use crate::plonky3_stark::recursion::fri_mmcs_bind::fri_chal_mmcs_bundle_from_agg_proof;
+        use crate::plonky3_stark::recursion::fri_ro::reconstruct_query_ro;
+        use crate::plonky3_stark::recursion::merkle_keccak::compress_digests;
+
+        let fl_root = *view
+            .first_layer_commitment
+            .roots()
+            .first()
+            .expect("first layer");
+        let fri0 = *view.fri_proof.commit_phase_commits[0]
+            .roots()
+            .first()
+            .expect("fri0");
+        let fri1 = *view.fri_proof.commit_phase_commits[1]
+            .roots()
+            .first()
+            .expect("fri1");
+        let chal_bundle = fri_chal_mmcs_bundle_from_agg_proof(&proof).expect("chal mmcs");
+        assert_eq!(chal_bundle.len(), chal.query_indices.len());
+
+        let flatten_u32 = |evals: &[Challenge; 2]| -> Vec<u32> {
+            let mut out = Vec::with_capacity(6);
+            for e in evals {
+                for limb in challenge_to_limbs(*e) {
+                    out.push(limb.as_canonical_u32());
+                }
+            }
+            out
+        };
+
+        let mut chal_first_layer = Vec::with_capacity(4);
+        let mut chal_commit = Vec::with_capacity(4);
+        for (q, bundle) in chal_bundle.iter().take(4).enumerate() {
+            let qi = chal.query_indices[q];
+            let fl = &bundle.first_layer;
+            // Note: FriChalBatchPathProof.index is post-walk cap (0); use QI>>1.
+            let fl_idx = qi >> 1;
+            assert_eq!(fl.leaf_rows.len(), 2);
+            assert_eq!(fl.siblings.len(), 3, "log2(8)");
+            let tall: Vec<u32> = fl.leaf_rows[0]
+                .iter()
+                .map(|x| x.as_canonical_u32())
+                .collect();
+            let short: Vec<u32> = fl.leaf_rows[1]
+                .iter()
+                .map(|x| x.as_canonical_u32())
+                .collect();
+            assert_eq!(tall.len(), 6);
+            assert_eq!(short.len(), 6);
+            // Agg 8+4: sib0 then inject short, then sib1, sib2.
+            let mut dig = hash_val_leaf(&fl.leaf_rows[0]);
+            let mut idx = fl_idx;
+            dig = if idx.is_multiple_of(2) {
+                compress_digests(dig, fl.siblings[0])
+            } else {
+                compress_digests(fl.siblings[0], dig)
+            };
+            idx /= 2;
+            dig = compress_digests(dig, hash_val_leaf(&fl.leaf_rows[1]));
+            for s in &fl.siblings[1..] {
+                dig = if idx.is_multiple_of(2) {
+                    compress_digests(dig, *s)
+                } else {
+                    compress_digests(*s, dig)
+                };
+                idx /= 2;
+            }
+            assert_eq!(dig, fl_root, "q{q} first-layer root");
+
+            chal_first_layer.push(serde_json::json!({
+                "tall_row": tall,
+                "short_row": short,
+                "siblings": fl.siblings.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
+                "index": fl_idx as u32,
+                "inject_after_step": 0,
+            }));
+
+            let qp = &view.fri_proof.query_proofs[q];
+            let openings = &qp.commit_phase_openings;
+            assert_eq!(openings.len(), 2);
+            let mut index = qi >> chal.extra_query_index_bits;
+            let mut log_current = openings.len() + chal.log_blowup;
+            let mut folded_eval = Challenge::ZERO;
+            let (reduced, _) =
+                reconstruct_query_ro(&proof, &chal, &view, q, AGG_WIDTH).expect("ro");
+            let mut ro_iter = reduced.iter().peekable();
+            let commit_roots = [fri0, fri1];
+            let mut rounds = Vec::with_capacity(2);
+            for (round, opening) in openings.iter().enumerate() {
+                if let Some(&&(lh, ro)) = ro_iter.peek() {
+                    if lh == log_current {
+                        folded_eval += ro;
+                        ro_iter.next();
+                    }
+                }
+                let sibling = opening.sibling_values[0];
+                let index_in_group = index % 2;
+                let mut evals = [Challenge::ZERO; 2];
+                evals[index_in_group] = folded_eval;
+                evals[index_in_group ^ 1] = sibling;
+                let log_folded = log_current - 1;
+                index >>= 1;
+                let row = flatten_u32(&evals);
+                let row_m31: Vec<_> = evals
+                    .iter()
+                    .flat_map(|e| {
+                        BasedVectorSpace::<Val>::as_basis_coefficients_slice(e)
+                            .iter()
+                            .copied()
+                    })
+                    .collect();
+                assert_eq!(
+                    merkle_root_from_path(hash_val_leaf(&row_m31), &opening.opening_proof, index),
+                    commit_roots[round],
+                    "q{q} commit{round} root"
+                );
+                assert_eq!(bundle.commit_indices[round] as usize, index);
+                rounds.push(serde_json::json!({
+                    "leaf_row": row,
+                    "siblings": opening.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
+                    "index": index as u32,
+                }));
+                folded_eval = fold_x_row(index, log_folded, chal.betas[round], evals[0], evals[1]);
+                log_current = log_folded;
+            }
+            chal_commit.push(serde_json::json!(rounds));
+        }
+
         let golden = serde_json::json!({
             "statement": "thick_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "AggregationAir low-security Trace+Quot ValMmcs openings bound to FriFsChal QueryIndex",
+            "source": "AggregationAir low-security Trace/Quot ValMmcs + first-layer/FRI-commit Chal Mmcs bound to FriFsChal QueryIndex",
             "measured_at": "2026-09-07",
-            "approx_r1cs": 7227422,
+            "approx_r1cs": 12620918,
             "agg_width": AGG_WIDTH,
             "quot_width": 3,
+            "chal_leaf_width": 6,
             "path_depth": trace_log_height,
             "quot_path_depth": quot_log_height,
             "quot_shift": quot_shift,
+            "chal_fl_shift": 1,
+            "chal_fl_depth": 3,
+            "chal_fl_heights": [8, 4],
+            "chal_commit_shifts": [2, 3],
+            "chal_commit_depths": [2, 1],
             "n": 4,
             "degree_bits": proof.degree_bits,
             "trace_root": trace_root.to_vec(),
             "quot_root": quot_root.to_vec(),
+            "first_layer_root": fl_root.to_vec(),
+            "fri_commit0": fri0.to_vec(),
+            "fri_commit1": fri1.to_vec(),
             "query_index": &chal.query_indices[..4],
             "trace_index": trace_index,
             "quot_index": quot_index,
             "val_mmcs": val_mmcs,
             "quot_mmcs": quot_mmcs,
-            "notes": "FriFsChal N=4 + TraceRoot W=66 (depth=3,shift=1) + QuotRoot W=3 (depth=4,shift=0) Poseidon2 ValMmcs; first-layer/FRI commit Mmcs, N=8/40, DeepRo, ≡ verify_root_proof deferred; not folded into unified"
+            "chal_first_layer": chal_first_layer,
+            "chal_commit": chal_commit,
+            "notes": "FriFsChal N=4 + Trace/Quot ValMmcs + Chal first-layer 8+4 + FRI commit×2; DeepRo/N=8/40/≡verify_root_proof deferred; not folded into unified"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1032,7 +1174,12 @@ mod tests {
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 4);
         assert_eq!(v["quot_shift"].as_u64().unwrap(), 0);
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 7227422);
+        assert_eq!(v["chal_leaf_width"].as_u64().unwrap(), 6);
+        assert_eq!(v["chal_fl_shift"].as_u64().unwrap(), 1);
+        assert_eq!(v["chal_fl_depth"].as_u64().unwrap(), 3);
+        assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 4);
+        assert_eq!(v["chal_commit"].as_array().unwrap().len(), 4);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 12620918);
 
         let ctx = AggregationContext {
             parent_task_id: "parent",
