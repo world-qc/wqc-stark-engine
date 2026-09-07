@@ -864,4 +864,203 @@ mod tests {
         assert_eq!(r_d1, 0);
         assert_eq!(from_d1, re);
     }
+
+    #[test]
+    fn emit_fri_fs_auth_golden() {
+        use p3_commit::{Pcs, PolynomialSpace};
+        use p3_field::PrimeField32;
+        use std::path::PathBuf;
+
+        use crate::plonky3_stark::recursion::fri_ro::decode_input_proof;
+
+        let ctx = AggregationContext {
+            parent_task_id: "parent",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            security_level: "low",
+        };
+        let transcript = generate_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_agg_fri_challenges(&proof).expect("replay");
+        assert_eq!(proof.degree_bits, 2);
+        assert_eq!(&chal.query_indices[..4], &[3usize, 12, 6, 2]);
+
+        let view = decode_pcs_view(&proof).expect("pcs");
+        let config = circle_config_matching_proof(&proof).expect("cfg");
+        let pcs = config.pcs();
+        let degree = 1usize << proof.degree_bits;
+        let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+            Challenge,
+            crate::plonky3_stark::config::Challenger,
+        >>::natural_domain_for_degree(pcs, degree);
+        let log_blowup = chal.log_blowup;
+        let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+        let trace_height = init_trace_domain.size() << log_blowup;
+        assert!(trace_height.is_power_of_two());
+        let trace_log_height = trace_height.trailing_zeros() as usize;
+        let y_shift = log_global_max_height - trace_log_height;
+        assert_eq!(y_shift, 1, "Agg low ValMmcs index shift");
+
+        let trace_root = *proof.commitments.trace.roots().first().expect("trace root");
+        let mut val_mmcs = Vec::with_capacity(4);
+        let mut trace_index = Vec::with_capacity(4);
+        for q in 0..4 {
+            let qi = chal.query_indices[q];
+            let input =
+                decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
+            let trace_open = &input.input_openings[0];
+            let row = &trace_open.opened_values[0];
+            assert_eq!(row.len(), AGG_WIDTH);
+            let t_idx = qi >> y_shift;
+            assert_eq!(t_idx, qi >> 1);
+            let leaf = hash_val_leaf(row);
+            let root = merkle_root_from_path(leaf, &trace_open.opening_proof, t_idx);
+            assert_eq!(root, trace_root, "q{q} ValMmcs root");
+            let leaf_row: Vec<u32> = row.iter().map(|x| x.as_canonical_u32()).collect();
+            let siblings: Vec<Vec<u8>> = trace_open
+                .opening_proof
+                .iter()
+                .map(|s| s.to_vec())
+                .collect();
+            assert_eq!(siblings.len(), trace_log_height);
+            trace_index.push(t_idx as u32);
+            val_mmcs.push(serde_json::json!({
+                "leaf_row": leaf_row,
+                "siblings": siblings,
+                "index": t_idx as u32,
+            }));
+        }
+
+        let golden = serde_json::json!({
+            "statement": "thick_fri_fs_auth_v0",
+            "gate": "e5b-3d",
+            "source": "AggregationAir low-security Trace ValMmcs openings bound to FriFsChal QueryIndex",
+            "measured_at": "2026-09-07",
+            "approx_r1cs": 5877826,
+            "agg_width": AGG_WIDTH,
+            "path_depth": trace_log_height,
+            "n": 4,
+            "degree_bits": proof.degree_bits,
+            "trace_root": trace_root.to_vec(),
+            "query_index": &chal.query_indices[..4],
+            "trace_index": trace_index,
+            "val_mmcs": val_mmcs,
+            "notes": "FriFsChal N=4 + TraceRoot Poseidon2 ValMmcs (W=66); quot/first-layer/FRI commit Mmcs, N=8/40, DeepRo, ≡ verify_root_proof deferred; not folded into unified"
+        });
+
+        let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fixtures/e5b/wrap_fri_fs_auth_golden.json");
+        std::fs::write(&out, serde_json::to_string_pretty(&golden).unwrap()).expect("write");
+        let wrap = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../wqc-snark-wrap/fixtures/e5b3/wrap_fri_fs_auth_golden.json");
+        if let Some(parent) = wrap.parent() {
+            if parent.exists() {
+                let _ = std::fs::write(&wrap, serde_json::to_string_pretty(&golden).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn lock_fri_fs_auth_golden() {
+        use p3_commit::{Pcs, PolynomialSpace};
+        use p3_field::PrimeField32;
+
+        use crate::plonky3_stark::recursion::fri_ro::decode_input_proof;
+
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_fri_fs_auth_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_auth_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_auth_v0");
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 5877826);
+        assert_eq!(v["agg_width"].as_u64().unwrap(), AGG_WIDTH as u64);
+        assert_eq!(v["n"].as_u64().unwrap(), 4);
+        assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
+
+        let ctx = AggregationContext {
+            parent_task_id: "parent",
+            compose_label: "L1:0",
+            manifest_root_hash: "",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            security_level: "low",
+        };
+        let transcript = generate_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_agg_fri_challenges(&proof).expect("replay");
+        let view = decode_pcs_view(&proof).expect("pcs");
+        let config = circle_config_matching_proof(&proof).expect("cfg");
+        let pcs = config.pcs();
+        let degree = 1usize << proof.degree_bits;
+        let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+            Challenge,
+            crate::plonky3_stark::config::Challenger,
+        >>::natural_domain_for_degree(pcs, degree);
+        let log_blowup = chal.log_blowup;
+        let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+        let trace_height = init_trace_domain.size() << log_blowup;
+        let trace_log_height = trace_height.trailing_zeros() as usize;
+        let y_shift = log_global_max_height - trace_log_height;
+        let trace_root = *proof.commitments.trace.roots().first().expect("trace root");
+
+        let want_root: Vec<u8> = v["trace_root"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(want_root.as_slice(), trace_root.as_slice());
+
+        let qis = v["query_index"].as_array().unwrap();
+        let tis = v["trace_index"].as_array().unwrap();
+        let paths = v["val_mmcs"].as_array().unwrap();
+        assert_eq!(paths.len(), 4);
+        for q in 0..4 {
+            assert_eq!(qis[q].as_u64().unwrap() as usize, chal.query_indices[q]);
+            let t_idx = chal.query_indices[q] >> y_shift;
+            assert_eq!(tis[q].as_u64().unwrap() as usize, t_idx);
+            let input =
+                decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
+            let row = &input.input_openings[0].opened_values[0];
+            let leaf_row: Vec<u32> = paths[q]["leaf_row"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect();
+            assert_eq!(leaf_row.len(), AGG_WIDTH);
+            for (a, b) in leaf_row.iter().zip(row.iter()) {
+                assert_eq!(*a, b.as_canonical_u32());
+            }
+            let sibs = paths[q]["siblings"].as_array().unwrap();
+            assert_eq!(sibs.len(), trace_log_height);
+            assert_eq!(sibs.len(), input.input_openings[0].opening_proof.len());
+            for (i, sib) in sibs.iter().enumerate() {
+                let bytes: Vec<u8> = sib
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_u64().unwrap() as u8)
+                    .collect();
+                assert_eq!(
+                    bytes.as_slice(),
+                    input.input_openings[0].opening_proof[i].as_slice()
+                );
+            }
+            assert_eq!(
+                merkle_root_from_path(
+                    hash_val_leaf(row),
+                    &input.input_openings[0].opening_proof,
+                    t_idx
+                ),
+                trace_root
+            );
+        }
+    }
 }
