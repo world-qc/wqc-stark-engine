@@ -456,9 +456,9 @@ mod wrap_unified_golden {
         assert!(
             comps.iter().any(|c| {
                 c.as_str()
-                    == Some("thick_fri_fs_chal_v0 D1..D6 sample_algebra reject/re-flush + FriFold")
+                    == Some("thick_fri_fs_auth_v0 FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x→FinalPoly")
             }),
-            "expected fri-fs-chal fold-in"
+            "expected fri-fs-auth fold-in"
         );
         assert!(
             comps

@@ -1310,7 +1310,7 @@ mod tests {
             "atn_x": limbs_u32(atn_x),
             "atn_y": limbs_u32(atn_y),
             "deep_ro": deep_ro,
-            "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; N=40/≡verify_root_proof deferred; not folded into unified"
+            "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; folded into thick_unified_v0; N=40/≡verify_root_proof deferred"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

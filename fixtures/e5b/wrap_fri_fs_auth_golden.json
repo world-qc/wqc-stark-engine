@@ -2792,7 +2792,7 @@
   ],
   "measured_at": "2026-09-08",
   "n": 8,
-  "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x\u2192FinalPoly; N=40/\u2261verify_root_proof deferred; not folded into unified",
+  "notes": "FriFsChal N=8 + Trace/Quot ValMmcs + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x\u2192FinalPoly; folded into thick_unified_v0; N=40/\u2261verify_root_proof deferred",
   "path_depth": 3,
   "query_index": [
     3,

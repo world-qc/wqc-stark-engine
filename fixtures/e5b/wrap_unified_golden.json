@@ -1,14 +1,14 @@
 {
   "statement": "thick_unified_v0",
   "gate": "e5b-3d",
-  "source": "compose thin + ValMmcs + FriVarLog + FriFsChal + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
+  "source": "compose thin + ValMmcs + FriVarLog + FriFsAuth + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-08",
-  "approx_r1cs": 9790284,
+  "approx_r1cs": 34111517,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
     "thick_fri_varlog_v0 fold_y@4 + fold_x@2 log_h mux",
-    "thick_fri_fs_chal_v0 D1..D6 sample_algebra reject/re-flush + FriFold",
+    "thick_fri_fs_auth_v0 FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x\u2192FinalPoly",
     "thick_ood_v0 Aggregation OOD",
     "thick_child_audit_v0 SHA3-256 digest bind",
     "thick_recagg_air_v0 RecAgg AIR fold+quotient",
@@ -23,7 +23,7 @@
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
-  "notes": "FriVarLog + FriFsChal (D1..D6 sample_algebra MaxReflush=3; FriFold Beta=betas[0]) folded; full STARK observe auth / DeepRo / N=8 Agg low shipped in FriFsChal capacity; N=40 deferred \u2014 not \u2261 verify_root_proof",
+  "notes": "FriVarLog + FriFsAuth (N=8 Agg low: FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x\u2192FinalPoly) folded; N=40 / full Plonky3 PCS / \u2261 verify_root_proof deferred",
   "mmcs_path_root": [
     252,
     223,
@@ -629,5 +629,6 @@
       616506836,
       561273451
     ]
-  ]
+  ],
+  "fri_fs_auth_folded": true
 }
