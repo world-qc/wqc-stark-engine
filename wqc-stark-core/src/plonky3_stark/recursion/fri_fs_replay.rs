@@ -773,4 +773,94 @@ mod tests {
         assert_eq!(limbs(&chal.betas[0]), b0);
         assert_eq!(limbs(&chal.betas[1]), b1);
     }
+
+    #[test]
+    fn lock_fri_fs_chal_rej_golden() {
+        use sha3::{Digest, Keccak256};
+
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_fri_fs_chal_rej_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_chal_rej_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_fri_fs_chal_rej_v0");
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 193509);
+        assert_eq!(v["reflushes"].as_u64().unwrap(), 1);
+        assert_eq!(v["max_algebra_reflush"].as_u64().unwrap(), 1);
+
+        fn bytes(v: &serde_json::Value, key: &str) -> [u8; 32] {
+            let a = v[key].as_array().unwrap();
+            let mut out = [0u8; 32];
+            for i in 0..32 {
+                out[i] = a[i].as_u64().unwrap() as u8;
+            }
+            out
+        }
+        fn ef3(v: &serde_json::Value, key: &str) -> [u32; 3] {
+            let a = v[key].as_array().unwrap();
+            [
+                a[0].as_u64().unwrap() as u32,
+                a[1].as_u64().unwrap() as u32,
+                a[2].as_u64().unwrap() as u32,
+            ]
+        }
+        const ORDER: u32 = 0x7fff_ffff;
+        fn sample_base(d: &[u8; 32], off: &mut usize) -> Option<u32> {
+            let mut b = [0u8; 4];
+            for i in 0..4 {
+                b[i] = d[31 - *off - i];
+            }
+            *off += 4;
+            let u = u32::from_le_bytes(b) & ORDER;
+            if u == ORDER {
+                None
+            } else {
+                Some(u)
+            }
+        }
+        fn sample_full(d0: [u8; 32]) -> ([u32; 3], usize, usize) {
+            let mut dig = d0;
+            let mut off = 0usize;
+            let mut reflushes = 0usize;
+            let mut out = [0u32; 3];
+            let mut limb = 0usize;
+            let mut draws = 0usize;
+            while limb < 3 {
+                if off == 32 {
+                    assert!(reflushes < 1);
+                    dig = Keccak256::digest(dig).into();
+                    reflushes += 1;
+                    off = 0;
+                }
+                draws += 1;
+                if let Some(v) = sample_base(&dig, &mut off) {
+                    out[limb] = v;
+                    limb += 1;
+                }
+            }
+            (out, reflushes, draws)
+        }
+
+        let d_intra = bytes(&v, "digest_intra");
+        let (intra, r0, draws0) = sample_full(d_intra);
+        assert_eq!(r0, 0);
+        assert_eq!(draws0, 4);
+        assert_eq!(intra, ef3(&v, "chal_intra"));
+
+        let d_re = bytes(&v, "digest_reflush");
+        // All LIFO limbs reject.
+        let mut off = 0usize;
+        for _ in 0..8 {
+            assert!(sample_base(&d_re, &mut off).is_none());
+        }
+        let (re, r1, draws1) = sample_full(d_re);
+        assert_eq!(r1, 1);
+        assert_eq!(draws1, v["reflush_draws"].as_u64().unwrap() as usize);
+        assert_eq!(re, ef3(&v, "chal_reflush"));
+        let d1: [u8; 32] = Keccak256::digest(d_re).into();
+        let (from_d1, r_d1, _) = sample_full(d1);
+        assert_eq!(r_d1, 0);
+        assert_eq!(from_d1, re);
+    }
 }
