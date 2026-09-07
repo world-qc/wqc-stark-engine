@@ -1,0 +1,29 @@
+{
+  "statement": "thick_fri_fs_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine AggFriChallenges.query_indices → FriFold Index bind (host replay deferred)",
+  "measured_at": "2026-09-07",
+  "approx_r1cs": 94765,
+  "n": 4,
+  "log_h": 3,
+  "num_index_bits": 4,
+  "y_shift": 1,
+  "x_shift": 2,
+  "query_index": [0, 2, 4, 6],
+  "beta": [11, 22, 33],
+  "v0": [1, 2, 3],
+  "v1": [4, 5, 6],
+  "fold_y": [
+    {"index": 0, "t_inv": 1518526074, "out": [313601121, 1043063719, 1063515792]},
+    {"index": 1, "t_inv": 628957573, "out": [1833882531, 1104419935, 1083967864]},
+    {"index": 2, "t_inv": 987072176, "out": [674056781, 2118565194, 2137844166]},
+    {"index": 3, "t_inv": 1160411471, "out": [1473426871, 28918460, 9639490]}
+  ],
+  "fold_x": [
+    {"index": 0, "t_inv": 1899133673, "out": [241698322, 1819240107, 2038069137]},
+    {"index": 0, "t_inv": 1899133673, "out": [241698322, 1819240107, 2038069137]},
+    {"index": 1, "t_inv": 1177558791, "out": [559677532, 1378615361, 459538457]},
+    {"index": 1, "t_inv": 1177558791, "out": [559677532, 1378615361, 459538457]}
+  ],
+  "notes": "IndexY=QueryIndex>>1, IndexX=QueryIndex>>2; public QueryIndex (not in-circuit Keccak sample_bits); N=40 / DeepRo / full sponge FS / ≡ verify_root_proof deferred"
+}
