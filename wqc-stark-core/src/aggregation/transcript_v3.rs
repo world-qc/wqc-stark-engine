@@ -455,9 +455,10 @@ mod wrap_unified_golden {
         );
         assert!(
             comps.iter().any(|c| {
-                c.as_str() == Some("thick_fri_fs_sponge_v0 Keccak flush + sample_bits + FriFold")
+                c.as_str()
+                    == Some("thick_fri_fs_observe_v0 6-flush ChainDigest + sample_bits + FriFold")
             }),
-            "expected fri-fs-sponge fold-in"
+            "expected fri-fs-observe fold-in"
         );
         assert!(
             comps
