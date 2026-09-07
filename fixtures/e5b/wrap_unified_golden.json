@@ -1,14 +1,14 @@
 {
   "statement": "thick_unified_v0",
   "gate": "e5b-3d",
-  "source": "compose thin + ValMmcs + FriVarLog + FriFs + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
+  "source": "compose thin + ValMmcs + FriVarLog + FriFsSponge + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-07",
-  "approx_r1cs": 7356179,
+  "approx_r1cs": 7416869,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
     "thick_fri_varlog_v0 fold_y@4 + fold_x@2 log_h mux",
-    "thick_fri_fs_v0 N=4 QueryIndex>>shift + fold_y+fold_x",
+    "thick_fri_fs_sponge_v0 Keccak flush + sample_bits + FriFold",
     "thick_ood_v0 Aggregation OOD",
     "thick_child_audit_v0 SHA3-256 digest bind",
     "thick_recagg_air_v0 RecAgg AIR fold+quotient",
@@ -23,22 +23,21 @@
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
-  "notes": "FriVarLog + FriFs(N=4 QueryIndex bind) folded; in-circuit FS sponge / DeepRo / N=40 / full RecAgg PCS still deferred",
-  "fri_fs_n": 4,
-  "fri_fs_log_h": 3,
-  "fri_fs_y_shift": 1,
-  "fri_fs_x_shift": 2,
-  "fri_fs_query_index": [0, 2, 4, 6],
-  "fri_fs_y_outs": [
+  "notes": "FriVarLog + FriFsSponge (LegacyKeccak flush + LIFO sample_bits) folded; full STARK observe / N=40 / DeepRo / full RecAgg PCS still deferred",
+  "fri_fs_sponge_n": 4,
+  "fri_fs_sponge_query_index": [0, 8, 9, 5],
+  "fri_fs_sponge_pow_witness": 210,
+  "fri_fs_sponge_final_poly": [9, 2, 3],
+  "fri_fs_sponge_y_outs": [
     [313601121, 1043063719, 1063515792],
-    [1833882531, 1104419935, 1083967864],
-    [674056781, 2118565194, 2137844166],
-    [1473426871, 28918460, 9639490]
+    [964294546, 1823925882, 2039631062],
+    [964294546, 1823925882, 2039631062],
+    [674056781, 2118565194, 2137844166]
   ],
-  "fri_fs_x_outs": [
+  "fri_fs_sponge_x_outs": [
     [241698322, 1819240107, 2038069137],
-    [241698322, 1819240107, 2038069137],
-    [559677532, 1378615361, 459538457],
+    [1079081165, 1407820392, 1900929232],
+    [1079081165, 1407820392, 1900929232],
     [559677532, 1378615361, 459538457]
   ],
   "mmcs_path_root": [
@@ -350,7 +349,7 @@
     41,
     188
   ],
-  "notes": "All shipped E5b-3 gadgets incl. FriVarLog + FriFs(N=4 QueryIndex bind) + RecAgg ValMmcs + depth-2 child-verify + unitary/Born/Traj leaf binds; in-circuit FS sponge / DeepRo / N=40 / full RecAgg Plonky3 PCS, depth≥3 / variable compose / full leaf verify, Settlement VK deferred — not ≡ verify_root_proof",
+  "notes": "All shipped E5b-3 gadgets incl. FriVarLog + FriFsSponge (LegacyKeccak flush + sample_bits) + RecAgg ValMmcs + depth-2 child-verify + unitary/Born/Traj leaf binds; full STARK observe / DeepRo / N=40 / full RecAgg Plonky3 PCS, depth≥3 / variable compose / full leaf verify, Settlement VK deferred — not ≡ verify_root_proof",
   "leaf_bind_unitary_container_digest": [
     168,
     179,

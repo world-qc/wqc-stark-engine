@@ -695,3 +695,108 @@ mod wrap_fri_fs_golden {
         }
     }
 }
+
+#[cfg(test)]
+mod wrap_fri_fs_sponge_golden {
+    use super::*;
+    use crate::plonky3_stark::config::Challenge;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_mersenne_31::Mersenne31 as Val;
+    use sha3::{Digest, Keccak256};
+
+    fn sample_bits_from_digest(d: &[u8; 32], off: &mut usize, bits: usize) -> u32 {
+        let mut b = [0u8; 4];
+        for i in 0..4 {
+            b[i] = d[31 - *off - i];
+        }
+        *off += 4;
+        let u = u32::from_le_bytes(b);
+        u & ((1u32 << bits) - 1)
+    }
+
+    #[test]
+    fn emit_fs_sponge_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_fri_fs_sponge_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_fri_fs_sponge_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let chain: Vec<u8> = v["chain_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(chain.len(), 32);
+        let final_poly: Vec<u32> = v["final_poly"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        let pow_wit = v["pow_witness"].as_u64().unwrap() as u32;
+
+        let mut msg = Vec::with_capacity(48);
+        msg.extend_from_slice(&chain);
+        for limb in &final_poly {
+            msg.extend_from_slice(&limb.to_le_bytes());
+        }
+        msg.extend_from_slice(&pow_wit.to_le_bytes());
+
+        let digest_arr: [u8; 32] = Keccak256::digest(&msg).into();
+        let want_digest: Vec<u8> = v["digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(digest_arr.as_slice(), want_digest.as_slice());
+
+        let mut off = 0usize;
+        let pow = sample_bits_from_digest(&digest_arr, &mut off, 8);
+        assert_eq!(pow, 0);
+
+        let qis = v["query_index"].as_array().unwrap();
+        let y_shift = v["y_shift"].as_u64().unwrap() as usize;
+        let x_shift = v["x_shift"].as_u64().unwrap() as usize;
+        let log_h = v["log_h"].as_u64().unwrap() as usize;
+        let beta = Challenge::new([Val::from_u32(11), Val::from_u32(22), Val::from_u32(33)]);
+        let v0 = Challenge::new([Val::from_u32(1), Val::from_u32(2), Val::from_u32(3)]);
+        let v1 = Challenge::new([Val::from_u32(4), Val::from_u32(5), Val::from_u32(6)]);
+        let fold_y = v["fold_y"].as_array().unwrap();
+        let fold_x = v["fold_x"].as_array().unwrap();
+
+        for i in 0..4 {
+            let qi = sample_bits_from_digest(&digest_arr, &mut off, 4) as usize;
+            assert_eq!(qi, qis[i].as_u64().unwrap() as usize);
+            let idx_y = qi >> y_shift;
+            let idx_x = qi >> x_shift;
+            assert_eq!(fold_y[i]["index"].as_u64().unwrap() as usize, idx_y);
+            assert_eq!(fold_x[i]["index"].as_u64().unwrap() as usize, idx_x);
+
+            let step_y = fri_fold_step_limbs_y(idx_y, log_h, beta, v0, v1).expect("y");
+            assert!(verify_fri_fold_y_native(&step_y));
+            let step_x = fri_fold_step_limbs_x(idx_x, log_h, beta, v0, v1).expect("x");
+            assert!(verify_fri_fold_x_native(&step_x));
+
+            let want_y: Vec<u32> = fold_y[i]["out"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect();
+            let want_x: Vec<u32> = fold_x[i]["out"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u32)
+                .collect();
+            for j in 0..3 {
+                assert_eq!(step_y.out_limbs[j].as_canonical_u32(), want_y[j]);
+                assert_eq!(step_x.out_limbs[j].as_canonical_u32(), want_x[j]);
+            }
+        }
+    }
+}

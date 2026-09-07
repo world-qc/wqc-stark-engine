@@ -455,9 +455,9 @@ mod wrap_unified_golden {
         );
         assert!(
             comps.iter().any(|c| {
-                c.as_str() == Some("thick_fri_fs_v0 N=4 QueryIndex>>shift + fold_y+fold_x")
+                c.as_str() == Some("thick_fri_fs_sponge_v0 Keccak flush + sample_bits + FriFold")
             }),
-            "expected fri-fs fold-in"
+            "expected fri-fs-sponge fold-in"
         );
         assert!(
             comps
@@ -477,6 +477,6 @@ mod wrap_unified_golden {
             }),
             "expected leaf-bind traj fold-in"
         );
-        assert!(comps.len() >= 17, "expected fri-fs fold-in");
+        assert!(comps.len() >= 17, "expected fri-fs-sponge fold-in");
     }
 }
