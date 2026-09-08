@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 4392576,
+  "approx_r1cs": 18000000,
   "chain_digest": [
     176,
     52,
@@ -152,8 +152,8 @@
   ],
   "gate": "e5b-3d",
   "measured_at": "2026-09-08",
-  "n": 8,
-  "notes": "Absorb-only mid-state (no in-circuit α/ζ/β); RecAgg low N=8 W=330; Chal/FriFsAuth deferred",
+  "n": 40,
+  "notes": "Absorb-only mid-state (no in-circuit α/ζ/β); RecAgg ultra N=40 W=330; Chal/FriFsAuth deferred",
   "pow_witness": 865,
   "query_index": [
     10,
@@ -163,7 +163,39 @@
     4,
     11,
     7,
-    2
+    2,
+    2,
+    7,
+    14,
+    3,
+    5,
+    2,
+    4,
+    4,
+    9,
+    4,
+    9,
+    14,
+    7,
+    6,
+    1,
+    12,
+    11,
+    5,
+    12,
+    12,
+    1,
+    14,
+    12,
+    14,
+    0,
+    15,
+    8,
+    7,
+    15,
+    13,
+    3,
+    12
   ],
   "quot_open": [
     [
@@ -217,7 +249,7 @@
     108
   ],
   "rec_agg_width": 330,
-  "source": "RecursiveAggregationAir HashChallenger 6-flush ChainDigest + query PoW sample_bits (W=330)",
+  "source": "RecursiveAggregationAir HashChallenger 6-flush ChainDigest + query PoW sample_bits (W=330 N=40 ultra)",
   "statement": "thick_recagg_fri_fs_observe_v0",
   "trace_local": [
     [

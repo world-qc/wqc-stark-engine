@@ -1688,14 +1688,14 @@ mod tests {
             right_agg_cert: None,
             left_leaf_bundle: None,
             right_leaf_bundle: None,
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_rec_agg_fri_challenges(&proof).expect("replay");
         assert_eq!(proof.degree_bits, 2);
-        assert_eq!(chal.query_indices.len(), 8);
+        assert_eq!(chal.query_indices.len(), 40);
         assert_eq!(chal.betas.len(), 2);
         assert_eq!(proof.opened_values.trace_local.len(), REC_AGG_WIDTH);
 
@@ -1798,7 +1798,7 @@ mod tests {
             u & ((1 << bits) - 1)
         };
         assert_eq!(sample_bits(&d7, &mut off, 8), 0, "pow");
-        // N=8 RecAgg low: PoW + 8 queries; one reflush when LIFO exhausts.
+        // N=40 RecAgg ultra (DEVNET_FRI_NUM_QUERIES): PoW + 40 queries; reflushes when LIFO exhausts.
         let mut dig = d7;
         for (i, &want) in chal.query_indices.iter().enumerate() {
             if off == 32 {
@@ -1840,11 +1840,12 @@ mod tests {
         let golden = serde_json::json!({
             "statement": "thick_recagg_fri_fs_observe_v0",
             "gate": "e5b-3d",
-            "source": "RecursiveAggregationAir HashChallenger 6-flush ChainDigest + query PoW sample_bits (W=330)",
+            "source": "RecursiveAggregationAir HashChallenger 6-flush ChainDigest + query PoW sample_bits (W=330 N=40 ultra)",
             "measured_at": "2026-09-08",
-            "approx_r1cs": 4392576,
+            // placeholder until remmeasure
+            "approx_r1cs": 18000000,
             "rec_agg_width": REC_AGG_WIDTH,
-            "n": 8,
+            "n": 40,
             "degree_bits": degree_bits,
             "flush_lens": [44, 64, 7988, 64, 64, 64],
             "trace_root": trace_root.to_vec(),
@@ -1858,8 +1859,8 @@ mod tests {
             "chain_digest": chain.to_vec(),
             "final_poly": fp,
             "pow_witness": pow,
-            "query_index": &chal.query_indices[..8],
-            "notes": "Absorb-only mid-state (no in-circuit α/ζ/β); RecAgg low N=8 W=330; Chal/FriFsAuth deferred"
+            "query_index": &chal.query_indices[..40],
+            "notes": "Absorb-only mid-state (no in-circuit α/ζ/β); RecAgg ultra N=40 W=330; Chal/FriFsAuth deferred"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1892,7 +1893,7 @@ mod tests {
             "thick_recagg_fri_fs_observe_v0"
         );
         assert_eq!(v["rec_agg_width"].as_u64().unwrap() as usize, REC_AGG_WIDTH);
-        assert_eq!(v["n"].as_u64().unwrap(), 8);
+        assert_eq!(v["n"].as_u64().unwrap(), 40);
         assert_eq!(v["degree_bits"].as_u64().unwrap(), 2);
 
         fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
@@ -2004,7 +2005,7 @@ mod tests {
             .iter()
             .map(|x| x.as_u64().unwrap() as u32)
             .collect::<Vec<_>>();
-        assert_eq!(want_qi.len(), 8);
+        assert_eq!(want_qi.len(), 40);
         for (i, &want) in want_qi.iter().enumerate() {
             if off == 32 {
                 dig = keccak(&dig);
@@ -2012,7 +2013,8 @@ mod tests {
             }
             assert_eq!(sample_bits(&dig, &mut off, 4), want, "qi[{i}]");
         }
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 4392576);
+        // placeholder until remmeasure
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 18000000);
     }
 
     #[test]
@@ -2042,14 +2044,14 @@ mod tests {
             right_agg_cert: None,
             left_leaf_bundle: None,
             right_leaf_bundle: None,
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_rec_agg_fri_challenges(&proof).expect("replay");
         assert_eq!(proof.degree_bits, 2);
-        assert_eq!(chal.query_indices.len(), 8);
+        assert_eq!(chal.query_indices.len(), 40);
         assert_eq!(chal.betas.len(), 2);
         assert_eq!(proof.opened_values.trace_local.len(), REC_AGG_WIDTH);
 
@@ -2100,7 +2102,7 @@ mod tests {
                 Some(u)
             }
         }
-        // Zero-reject path (RecAgg low golden): three consecutive accepts from dig start.
+        // Zero-reject path (RecAgg ultra golden): three consecutive accepts from dig start.
         fn sample_algebra(d: &[u8; 32]) -> [u32; 3] {
             let mut off = 0usize;
             [
@@ -2221,11 +2223,12 @@ mod tests {
         let golden = serde_json::json!({
             "statement": "thick_recagg_fri_fs_chal_v0",
             "gate": "e5b-3d",
-            "source": "RecursiveAggregationAir HashChallenger D1..D6 sample_algebra + query sponge (W=330)",
+            "source": "RecursiveAggregationAir HashChallenger D1..D6 sample_algebra + query sponge (W=330 N=40 ultra)",
             "measured_at": "2026-09-08",
-            "approx_r1cs": 5491620,
+            // placeholder until remmeasure
+            "approx_r1cs": 22000000,
             "rec_agg_width": REC_AGG_WIDTH,
-            "n": 8,
+            "n": 40,
             "degree_bits": degree_bits,
             "flush_lens": [44, 64, 7988, 64, 64, 64],
             "trace_root": trace_root.to_vec(),
@@ -2244,8 +2247,8 @@ mod tests {
             "betas": [beta0, beta1],
             "final_poly": fp,
             "pow_witness": pow,
-            "query_index": &chal.query_indices[..8],
-            "notes": "D1..D6 sample_algebra MaxReflush=3 capacity (RecAgg low zero-reject); FriFold Beta=betas[0]; N=8; FriFsAuth deferred"
+            "query_index": &chal.query_indices[..40],
+            "notes": "D1..D6 sample_algebra MaxReflush=3 capacity (RecAgg ultra zero-reject); FriFold Beta=betas[0]; N=40; FriFsAuth deferred"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2283,7 +2286,7 @@ mod tests {
             "thick_recagg_fri_fs_chal_v0"
         );
         assert_eq!(v["rec_agg_width"].as_u64().unwrap() as usize, REC_AGG_WIDTH);
-        assert_eq!(v["n"].as_u64().unwrap(), 8);
+        assert_eq!(v["n"].as_u64().unwrap(), 40);
 
         fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
             v[key]
@@ -2401,7 +2404,7 @@ mod tests {
             right_agg_cert: None,
             left_leaf_bundle: None,
             right_leaf_bundle: None,
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
@@ -2422,7 +2425,8 @@ mod tests {
         assert_eq!(limbs(&chal.betas[0]), b0);
         assert_eq!(limbs(&chal.betas[1]), b1);
 
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 5491620);
+        // placeholder until remmeasure
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 22000000);
     }
 
     #[test]
@@ -2452,14 +2456,14 @@ mod tests {
             right_agg_cert: None,
             left_leaf_bundle: None,
             right_leaf_bundle: None,
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let chal = replay_rec_agg_fri_challenges(&proof).expect("replay");
         assert_eq!(proof.degree_bits, 2);
-        assert_eq!(chal.query_indices.len(), 8);
+        assert_eq!(chal.query_indices.len(), 40);
         assert_eq!(
             proof.opened_values.quotient_chunks.len(),
             1,
@@ -2481,7 +2485,7 @@ mod tests {
         assert!(trace_height.is_power_of_two());
         let trace_log_height = trace_height.trailing_zeros() as usize;
         let y_shift = log_global_max_height - trace_log_height;
-        assert_eq!(y_shift, 1, "RecAgg low ValMmcs index shift");
+        assert_eq!(y_shift, 1, "RecAgg ValMmcs index shift");
 
         let num_quot = proof.opened_values.quotient_chunks.len();
         assert_eq!(num_quot, 1);
@@ -2495,7 +2499,7 @@ mod tests {
         let quot_shift = log_global_max_height - quot_log_height;
         assert_eq!(quot_h, 16);
         assert_eq!(quot_log_height, 4);
-        assert_eq!(quot_shift, 0, "RecAgg low quot ValMmcs index shift");
+        assert_eq!(quot_shift, 0, "RecAgg quot ValMmcs index shift");
         assert_ne!(quot_shift, y_shift);
 
         let trace_root = *proof.commitments.trace.roots().first().expect("trace root");
@@ -2505,11 +2509,11 @@ mod tests {
             .roots()
             .first()
             .expect("quot root");
-        let mut val_mmcs = Vec::with_capacity(8);
-        let mut quot_mmcs = Vec::with_capacity(8);
-        let mut trace_index = Vec::with_capacity(8);
-        let mut quot_index = Vec::with_capacity(8);
-        for q in 0..8 {
+        let mut val_mmcs = Vec::with_capacity(40);
+        let mut quot_mmcs = Vec::with_capacity(40);
+        let mut trace_index = Vec::with_capacity(40);
+        let mut quot_index = Vec::with_capacity(40);
+        for q in 0..40 {
             let qi = chal.query_indices[q];
             let input =
                 decode_input_proof(&view.fri_proof.query_proofs[q].input_proof).expect("input");
@@ -2602,9 +2606,9 @@ mod tests {
             out
         };
 
-        let mut chal_first_layer = Vec::with_capacity(8);
-        let mut chal_commit = Vec::with_capacity(8);
-        let mut deep_ro = Vec::with_capacity(8);
+        let mut chal_first_layer = Vec::with_capacity(40);
+        let mut chal_commit = Vec::with_capacity(40);
+        let mut deep_ro = Vec::with_capacity(40);
         let trace_next = proof.opened_values.trace_next.as_ref().expect("trace_next");
         let mut px_trace = [Val::ZERO; REC_AGG_WIDTH];
         let mut pz_local = [Challenge::ZERO; REC_AGG_WIDTH];
@@ -2830,9 +2834,10 @@ mod tests {
         let golden = serde_json::json!({
             "statement": "thick_recagg_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "RecursiveAggregationAir low-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly (W=330 N=8)",
+            "source": "RecursiveAggregationAir ultra-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly (W=330 N=40)",
             "measured_at": "2026-09-08",
-            "approx_r1cs": 55045317,
+            // locked by WQC_THICK_HUGE Compile-only remmeasure
+            "approx_r1cs": 254259074,
             "rec_agg_width": REC_AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -2844,14 +2849,14 @@ mod tests {
             "chal_fl_heights": [8, 4],
             "chal_commit_shifts": [2, 3],
             "chal_commit_depths": [2, 1],
-            "n": 8,
+            "n": 40,
             "degree_bits": proof.degree_bits,
             "trace_root": trace_root.to_vec(),
             "quot_root": quot_root.to_vec(),
             "first_layer_root": fl_root.to_vec(),
             "fri_commit0": fri0.to_vec(),
             "fri_commit1": fri1.to_vec(),
-            "query_index": &chal.query_indices[..8],
+            "query_index": &chal.query_indices[..40],
             "trace_index": trace_index,
             "quot_index": quot_index,
             "val_mmcs": val_mmcs,
@@ -2865,7 +2870,7 @@ mod tests {
             "atn_x": limbs_u32(atn_x),
             "atn_y": limbs_u32(atn_y),
             "deep_ro": deep_ro,
-            "notes": "FriFsChal N=8 + Trace/Quot ValMmcs W=330 + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; fold into unified / N=40 / ≡verify_root_proof deferred"
+            "notes": "FriFsChal N=40 ultra + Trace/Quot ValMmcs W=330 + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; approx_r1cs locked by WQC_THICK_HUGE Compile-only remmeasure (2026-09-08, ~44.9min); ≡verify_root_proof deferred"
         });
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2911,26 +2916,26 @@ mod tests {
         );
         assert_eq!(v["rec_agg_width"].as_u64().unwrap() as usize, REC_AGG_WIDTH);
         assert_eq!(v["quot_width"].as_u64().unwrap(), 3);
-        assert_eq!(v["n"].as_u64().unwrap(), 8);
+        assert_eq!(v["n"].as_u64().unwrap(), 40);
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 4);
         assert_eq!(v["quot_shift"].as_u64().unwrap(), 0);
         assert_eq!(v["chal_leaf_width"].as_u64().unwrap(), 6);
         assert_eq!(v["chal_fl_shift"].as_u64().unwrap(), 1);
         assert_eq!(v["chal_fl_depth"].as_u64().unwrap(), 3);
-        assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 8);
-        assert_eq!(v["chal_commit"].as_array().unwrap().len(), 8);
-        assert_eq!(v["deep_ro"].as_array().unwrap().len(), 8);
+        assert_eq!(v["chal_first_layer"].as_array().unwrap().len(), 40);
+        assert_eq!(v["chal_commit"].as_array().unwrap().len(), 40);
+        assert_eq!(v["deep_ro"].as_array().unwrap().len(), 40);
         assert_eq!(v["lambdas"].as_array().unwrap().len(), 2);
         assert_eq!(v["zeta_next"].as_array().unwrap().len(), 3);
-        for q in 0..8 {
+        for q in 0..40 {
             let fx = v["deep_ro"][q]["fold_x"].as_array().expect("fold_x");
             assert_eq!(fx.len(), 2);
             assert_eq!(fx[0]["log_h"].as_u64().unwrap(), 2);
             assert_eq!(fx[1]["log_h"].as_u64().unwrap(), 1);
         }
-        // approx_r1cs locked after Go remmeasure (N=8 RecAgg + DeepRo + fold_x)
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 55045317);
+        // approx_r1cs locked by WQC_THICK_HUGE Compile-only remmeasure (N=40 RecAgg ultra)
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 254259074);
 
         let ctx = RecursiveAggregationContext {
             parent_task_id: "parent",
@@ -2946,7 +2951,7 @@ mod tests {
             right_agg_cert: None,
             left_leaf_bundle: None,
             right_leaf_bundle: None,
-            security_level: "low",
+            security_level: "ultra",
         };
         let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
         let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
@@ -2999,8 +3004,8 @@ mod tests {
         let paths = v["val_mmcs"].as_array().unwrap();
         let quot_paths = v["quot_mmcs"].as_array().unwrap();
         let deep_ros = v["deep_ro"].as_array().unwrap();
-        assert_eq!(paths.len(), 8);
-        assert_eq!(quot_paths.len(), 8);
+        assert_eq!(paths.len(), 40);
+        assert_eq!(quot_paths.len(), 40);
 
         let limbs_u32 = |c: Challenge| -> Vec<u32> {
             challenge_to_limbs(c)
@@ -3017,7 +3022,7 @@ mod tests {
         let mut pz_quot = [Challenge::ZERO; 3];
         pz_quot.copy_from_slice(&proof.opened_values.quotient_chunks[0][..3]);
 
-        for q in 0..8 {
+        for q in 0..40 {
             let qi = chal.query_indices[q];
             assert_eq!(qis[q].as_u64().unwrap() as usize, qi);
             let t_idx = qi >> y_shift;

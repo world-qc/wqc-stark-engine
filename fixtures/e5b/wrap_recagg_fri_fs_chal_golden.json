@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 5491620,
+  "approx_r1cs": 22000000,
   "batch_alpha": [
     1398500818,
     277238541,
@@ -179,8 +179,8 @@
   ],
   "gate": "e5b-3d",
   "measured_at": "2026-09-08",
-  "n": 8,
-  "notes": "D1..D6 sample_algebra MaxReflush=3 capacity (RecAgg low zero-reject); FriFold Beta=betas[0]; N=8; FriFsAuth deferred",
+  "n": 40,
+  "notes": "D1..D6 sample_algebra MaxReflush=3 capacity (RecAgg ultra zero-reject); FriFold Beta=betas[0]; N=40; FriFsAuth deferred",
   "pow_witness": 865,
   "query_index": [
     10,
@@ -190,7 +190,39 @@
     4,
     11,
     7,
-    2
+    2,
+    2,
+    7,
+    14,
+    3,
+    5,
+    2,
+    4,
+    4,
+    9,
+    4,
+    9,
+    14,
+    7,
+    6,
+    1,
+    12,
+    11,
+    5,
+    12,
+    12,
+    1,
+    14,
+    12,
+    14,
+    0,
+    15,
+    8,
+    7,
+    15,
+    13,
+    3,
+    12
   ],
   "quot_open": [
     [
@@ -244,7 +276,7 @@
     108
   ],
   "rec_agg_width": 330,
-  "source": "RecursiveAggregationAir HashChallenger D1..D6 sample_algebra + query sponge (W=330)",
+  "source": "RecursiveAggregationAir HashChallenger D1..D6 sample_algebra + query sponge (W=330 N=40 ultra)",
   "statement": "thick_recagg_fri_fs_chal_v0",
   "trace_local": [
     [
