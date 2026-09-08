@@ -2014,4 +2014,414 @@ mod tests {
         }
         assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 4392576);
     }
+
+    #[test]
+    fn emit_recagg_fri_fs_chal_golden() {
+        use p3_field::BasedVectorSpace;
+        use p3_field::PrimeField32;
+        use sha3::{Digest, Keccak256};
+        use std::path::PathBuf;
+
+        use crate::plonky3_stark::recursion::air::{REC_AGG_WIDTH, REC_KIND_LEAF};
+        use crate::plonky3_stark::recursion::child_binding::STARK_DIGEST_LEN;
+        use crate::plonky3_stark::recursion::context::RecursiveAggregationContext;
+        use crate::plonky3_stark::recursion::prove::generate_recursive_aggregation_proof;
+        use crate::plonky3_stark::recursion::transcript_v6::decode_rec_agg_proof_owned_v6;
+
+        let ctx = RecursiveAggregationContext {
+            parent_task_id: "parent",
+            compose_label: "root",
+            manifest_root_hash: "m",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            left_stark_digest: [3u8; STARK_DIGEST_LEN],
+            right_stark_digest: [4u8; STARK_DIGEST_LEN],
+            left_kind: REC_KIND_LEAF,
+            right_kind: REC_KIND_LEAF,
+            left_agg_cert: None,
+            right_agg_cert: None,
+            left_leaf_bundle: None,
+            right_leaf_bundle: None,
+            security_level: "low",
+        };
+        let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_rec_agg_fri_challenges(&proof).expect("replay");
+        assert_eq!(proof.degree_bits, 2);
+        assert_eq!(chal.query_indices.len(), 8);
+        assert_eq!(chal.betas.len(), 2);
+        assert_eq!(proof.opened_values.trace_local.len(), REC_AGG_WIDTH);
+
+        let degree_bits = proof.degree_bits;
+        let trace_root = *proof.commitments.trace.roots().first().expect("trace root");
+        let quot_root = *proof
+            .commitments
+            .quotient_chunks
+            .roots()
+            .first()
+            .expect("quot root");
+        let view = decode_pcs_view(&proof).expect("pcs");
+        let first_layer = *view
+            .first_layer_commitment
+            .roots()
+            .first()
+            .expect("first layer");
+        let fri0 = *view.fri_proof.commit_phase_commits[0]
+            .roots()
+            .first()
+            .expect("fri0");
+        let fri1 = *view.fri_proof.commit_phase_commits[1]
+            .roots()
+            .first()
+            .expect("fri1");
+
+        fn push_u32(out: &mut Vec<u8>, v: u32) {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        fn push_challenge(out: &mut Vec<u8>, c: &Challenge) {
+            for limb in BasedVectorSpace::<Val>::as_basis_coefficients_slice(c) {
+                push_u32(out, limb.as_canonical_u32());
+            }
+        }
+        fn keccak(msg: &[u8]) -> [u8; 32] {
+            Keccak256::digest(msg).into()
+        }
+        fn sample_base_m31(d: &[u8; 32], off: &mut usize) -> Option<u32> {
+            let mut b = [0u8; 4];
+            for i in 0..4 {
+                b[i] = d[31 - *off - i];
+            }
+            *off += 4;
+            let u = u32::from_le_bytes(b) & 0x7fff_ffff;
+            if u == 0x7fff_ffff {
+                None
+            } else {
+                Some(u)
+            }
+        }
+        // Zero-reject path (RecAgg low golden): three consecutive accepts from dig start.
+        fn sample_algebra(d: &[u8; 32]) -> [u32; 3] {
+            let mut off = 0usize;
+            [
+                sample_base_m31(d, &mut off).expect("limb0"),
+                sample_base_m31(d, &mut off).expect("limb1"),
+                sample_base_m31(d, &mut off).expect("limb2"),
+            ]
+        }
+        let limbs = |c: &Challenge| -> [u32; 3] {
+            let s = BasedVectorSpace::<Val>::as_basis_coefficients_slice(c);
+            [
+                s[0].as_canonical_u32(),
+                s[1].as_canonical_u32(),
+                s[2].as_canonical_u32(),
+            ]
+        };
+
+        let mut prefix = Vec::new();
+        push_u32(&mut prefix, degree_bits as u32);
+        push_u32(&mut prefix, degree_bits as u32);
+        push_u32(&mut prefix, 0);
+        prefix.extend_from_slice(&trace_root);
+        let d1 = keccak(&prefix);
+        let constraint_alpha = sample_algebra(&d1);
+        assert_eq!(constraint_alpha, limbs(&chal.constraint_alpha));
+
+        let d2 = keccak(&[d1.as_slice(), quot_root.as_slice()].concat());
+        let zeta = sample_algebra(&d2);
+        assert_eq!(zeta, limbs(&chal.zeta));
+
+        let mut m3 = Vec::new();
+        m3.extend_from_slice(&d2);
+        for c in &proof.opened_values.trace_local {
+            push_challenge(&mut m3, c);
+        }
+        for c in proof.opened_values.trace_next.as_ref().unwrap() {
+            push_challenge(&mut m3, c);
+        }
+        assert_eq!(proof.opened_values.quotient_chunks.len(), 1);
+        for c in &proof.opened_values.quotient_chunks[0] {
+            push_challenge(&mut m3, c);
+        }
+        assert_eq!(m3.len(), 7988, "RecAgg openings absorb");
+        let d3 = keccak(&m3);
+        let batch_alpha = sample_algebra(&d3);
+        assert_eq!(batch_alpha, limbs(&chal.batch_alpha));
+
+        let d4 = keccak(&[d3.as_slice(), first_layer.as_slice()].concat());
+        let bivariate_beta = sample_algebra(&d4);
+        assert_eq!(bivariate_beta, limbs(&chal.bivariate_beta));
+
+        let d5 = keccak(&[d4.as_slice(), fri0.as_slice()].concat());
+        let beta0 = sample_algebra(&d5);
+        assert_eq!(beta0, limbs(&chal.betas[0]));
+
+        let d6 = keccak(&[d5.as_slice(), fri1.as_slice()].concat());
+        let beta1 = sample_algebra(&d6);
+        assert_eq!(beta1, limbs(&chal.betas[1]));
+        let chain = d6; // zero-reject ⇒ QueryChain == absorb D6
+
+        let final_poly = view.fri_proof.final_poly;
+        let pow = view.fri_proof.pow_witness.as_canonical_u32();
+        let mut m7 = Vec::new();
+        m7.extend_from_slice(&chain);
+        push_challenge(&mut m7, &final_poly);
+        push_u32(&mut m7, pow);
+        assert_eq!(m7.len(), 48);
+        let d7: [u8; 32] = keccak(&m7);
+        let mut off = 0usize;
+        let sample_bits = |d: &[u8; 32], off: &mut usize, bits: usize| -> usize {
+            let mut b = [0u8; 4];
+            for i in 0..4 {
+                b[i] = d[31 - *off - i];
+            }
+            *off += 4;
+            let u = u32::from_le_bytes(b) as usize;
+            u & ((1 << bits) - 1)
+        };
+        assert_eq!(sample_bits(&d7, &mut off, 8), 0, "pow");
+        let mut dig = d7;
+        for (i, &want) in chal.query_indices.iter().enumerate() {
+            if off == 32 {
+                dig = keccak(&dig);
+                off = 0;
+            }
+            assert_eq!(sample_bits(&dig, &mut off, 4), want, "qi[{i}]");
+        }
+
+        let mut trace_local = Vec::new();
+        for c in &proof.opened_values.trace_local {
+            let row: Vec<u32> = BasedVectorSpace::<Val>::as_basis_coefficients_slice(c)
+                .iter()
+                .map(|x: &Val| x.as_canonical_u32())
+                .collect();
+            trace_local.push(row);
+        }
+        let mut trace_next = Vec::new();
+        for c in proof.opened_values.trace_next.as_ref().unwrap() {
+            let row: Vec<u32> = BasedVectorSpace::<Val>::as_basis_coefficients_slice(c)
+                .iter()
+                .map(|x: &Val| x.as_canonical_u32())
+                .collect();
+            trace_next.push(row);
+        }
+        let mut quot_open = Vec::new();
+        for c in &proof.opened_values.quotient_chunks[0] {
+            let row: Vec<u32> = BasedVectorSpace::<Val>::as_basis_coefficients_slice(c)
+                .iter()
+                .map(|x: &Val| x.as_canonical_u32())
+                .collect();
+            quot_open.push(row);
+        }
+        let fp: Vec<u32> = BasedVectorSpace::<Val>::as_basis_coefficients_slice(&final_poly)
+            .iter()
+            .map(|x: &Val| x.as_canonical_u32())
+            .collect();
+
+        let golden = serde_json::json!({
+            "statement": "thick_recagg_fri_fs_chal_v0",
+            "gate": "e5b-3d",
+            "source": "RecursiveAggregationAir HashChallenger D1..D6 sample_algebra + query sponge (W=330)",
+            "measured_at": "2026-09-08",
+            "approx_r1cs": 5491620,
+            "rec_agg_width": REC_AGG_WIDTH,
+            "n": 8,
+            "degree_bits": degree_bits,
+            "flush_lens": [44, 64, 7988, 64, 64, 64],
+            "trace_root": trace_root.to_vec(),
+            "quot_root": quot_root.to_vec(),
+            "trace_local": trace_local,
+            "trace_next": trace_next,
+            "quot_open": quot_open,
+            "first_layer_root": first_layer.to_vec(),
+            "fri_commit0": fri0.to_vec(),
+            "fri_commit1": fri1.to_vec(),
+            "chain_digest": chain.to_vec(),
+            "constraint_alpha": constraint_alpha,
+            "zeta": zeta,
+            "batch_alpha": batch_alpha,
+            "bivariate_beta": bivariate_beta,
+            "betas": [beta0, beta1],
+            "final_poly": fp,
+            "pow_witness": pow,
+            "query_index": &chal.query_indices[..8],
+            "notes": "D1..D6 sample_algebra MaxReflush=3 capacity (RecAgg low zero-reject); FriFold Beta=betas[0]; N=8; FriFsAuth deferred"
+        });
+
+        let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fixtures/e5b/wrap_recagg_fri_fs_chal_golden.json");
+        std::fs::write(&out, serde_json::to_string_pretty(&golden).unwrap()).expect("write");
+        let wrap = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../wqc-snark-wrap/fixtures/e5b3/wrap_recagg_fri_fs_chal_golden.json");
+        if let Some(parent) = wrap.parent() {
+            if parent.exists() {
+                let _ = std::fs::write(&wrap, serde_json::to_string_pretty(&golden).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn lock_recagg_fri_fs_chal_golden() {
+        use p3_field::{BasedVectorSpace, PrimeField32};
+        use sha3::{Digest, Keccak256};
+
+        use crate::plonky3_stark::recursion::air::{REC_AGG_WIDTH, REC_KIND_LEAF};
+        use crate::plonky3_stark::recursion::child_binding::STARK_DIGEST_LEN;
+        use crate::plonky3_stark::recursion::context::RecursiveAggregationContext;
+        use crate::plonky3_stark::recursion::prove::generate_recursive_aggregation_proof;
+        use crate::plonky3_stark::recursion::transcript_v6::decode_rec_agg_proof_owned_v6;
+
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_recagg_fri_fs_chal_golden.json"
+        );
+        let raw =
+            std::fs::read_to_string(golden_path).expect("wrap_recagg_fri_fs_chal_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+        assert_eq!(
+            v["statement"].as_str().unwrap(),
+            "thick_recagg_fri_fs_chal_v0"
+        );
+        assert_eq!(v["rec_agg_width"].as_u64().unwrap() as usize, REC_AGG_WIDTH);
+        assert_eq!(v["n"].as_u64().unwrap(), 8);
+
+        fn bytes(v: &serde_json::Value, key: &str) -> Vec<u8> {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as u8)
+                .collect()
+        }
+        fn ef3(v: &serde_json::Value, key: &str) -> [u32; 3] {
+            let a = v[key].as_array().unwrap();
+            [
+                a[0].as_u64().unwrap() as u32,
+                a[1].as_u64().unwrap() as u32,
+                a[2].as_u64().unwrap() as u32,
+            ]
+        }
+        fn ef3_rows(v: &serde_json::Value, key: &str) -> Vec<[u32; 3]> {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    let a = row.as_array().unwrap();
+                    [
+                        a[0].as_u64().unwrap() as u32,
+                        a[1].as_u64().unwrap() as u32,
+                        a[2].as_u64().unwrap() as u32,
+                    ]
+                })
+                .collect()
+        }
+        fn push_u32(out: &mut Vec<u8>, x: u32) {
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+        fn keccak(msg: &[u8]) -> [u8; 32] {
+            Keccak256::digest(msg).into()
+        }
+        fn sample_base_m31(d: &[u8; 32], off: &mut usize) -> u32 {
+            let mut b = [0u8; 4];
+            for i in 0..4 {
+                b[i] = d[31 - *off - i];
+            }
+            *off += 4;
+            let u = u32::from_le_bytes(b) & 0x7fff_ffff;
+            assert_ne!(u, 0x7fff_ffff, "M31 reject");
+            u
+        }
+        fn sample_algebra(d: &[u8; 32]) -> [u32; 3] {
+            let mut off = 0usize;
+            [
+                sample_base_m31(d, &mut off),
+                sample_base_m31(d, &mut off),
+                sample_base_m31(d, &mut off),
+            ]
+        }
+
+        let degree_bits = v["degree_bits"].as_u64().unwrap() as u32;
+        let mut m1 = Vec::new();
+        push_u32(&mut m1, degree_bits);
+        push_u32(&mut m1, degree_bits);
+        push_u32(&mut m1, 0);
+        m1.extend_from_slice(&bytes(&v, "trace_root"));
+        let d1 = keccak(&m1);
+        assert_eq!(sample_algebra(&d1), ef3(&v, "constraint_alpha"));
+
+        let d2 = keccak(&[d1.as_slice(), bytes(&v, "quot_root").as_slice()].concat());
+        assert_eq!(sample_algebra(&d2), ef3(&v, "zeta"));
+
+        let mut m3 = Vec::new();
+        m3.extend_from_slice(&d2);
+        for row in ef3_rows(&v, "trace_local")
+            .iter()
+            .chain(ef3_rows(&v, "trace_next").iter())
+            .chain(ef3_rows(&v, "quot_open").iter())
+        {
+            for limb in row {
+                push_u32(&mut m3, *limb);
+            }
+        }
+        assert_eq!(m3.len(), 7988);
+        let d3 = keccak(&m3);
+        assert_eq!(sample_algebra(&d3), ef3(&v, "batch_alpha"));
+
+        let d4 = keccak(&[d3.as_slice(), bytes(&v, "first_layer_root").as_slice()].concat());
+        assert_eq!(sample_algebra(&d4), ef3(&v, "bivariate_beta"));
+        let d5 = keccak(&[d4.as_slice(), bytes(&v, "fri_commit0").as_slice()].concat());
+        let d6 = keccak(&[d5.as_slice(), bytes(&v, "fri_commit1").as_slice()].concat());
+        let betas = v["betas"].as_array().unwrap();
+        let b0 = [
+            betas[0][0].as_u64().unwrap() as u32,
+            betas[0][1].as_u64().unwrap() as u32,
+            betas[0][2].as_u64().unwrap() as u32,
+        ];
+        let b1 = [
+            betas[1][0].as_u64().unwrap() as u32,
+            betas[1][1].as_u64().unwrap() as u32,
+            betas[1][2].as_u64().unwrap() as u32,
+        ];
+        assert_eq!(sample_algebra(&d5), b0);
+        assert_eq!(sample_algebra(&d6), b1);
+        assert_eq!(d6.as_slice(), bytes(&v, "chain_digest").as_slice());
+
+        let ctx = RecursiveAggregationContext {
+            parent_task_id: "parent",
+            compose_label: "root",
+            manifest_root_hash: "m",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            left_stark_digest: [3u8; STARK_DIGEST_LEN],
+            right_stark_digest: [4u8; STARK_DIGEST_LEN],
+            left_kind: REC_KIND_LEAF,
+            right_kind: REC_KIND_LEAF,
+            left_agg_cert: None,
+            right_agg_cert: None,
+            left_leaf_bundle: None,
+            right_leaf_bundle: None,
+            security_level: "low",
+        };
+        let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_rec_agg_fri_challenges(&proof).expect("replay");
+        let limbs = |c: &Challenge| -> [u32; 3] {
+            let s = BasedVectorSpace::<Val>::as_basis_coefficients_slice(c);
+            [
+                s[0].as_canonical_u32(),
+                s[1].as_canonical_u32(),
+                s[2].as_canonical_u32(),
+            ]
+        };
+        assert_eq!(limbs(&chal.constraint_alpha), ef3(&v, "constraint_alpha"));
+        assert_eq!(limbs(&chal.zeta), ef3(&v, "zeta"));
+        assert_eq!(limbs(&chal.batch_alpha), ef3(&v, "batch_alpha"));
+        assert_eq!(limbs(&chal.bivariate_beta), ef3(&v, "bivariate_beta"));
+        assert_eq!(limbs(&chal.betas[0]), b0);
+        assert_eq!(limbs(&chal.betas[1]), b1);
+
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 5491620);
+    }
 }
