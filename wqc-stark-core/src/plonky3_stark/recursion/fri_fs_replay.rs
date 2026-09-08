@@ -3441,7 +3441,13 @@ mod tests {
         assert_eq!(
             merkle_root_from_path(hash_val_leaf(&row_m31), &opening.opening_proof, index),
             fri_commit0,
-            "q0 commit0 root (host; Chal commit Mmcs still deferred in wrap)"
+            "q0 commit0 root"
+        );
+        let commit_path_depth = opening.opening_proof.len();
+        assert_eq!(commit_path_depth, 1, "idle commit H=2 → depth 1");
+        assert!(
+            commit_path_depth <= 4,
+            "wrap ThickMmcsMaxDepth=4; got {commit_path_depth}"
         );
         let fold_x_out = fold_x_row(index, log_folded, chal.betas[0], evals[0], evals[1]);
         let t_inv_x = fold_x_twiddle_inv(index, log_folded);
@@ -3453,13 +3459,13 @@ mod tests {
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + fold_x→FinalPoly; FriFsChal/Chal commit Mmcs deferred — Partial leaf FriFsAuth"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly; FriFsChal deferred — Partial leaf FriFsAuth"
         };
 
         let deferred = if full_auth_geometry {
             serde_json::Value::Array(vec![])
         } else {
-            serde_json::json!(["FriFsChal", "Chal commit"])
+            serde_json::json!(["FriFsChal"])
         };
         // Split large digests/rows out of json! to stay under macro recursion limits.
         let mut golden = serde_json::json!({
@@ -3467,7 +3473,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot+FL query 0 (FS-bound)",
             "measured_at": "2026-09-09",
-            "approx_r1cs": 1858813,
+            "approx_r1cs": 2196438,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
             "quot_width": 48,
@@ -3483,6 +3489,7 @@ mod tests {
             "path_depth": trace_log_height,
             "quot_path_depth": quot_log_height,
             "fl_path_depth": fl_path_depth,
+            "commit_path_depth": commit_path_depth,
             "fl_log_h": fold_ys0[0].log_folded_height,
             "num_quot": num_quot,
             "fold_ys_len": fold_ys0.len(),
@@ -3493,6 +3500,7 @@ mod tests {
             "trace_index": t_idx as u32,
             "quot_index": q_idx as u32,
             "fl_index": fl_idx as u32,
+            "commit_index": index as u32,
             "deferred": deferred,
             "notes": notes
         });
@@ -3675,6 +3683,21 @@ mod tests {
                 serde_json::to_value(commit_leaf_row).unwrap(),
             );
             obj.insert(
+                "commit_siblings".into(),
+                serde_json::to_value(
+                    opening
+                        .opening_proof
+                        .iter()
+                        .map(|s| s.to_vec())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+            obj.insert(
+                "fri_commit0".into(),
+                serde_json::to_value(fri_commit0.to_vec()).unwrap(),
+            );
+            obj.insert(
                 "fold_x".into(),
                 serde_json::json!({
                     "index": index as u32,
@@ -3811,8 +3834,8 @@ mod tests {
             fl_siblings.len(),
             v["fl_path_depth"].as_u64().unwrap() as usize
         );
-        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL+DeepRo→FL+fold_y+fold_x).
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1858813);
+        // Remeasured after Go CompileThickLeafFriFsAuth (+Chal commit Mmcs).
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2196438);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
@@ -3848,6 +3871,20 @@ mod tests {
         assert_eq!(v["final_poly"].as_array().unwrap().len(), 3);
         assert_eq!(v["commit_leaf_row"].as_array().unwrap().len(), 6);
         assert_eq!(v["fold_x"]["out"].as_array().unwrap().len(), 3);
+        // Chal commit Mmcs (rounds=1): W=6, depth 1, index=QI>>2 → FriCommit0.
+        assert_eq!(v["commit_path_depth"].as_u64().unwrap(), 1);
+        assert_eq!(v["commit_index"].as_u64().unwrap() as usize, qi >> 2);
+        let commit_row = m31_row(&v, "commit_leaf_row");
+        let commit_siblings = digest_path(&v, "commit_siblings");
+        let fri_commit0 = digest32(&v, "fri_commit0");
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(&commit_row), &commit_siblings, qi >> 2),
+            fri_commit0
+        );
+        assert_eq!(
+            commit_siblings.len(),
+            v["commit_path_depth"].as_u64().unwrap() as usize
+        );
         let deferred = v["deferred"].as_array().unwrap();
         assert!(deferred.iter().all(|d| {
             let s = d.as_str().unwrap();
@@ -3856,11 +3893,12 @@ mod tests {
                 && s != "DeepRo"
                 && s != "fold_y / fold_x"
                 && s != "fold_x"
+                && s != "Chal commit"
         }));
-        assert!(deferred
+        assert!(deferred.iter().any(|d| d.as_str().unwrap() == "FriFsChal"));
+        assert!(!deferred
             .iter()
             .any(|d| d.as_str().unwrap() == "Chal commit"));
-        assert!(deferred.iter().any(|d| d.as_str().unwrap() == "FriFsChal"));
         assert!(!deferred.iter().any(|d| d.as_str().unwrap() == "fold_x"));
     }
 }
