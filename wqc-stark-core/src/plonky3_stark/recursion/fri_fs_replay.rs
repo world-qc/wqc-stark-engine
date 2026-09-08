@@ -270,6 +270,14 @@ pub fn replay_agg_fri_challenges(
     replay_fri_challenges(proof, AGG_WIDTH)
 }
 
+/// Replay the RecursiveAggregationAir FS transcript through FRI query sampling.
+pub fn replay_rec_agg_fri_challenges(
+    proof: &Proof<WqcStarkConfig>,
+) -> Result<AggFriChallenges, String> {
+    use crate::plonky3_stark::recursion::air::REC_AGG_WIDTH;
+    replay_fri_challenges(proof, REC_AGG_WIDTH)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1486,5 +1494,170 @@ mod tests {
                 quot_root
             );
         }
+    }
+
+    #[test]
+    fn emit_recagg_fs_mmcs_golden() {
+        use p3_commit::{Pcs, PolynomialSpace};
+        use p3_field::PrimeField32;
+        use std::path::PathBuf;
+
+        use crate::plonky3_stark::recursion::air::{REC_AGG_WIDTH, REC_KIND_LEAF};
+        use crate::plonky3_stark::recursion::child_binding::STARK_DIGEST_LEN;
+        use crate::plonky3_stark::recursion::context::RecursiveAggregationContext;
+        use crate::plonky3_stark::recursion::fri_ro::decode_input_proof;
+        use crate::plonky3_stark::recursion::prove::generate_recursive_aggregation_proof;
+        use crate::plonky3_stark::recursion::transcript_v6::decode_rec_agg_proof_owned_v6;
+
+        let ctx = RecursiveAggregationContext {
+            parent_task_id: "parent",
+            compose_label: "root",
+            manifest_root_hash: "m",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [2u8; CHILD_HASH_LEN],
+            left_stark_digest: [3u8; STARK_DIGEST_LEN],
+            right_stark_digest: [4u8; STARK_DIGEST_LEN],
+            left_kind: REC_KIND_LEAF,
+            right_kind: REC_KIND_LEAF,
+            left_agg_cert: None,
+            right_agg_cert: None,
+            left_leaf_bundle: None,
+            right_leaf_bundle: None,
+            security_level: "low",
+        };
+        let transcript = generate_recursive_aggregation_proof(&ctx).expect("prove");
+        let plonky3 = decode_rec_agg_proof_owned_v6(&transcript, &ctx).expect("decode v6");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_rec_agg_fri_challenges(&proof).expect("replay");
+        assert_eq!(proof.degree_bits, 2);
+        assert_eq!(chal.query_indices.len(), 8);
+        assert_eq!(chal.log_blowup, 1);
+        assert_eq!(chal.extra_query_index_bits, 1);
+
+        let view = decode_pcs_view(&proof).expect("pcs");
+        let config = circle_config_matching_proof(&proof).expect("cfg");
+        let pcs = config.pcs();
+        let degree = 1usize << proof.degree_bits;
+        let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+            Challenge,
+            crate::plonky3_stark::config::Challenger,
+        >>::natural_domain_for_degree(pcs, degree);
+        let log_blowup = chal.log_blowup;
+        let log_global_max_height = view.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+        let trace_height = init_trace_domain.size() << log_blowup;
+        assert!(trace_height.is_power_of_two());
+        let trace_log_height = trace_height.trailing_zeros() as usize;
+        let y_shift = log_global_max_height - trace_log_height;
+        let num_index_bits = chal.fri_log_max_height + chal.extra_query_index_bits;
+
+        let qi = chal.query_indices[0];
+        let input = decode_input_proof(&view.fri_proof.query_proofs[0].input_proof).expect("input");
+        let trace_open = &input.input_openings[0];
+        let row = &trace_open.opened_values[0];
+        assert_eq!(row.len(), REC_AGG_WIDTH);
+        let t_idx = qi >> y_shift;
+        let trace_root = *proof.commitments.trace.roots().first().expect("trace root");
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(row), &trace_open.opening_proof, t_idx),
+            trace_root,
+            "q0 RecAgg Trace ValMmcs root"
+        );
+        assert_eq!(trace_open.opening_proof.len(), trace_log_height);
+        assert!(
+            trace_log_height <= 4,
+            "wrap ThickMmcsMaxDepth=4; got {trace_log_height}"
+        );
+
+        let golden = serde_json::json!({
+            "statement": "thick_recagg_fs_mmcs_v0",
+            "gate": "e5b-3d",
+            "source": "RecursiveAggregationAir low-security Trace ValMmcs query 0 (FS-bound)",
+            "measured_at": "2026-09-08",
+            "approx_r1cs": 2997263,
+            "n": 1,
+            "leaf_width": REC_AGG_WIDTH,
+            "degree_bits": proof.degree_bits,
+            "log_blowup": log_blowup,
+            "fri_log_max_height": chal.fri_log_max_height,
+            "extra_query_index_bits": chal.extra_query_index_bits,
+            "num_index_bits": num_index_bits,
+            "y_shift": y_shift,
+            "path_depth": trace_log_height,
+            "query_index": qi as u32,
+            "trace_index": t_idx as u32,
+            "trace_root": trace_root.to_vec(),
+            "leaf_row": row.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>(),
+            "siblings": trace_open.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
+            "notes": "RecAgg Trace ValMmcs N=1 FS-bound (QI>>y_shift); Observe/Chal/Quot/DeepRo / N=40 FriFsAuth deferred"
+        });
+
+        let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fixtures/e5b/wrap_recagg_fs_mmcs_golden.json");
+        std::fs::write(&out, serde_json::to_string_pretty(&golden).unwrap()).expect("write");
+        let wrap = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../wqc-snark-wrap/fixtures/e5b3/wrap_recagg_fs_mmcs_golden.json");
+        if let Some(parent) = wrap.parent() {
+            if parent.exists() {
+                let _ = std::fs::write(&wrap, serde_json::to_string_pretty(&golden).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn lock_recagg_fs_mmcs_golden() {
+        use p3_mersenne_31::Mersenne31 as Val;
+
+        use crate::plonky3_stark::recursion::air::REC_AGG_WIDTH;
+
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_recagg_fs_mmcs_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_recagg_fs_mmcs_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_recagg_fs_mmcs_v0");
+        assert_eq!(v["n"].as_u64().unwrap(), 1);
+        assert_eq!(v["leaf_width"].as_u64().unwrap() as usize, REC_AGG_WIDTH);
+
+        let y_shift = v["y_shift"].as_u64().unwrap() as usize;
+        let qi = v["query_index"].as_u64().unwrap() as usize;
+        let t_idx = v["trace_index"].as_u64().unwrap() as usize;
+        assert_eq!(qi >> y_shift, t_idx);
+
+        let row: Vec<Val> = v["leaf_row"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| Val::from_u32(x.as_u64().unwrap() as u32))
+            .collect();
+        assert_eq!(row.len(), REC_AGG_WIDTH);
+        let siblings: Vec<[u8; 32]> = v["siblings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                let bytes: Vec<u8> = s
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|b| b.as_u64().unwrap() as u8)
+                    .collect();
+                bytes.try_into().expect("sib 32")
+            })
+            .collect();
+        let root: [u8; 32] = v["trace_root"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b.as_u64().unwrap() as u8)
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("root 32");
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(&row), &siblings, t_idx),
+            root
+        );
+        assert_eq!(siblings.len(), v["path_depth"].as_u64().unwrap() as usize);
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2997263);
     }
 }
