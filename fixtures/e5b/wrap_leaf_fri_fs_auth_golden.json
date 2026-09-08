@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 1806540,
+  "approx_r1cs": 1858813,
   "at_x": [
     125368000,
     699976714,
@@ -25,10 +25,23 @@
     867292196,
     6225054
   ],
+  "beta": [
+    957293000,
+    908531927,
+    1201612479
+  ],
   "bivariate_beta": [
     162937142,
     785635945,
     1332720891
+  ],
+  "commit_leaf_row": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
   ],
   "commit_rounds": 1,
   "deep_out": [
@@ -38,11 +51,15 @@
   ],
   "deferred": [
     "FriFsChal",
-    "Chal commit",
-    "fold_x"
+    "Chal commit"
   ],
   "degree_bits": 2,
   "extra_query_index_bits": 1,
+  "final_poly": [
+    0,
+    0,
+    0
+  ],
   "first_layer_root": [
     207,
     194,
@@ -161,6 +178,16 @@
   ],
   "fl_siblings_len": 1,
   "fl_width": 6,
+  "fold_x": {
+    "index": 1,
+    "log_h": 1,
+    "out": [
+      0,
+      0,
+      0
+    ],
+    "t_inv": 775648038
+  },
   "fold_y": {
     "index": 3,
     "log_h": 2,
@@ -208,7 +235,7 @@
   "log_n": 2,
   "measured_at": "2026-09-09",
   "n": 1,
-  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y; FriFsChal/Chal commit/fold_x deferred — Partial leaf FriFsAuth",
+  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + fold_x→FinalPoly; FriFsChal/Chal commit Mmcs deferred — Partial leaf FriFsAuth",
   "num_index_bits": 3,
   "num_quot": 16,
   "out_pre_quot": [

@@ -3280,8 +3280,8 @@ mod tests {
             deep_quotient_reduce_row, ef_from_projective_line,
         };
         use crate::plonky3_stark::recursion::fri_fold_native::{
-            cfft_permute_index, challenge_to_limbs, fold_y_row, fold_y_twiddle_inv, point_v_n,
-            standard_nth_point,
+            cfft_permute_index, challenge_to_limbs, fold_x_row, fold_x_twiddle_inv, fold_y_row,
+            fold_y_twiddle_inv, point_v_n, standard_nth_point,
         };
         use p3_field::BasedVectorSpace;
         let mut fl_concat = Vec::with_capacity(6);
@@ -3390,16 +3390,76 @@ mod tests {
             fold_ys0[0].v1,
         );
 
+        // Idle commit-phase fold_x (rounds=1): inject fold_y at log_current=2 → FinalPoly.
+        assert_eq!(commit_rounds, 1, "idle commit rounds");
+        assert_eq!(chal.betas.len(), 1, "idle betas");
+        assert_eq!(chal.extra_query_index_bits, 1);
+        let qp0 = &view.fri_proof.query_proofs[0];
+        let openings = &qp0.commit_phase_openings;
+        assert_eq!(openings.len(), 1);
+        let fri_commit0 = *view.fri_proof.commit_phase_commits[0]
+            .roots()
+            .first()
+            .expect("fri commit0");
+        let mut index = qi >> chal.extra_query_index_bits;
+        let log_current = openings.len() + chal.log_blowup;
+        assert_eq!(log_current, 2);
+        let mut folded_eval = Challenge::ZERO;
+        let (reduced, _) =
+            reconstruct_query_ro(&proof, &chal, &view, 0, UNITARY_TRACE_WIDTH).expect("ro");
+        assert_eq!(reduced.len(), 1);
+        assert_eq!(reduced[0].0, 2, "single-matrix RO height");
+        folded_eval += reduced[0].1;
+        assert_eq!(folded_eval, fold_y_out, "RO inject == fold_y out");
+        let opening = &openings[0];
+        let sibling = opening.sibling_values[0];
+        let index_in_group = index % 2;
+        let mut evals = [Challenge::ZERO; 2];
+        evals[index_in_group] = folded_eval;
+        evals[index_in_group ^ 1] = sibling;
+        let log_folded = log_current - 1;
+        assert_eq!(log_folded, 1);
+        index >>= 1;
+        let flatten_u32 = |evals: &[Challenge; 2]| -> Vec<u32> {
+            let mut out = Vec::with_capacity(6);
+            for e in evals {
+                for limb in challenge_to_limbs(*e) {
+                    out.push(limb.as_canonical_u32());
+                }
+            }
+            out
+        };
+        let commit_leaf_row = flatten_u32(&evals);
+        let row_m31: Vec<_> = evals
+            .iter()
+            .flat_map(|e| {
+                BasedVectorSpace::<Val>::as_basis_coefficients_slice(e)
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(&row_m31), &opening.opening_proof, index),
+            fri_commit0,
+            "q0 commit0 root (host; Chal commit Mmcs still deferred in wrap)"
+        );
+        let fold_x_out = fold_x_row(index, log_folded, chal.betas[0], evals[0], evals[1]);
+        let t_inv_x = fold_x_twiddle_inv(index, log_folded);
+        assert_eq!(
+            fold_x_out, view.fri_proof.final_poly,
+            "q0 fold_x → FinalPoly"
+        );
+
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y; FriFsChal/Chal commit/fold_x deferred — Partial leaf FriFsAuth"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + fold_x→FinalPoly; FriFsChal/Chal commit Mmcs deferred — Partial leaf FriFsAuth"
         };
 
         let deferred = if full_auth_geometry {
             serde_json::Value::Array(vec![])
         } else {
-            serde_json::json!(["FriFsChal", "Chal commit", "fold_x"])
+            serde_json::json!(["FriFsChal", "Chal commit"])
         };
         // Split large digests/rows out of json! to stay under macro recursion limits.
         let mut golden = serde_json::json!({
@@ -3407,7 +3467,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot+FL query 0 (FS-bound)",
             "measured_at": "2026-09-09",
-            "approx_r1cs": 1806540,
+            "approx_r1cs": 1858813,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
             "quot_width": 48,
@@ -3602,6 +3662,27 @@ mod tests {
                     "out": limbs_u32(fold_y_out),
                 }),
             );
+            obj.insert(
+                "beta".into(),
+                serde_json::to_value(limbs_u32(chal.betas[0])).unwrap(),
+            );
+            obj.insert(
+                "final_poly".into(),
+                serde_json::to_value(limbs_u32(view.fri_proof.final_poly)).unwrap(),
+            );
+            obj.insert(
+                "commit_leaf_row".into(),
+                serde_json::to_value(commit_leaf_row).unwrap(),
+            );
+            obj.insert(
+                "fold_x".into(),
+                serde_json::json!({
+                    "index": index as u32,
+                    "log_h": log_folded as u32,
+                    "t_inv": t_inv_x.as_canonical_u32(),
+                    "out": limbs_u32(fold_x_out),
+                }),
+            );
             obj.insert("log_n".into(), serde_json::to_value(log_n as u32).unwrap());
             obj.insert(
                 "trace_log_h".into(),
@@ -3730,8 +3811,8 @@ mod tests {
             fl_siblings.len(),
             v["fl_path_depth"].as_u64().unwrap() as usize
         );
-        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL+DeepRo→FL+fold_y).
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1806540);
+        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL+DeepRo→FL+fold_y+fold_x).
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1858813);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
@@ -3760,6 +3841,13 @@ mod tests {
         assert_eq!(v["fold_y"]["log_h"].as_u64().unwrap(), 2);
         assert_eq!(v["bivariate_beta"].as_array().unwrap().len(), 3);
         assert_eq!(v["fold_y"]["out"].as_array().unwrap().len(), 3);
+        // fold_x→FinalPoly (commit_rounds=1): log_h=1, index=QI>>(extra+1)=QI>>2.
+        assert_eq!(v["fold_x"]["log_h"].as_u64().unwrap(), 1);
+        assert_eq!(v["fold_x"]["index"].as_u64().unwrap() as usize, qi >> 2);
+        assert_eq!(v["beta"].as_array().unwrap().len(), 3);
+        assert_eq!(v["final_poly"].as_array().unwrap().len(), 3);
+        assert_eq!(v["commit_leaf_row"].as_array().unwrap().len(), 6);
+        assert_eq!(v["fold_x"]["out"].as_array().unwrap().len(), 3);
         let deferred = v["deferred"].as_array().unwrap();
         assert!(deferred.iter().all(|d| {
             let s = d.as_str().unwrap();
@@ -3767,11 +3855,12 @@ mod tests {
                 && s != "FL / Chal commit"
                 && s != "DeepRo"
                 && s != "fold_y / fold_x"
+                && s != "fold_x"
         }));
         assert!(deferred
             .iter()
             .any(|d| d.as_str().unwrap() == "Chal commit"));
         assert!(deferred.iter().any(|d| d.as_str().unwrap() == "FriFsChal"));
-        assert!(deferred.iter().any(|d| d.as_str().unwrap() == "fold_x"));
+        assert!(!deferred.iter().any(|d| d.as_str().unwrap() == "fold_x"));
     }
 }
