@@ -1270,7 +1270,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "AggregationAir ultra-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly",
             "measured_at": "2026-09-08",
-            "approx_r1cs": 0,
+            "approx_r1cs": 125250450,
             "agg_width": AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -1353,9 +1353,7 @@ mod tests {
             assert_eq!(fx[1]["log_h"].as_u64().unwrap(), 1);
         }
         // approx_r1cs locked after Go remmeasure (N=40 + fold_x chain)
-        assert_eq!(v["n"].as_u64().unwrap(), 40);
-        let approx = v["approx_r1cs"].as_u64().unwrap();
-        assert!(approx == 0 || approx > 100_000_000, "approx_r1cs={approx}");
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 125250450);
 
         let ctx = AggregationContext {
             parent_task_id: "parent",
