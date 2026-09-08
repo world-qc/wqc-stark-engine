@@ -3,12 +3,12 @@
   "gate": "e5b-3d",
   "source": "compose thin + ValMmcs + FriVarLog + FriFsAuth + AggOOD + child-audit + RecAgg AIR/Mmcs + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-08",
-  "approx_r1cs": 34111517,
+  "approx_r1cs": 132395419,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
     "thick_fri_varlog_v0 fold_y@4 + fold_x@2 log_h mux",
-    "thick_fri_fs_auth_v0 FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x\u2192FinalPoly",
+    "thick_fri_fs_auth_v0 FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x\u2192FinalPoly (N=40 ~125.25M)",
     "thick_ood_v0 Aggregation OOD",
     "thick_child_audit_v0 SHA3-256 digest bind",
     "thick_recagg_air_v0 RecAgg AIR fold+quotient",
@@ -23,7 +23,7 @@
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
-  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra: FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x\u2192FinalPoly) folded; full Plonky3 PCS / \u2261 verify_root_proof deferred",
+  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra ~125.25M) + RecAgg ValMmcs + depth-2 child-verify + unitary/Born/Traj leaf binds; full Plonky3 PCS / \u2261 verify_root_proof deferred",
   "mmcs_path_root": [
     252,
     223,
