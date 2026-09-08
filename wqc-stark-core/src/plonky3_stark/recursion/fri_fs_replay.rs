@@ -3233,27 +3233,71 @@ mod tests {
             "wrap ThickMmcsMaxDepth=4; got {trace_log_height}"
         );
 
+        // Idle multi-chunk Quot ValMmcs: equal-height concat batch (16×EF3 → W=48).
+        assert_eq!(num_quot, 16, "idle unitary num_quot");
+        let log_num_quot = num_quot.trailing_zeros() as usize;
+        let quot_parent =
+            init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
+        let quot_chunk_domains = quot_parent.split_domains(num_quot);
+        let quot_h = quot_chunk_domains[0].size() << log_blowup;
+        assert!(quot_h.is_power_of_two());
+        let quot_log_height = quot_h.trailing_zeros() as usize;
+        let quot_shift = log_global_max_height - quot_log_height;
+        assert_eq!(quot_h, 8);
+        assert_eq!(quot_log_height, 3);
+        assert_eq!(quot_shift, 0, "idle Quot ValMmcs index shift");
+        assert!(
+            quot_log_height <= 4,
+            "wrap ThickMmcsMaxDepth=4; got {quot_log_height}"
+        );
+
+        let quot_open = &input0.input_openings[1];
+        assert_eq!(quot_open.opened_values.len(), num_quot);
+        let mut quot_concat = Vec::with_capacity(num_quot * 3);
+        for qrow in &quot_open.opened_values {
+            assert_eq!(qrow.len(), 3, "EF_DIM");
+            quot_concat.extend_from_slice(qrow);
+        }
+        assert_eq!(quot_concat.len(), 48, "16×EF3 concat leaf");
+        let q_idx = qi >> quot_shift;
+        let quot_root = *proof
+            .commitments
+            .quotient_chunks
+            .roots()
+            .first()
+            .expect("quot root");
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(&quot_concat), &quot_open.opening_proof, q_idx),
+            quot_root,
+            "q0 Unitary Quot ValMmcs batch root"
+        );
+        assert_eq!(quot_open.opening_proof.len(), quot_log_height);
+
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace ValMmcs N=1 FS-bound (QI>>y_shift); Chal/Quot/FL/DeepRo/fold deferred — Partial leaf FriFsAuth start (multi-chunk quot and/or single-matrix FL)"
+            "Unitary Trace ValMmcs N=1 + Quot ValMmcs concat batch W=48 (num_quot=16); Chal/FL/DeepRo/fold deferred — Partial leaf FriFsAuth"
         };
 
         let golden = serde_json::json!({
             "statement": "thick_leaf_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "idle_qubit0_trace UnitaryAir low-security Trace ValMmcs query 0 (FS-bound)",
-            "measured_at": "2026-09-08",
-            "approx_r1cs": 456355,
+            "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot ValMmcs query 0 (FS-bound)",
+            "measured_at": "2026-09-09",
+            // Locked by Go CompileThickLeafFriFsAuth remmeasure (Trace+Quot W=48).
+            "approx_r1cs": 1108267,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
+            "quot_width": 48,
             "degree_bits": proof.degree_bits,
             "log_blowup": log_blowup,
             "fri_log_max_height": chal.fri_log_max_height,
             "extra_query_index_bits": chal.extra_query_index_bits,
             "num_index_bits": num_index_bits,
             "y_shift": y_shift,
+            "quot_shift": quot_shift,
             "path_depth": trace_log_height,
+            "quot_path_depth": quot_log_height,
             "num_quot": num_quot,
             "fold_ys_len": fold_ys0.len(),
             "fl_siblings_len": input0.first_layer_siblings.len(),
@@ -3261,15 +3305,18 @@ mod tests {
             "full_auth_geometry": full_auth_geometry,
             "query_index": qi as u32,
             "trace_index": t_idx as u32,
+            "quot_index": q_idx as u32,
             "trace_root": trace_root.to_vec(),
+            "quot_root": quot_root.to_vec(),
             "leaf_row": row.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>(),
             "siblings": trace_open.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
+            "quot_leaf_row": quot_concat.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>(),
+            "quot_siblings": quot_open.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
             "deferred": if full_auth_geometry {
                 serde_json::json!([])
             } else {
                 serde_json::json!([
                     "FriFsChal",
-                    "Quot ValMmcs",
                     "FL / Chal commit",
                     "DeepRo",
                     "fold_y / fold_x"
@@ -3312,53 +3359,86 @@ mod tests {
             v["leaf_width"].as_u64().unwrap() as usize,
             UNITARY_TRACE_WIDTH
         );
+        assert_eq!(v["quot_width"].as_u64().unwrap(), 48);
 
         let y_shift = v["y_shift"].as_u64().unwrap() as usize;
+        let quot_shift = v["quot_shift"].as_u64().unwrap() as usize;
         let qi = v["query_index"].as_u64().unwrap() as usize;
         let t_idx = v["trace_index"].as_u64().unwrap() as usize;
+        let q_idx = v["quot_index"].as_u64().unwrap() as usize;
         assert_eq!(qi >> y_shift, t_idx);
+        assert_eq!(qi >> quot_shift, q_idx);
 
-        let row: Vec<Val> = v["leaf_row"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| Val::from_u32(x.as_u64().unwrap() as u32))
-            .collect();
+        fn digest_path(v: &serde_json::Value, key: &str) -> Vec<[u8; 32]> {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| {
+                    let bytes: Vec<u8> = s
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|b| b.as_u64().unwrap() as u8)
+                        .collect();
+                    bytes.try_into().expect("sib 32")
+                })
+                .collect()
+        }
+        fn digest32(v: &serde_json::Value, key: &str) -> [u8; 32] {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| b.as_u64().unwrap() as u8)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("root 32")
+        }
+        fn m31_row(v: &serde_json::Value, key: &str) -> Vec<Val> {
+            v[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| Val::from_u32(x.as_u64().unwrap() as u32))
+                .collect()
+        }
+
+        let row = m31_row(&v, "leaf_row");
         assert_eq!(row.len(), UNITARY_TRACE_WIDTH);
-        let siblings: Vec<[u8; 32]> = v["siblings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| {
-                let bytes: Vec<u8> = s
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|b| b.as_u64().unwrap() as u8)
-                    .collect();
-                bytes.try_into().expect("sib 32")
-            })
-            .collect();
-        let root: [u8; 32] = v["trace_root"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|b| b.as_u64().unwrap() as u8)
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("root 32");
+        let siblings = digest_path(&v, "siblings");
+        let root = digest32(&v, "trace_root");
         assert_eq!(
             merkle_root_from_path(hash_val_leaf(&row), &siblings, t_idx),
             root
         );
         assert_eq!(siblings.len(), v["path_depth"].as_u64().unwrap() as usize);
-        // Remeasured after Go CompileThickLeafFriFsAuth; keep in sync with wrap golden.
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 456355);
+
+        let quot_row = m31_row(&v, "quot_leaf_row");
+        assert_eq!(quot_row.len(), 48);
+        let quot_siblings = digest_path(&v, "quot_siblings");
+        let quot_root = digest32(&v, "quot_root");
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(&quot_row), &quot_siblings, q_idx),
+            quot_root
+        );
+        assert_eq!(
+            quot_siblings.len(),
+            v["quot_path_depth"].as_u64().unwrap() as usize
+        );
+        // Remeasured after Go CompileThickLeafFriFsAuth (Trace W=21 + Quot W=48).
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1108267);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
         assert_eq!(v["y_shift"].as_u64().unwrap(), 0);
+        assert_eq!(v["quot_shift"].as_u64().unwrap(), 0);
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
+        assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["commit_rounds"].as_u64().unwrap(), 1);
+        let deferred = v["deferred"].as_array().unwrap();
+        assert!(deferred
+            .iter()
+            .all(|d| d.as_str().unwrap() != "Quot ValMmcs"));
     }
 }
