@@ -295,6 +295,55 @@ pub fn deep_ro_trace_witness(
     }
 }
 
+/// Builds DeepRo + λ for RecursiveAggregationAir trace width (`REC_AGG_WIDTH`=330).
+/// Same algebra as [`deep_ro_leaf_trace_witness`], but uncapped past leaf PCS max W.
+#[allow(clippy::too_many_arguments)]
+pub fn deep_ro_recagg_trace_witness(
+    alpha: Challenge,
+    sx: Val,
+    sy: Val,
+    zeta: Challenge,
+    zeta_next: Challenge,
+    px: &[Val],
+    pz_local: &[Challenge],
+    pz_next: &[Challenge],
+    lambda: Challenge,
+    log_n: usize,
+) -> Result<DeepRoLeafTraceWitness, String> {
+    use crate::plonky3_stark::recursion::air::REC_AGG_WIDTH;
+    let w = px.len();
+    if w != REC_AGG_WIDTH {
+        return Err(format!(
+            "recagg deep_ro width {w} != REC_AGG_WIDTH={REC_AGG_WIDTH}"
+        ));
+    }
+    if pz_local.len() != w || pz_next.len() != w {
+        return Err("recagg deep_ro pz width mismatch".into());
+    }
+    let (at_x, at_y) = ef_from_projective_line(zeta);
+    let (atn_x, atn_y) = ef_from_projective_line(zeta_next);
+    let alpha_w = alpha.exp_u64(w as u64);
+    let alpha_w2 = alpha_w.square();
+    let deep0 = deep_partial(alpha, sx, sy, at_x, at_y, alpha_w, px, pz_local);
+    let deep1 = deep_partial(alpha, sx, sy, atn_x, atn_y, alpha_w, px, pz_next);
+    let combined = deep0.out_pre + alpha_w2 * deep1.out_pre;
+    let v_n = point_v_n(sx, log_n);
+    let out = combined - lambda * Challenge::from(v_n);
+    Ok(DeepRoLeafTraceWitness {
+        at_x,
+        at_y,
+        atn_x,
+        atn_y,
+        alpha_w,
+        alpha_w2,
+        deep0,
+        deep1,
+        combined,
+        v_n,
+        out,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

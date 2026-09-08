@@ -68,6 +68,7 @@ pub use deep_ro_bind::{
     deep_ro_trace_query0_from_agg_proof, AggDeepRoBundle, LeafDeepRoBundle, AGG_DEEP_RO_MAX,
     AGG_DEEP_RO_TRACE_MAX,
 };
+pub use deep_ro_native::deep_ro_recagg_trace_witness;
 pub use deep_ro_leaf_trace_air::{
     generate_deep_ro_leaf_trace_proof, verify_deep_ro_leaf_trace_proof, DeepRoLeafTraceAir,
     DeepRoLeafTraceStepProof,
