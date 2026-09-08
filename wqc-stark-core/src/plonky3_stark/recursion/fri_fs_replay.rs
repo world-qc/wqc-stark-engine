@@ -3280,7 +3280,8 @@ mod tests {
             deep_quotient_reduce_row, ef_from_projective_line,
         };
         use crate::plonky3_stark::recursion::fri_fold_native::{
-            cfft_permute_index, challenge_to_limbs, point_v_n, standard_nth_point,
+            cfft_permute_index, challenge_to_limbs, fold_y_row, fold_y_twiddle_inv, point_v_n,
+            standard_nth_point,
         };
         use p3_field::BasedVectorSpace;
         let mut fl_concat = Vec::with_capacity(6);
@@ -3377,16 +3378,28 @@ mod tests {
         };
         assert_eq!(deep_limbs, fl_slot_limbs, "DeepRo limbs==fl_concat slot");
 
+        // Single-matrix first-layer fold_y (log_h=2, index=QI>>1).
+        assert_eq!(fold_ys0[0].index, fl_idx);
+        assert_eq!(fold_ys0[0].log_folded_height, 2);
+        let t_inv_y = fold_y_twiddle_inv(fold_ys0[0].index, fold_ys0[0].log_folded_height);
+        let fold_y_out = fold_y_row(
+            fold_ys0[0].index,
+            fold_ys0[0].log_folded_height,
+            chal.bivariate_beta,
+            fold_ys0[0].v0,
+            fold_ys0[0].v1,
+        );
+
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten; FriFsChal/Chal commit/fold deferred — Partial leaf FriFsAuth"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y; FriFsChal/Chal commit/fold_x deferred — Partial leaf FriFsAuth"
         };
 
         let deferred = if full_auth_geometry {
             serde_json::Value::Array(vec![])
         } else {
-            serde_json::json!(["FriFsChal", "Chal commit", "fold_y / fold_x"])
+            serde_json::json!(["FriFsChal", "Chal commit", "fold_x"])
         };
         // Split large digests/rows out of json! to stay under macro recursion limits.
         let mut golden = serde_json::json!({
@@ -3394,7 +3407,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot+FL query 0 (FS-bound)",
             "measured_at": "2026-09-09",
-            "approx_r1cs": 1754277,
+            "approx_r1cs": 1806540,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
             "quot_width": 48,
@@ -3576,6 +3589,19 @@ mod tests {
                 serde_json::to_value(v_n.as_canonical_u32()).unwrap(),
             );
             obj.insert("deep_out".into(), serde_json::to_value(deep_limbs).unwrap());
+            obj.insert(
+                "bivariate_beta".into(),
+                serde_json::to_value(limbs_u32(chal.bivariate_beta)).unwrap(),
+            );
+            obj.insert(
+                "fold_y".into(),
+                serde_json::json!({
+                    "index": fold_ys0[0].index as u32,
+                    "log_h": fold_ys0[0].log_folded_height as u32,
+                    "t_inv": t_inv_y.as_canonical_u32(),
+                    "out": limbs_u32(fold_y_out),
+                }),
+            );
             obj.insert("log_n".into(), serde_json::to_value(log_n as u32).unwrap());
             obj.insert(
                 "trace_log_h".into(),
@@ -3704,9 +3730,8 @@ mod tests {
             fl_siblings.len(),
             v["fl_path_depth"].as_u64().unwrap() as usize
         );
-        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL); keep in sync.
-        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL+DeepRo→FL).
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1754277);
+        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL+DeepRo→FL+fold_y).
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1806540);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
@@ -3731,17 +3756,22 @@ mod tests {
             fl_row[3..6].iter().map(|x| x.as_canonical_u32()).collect()
         };
         assert_eq!(deep_out, fl_slot, "deep_out == FL Flatten slot");
+        assert_eq!(v["fold_y"]["index"].as_u64().unwrap() as usize, fl_idx);
+        assert_eq!(v["fold_y"]["log_h"].as_u64().unwrap(), 2);
+        assert_eq!(v["bivariate_beta"].as_array().unwrap().len(), 3);
+        assert_eq!(v["fold_y"]["out"].as_array().unwrap().len(), 3);
         let deferred = v["deferred"].as_array().unwrap();
         assert!(deferred.iter().all(|d| {
             let s = d.as_str().unwrap();
-            s != "Quot ValMmcs" && s != "FL / Chal commit" && s != "DeepRo"
+            s != "Quot ValMmcs"
+                && s != "FL / Chal commit"
+                && s != "DeepRo"
+                && s != "fold_y / fold_x"
         }));
         assert!(deferred
             .iter()
             .any(|d| d.as_str().unwrap() == "Chal commit"));
         assert!(deferred.iter().any(|d| d.as_str().unwrap() == "FriFsChal"));
-        assert!(deferred
-            .iter()
-            .any(|d| d.as_str().unwrap() == "fold_y / fold_x"));
+        assert!(deferred.iter().any(|d| d.as_str().unwrap() == "fold_x"));
     }
 }

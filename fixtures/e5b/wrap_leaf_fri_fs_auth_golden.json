@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 1754277,
+  "approx_r1cs": 1806540,
   "at_x": [
     125368000,
     699976714,
@@ -25,6 +25,11 @@
     867292196,
     6225054
   ],
+  "bivariate_beta": [
+    162937142,
+    785635945,
+    1332720891
+  ],
   "commit_rounds": 1,
   "deep_out": [
     0,
@@ -34,7 +39,7 @@
   "deferred": [
     "FriFsChal",
     "Chal commit",
-    "fold_y / fold_x"
+    "fold_x"
   ],
   "degree_bits": 2,
   "extra_query_index_bits": 1,
@@ -156,6 +161,16 @@
   ],
   "fl_siblings_len": 1,
   "fl_width": 6,
+  "fold_y": {
+    "index": 3,
+    "log_h": 2,
+    "out": [
+      0,
+      0,
+      0
+    ],
+    "t_inv": 991237807
+  },
   "fold_ys_len": 1,
   "fri_log_max_height": 2,
   "full_auth_geometry": false,
@@ -193,7 +208,7 @@
   "log_n": 2,
   "measured_at": "2026-09-09",
   "n": 1,
-  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten; FriFsChal/Chal commit/fold deferred — Partial leaf FriFsAuth",
+  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y; FriFsChal/Chal commit/fold_x deferred — Partial leaf FriFsAuth",
   "num_index_bits": 3,
   "num_quot": 16,
   "out_pre_quot": [
