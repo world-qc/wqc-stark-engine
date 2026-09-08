@@ -2609,7 +2609,8 @@ mod tests {
         let mut px_trace = [Val::ZERO; REC_AGG_WIDTH];
         let mut pz_local = [Challenge::ZERO; REC_AGG_WIDTH];
         let mut pz_next = [Challenge::ZERO; REC_AGG_WIDTH];
-        pz_local[..REC_AGG_WIDTH].copy_from_slice(&proof.opened_values.trace_local[..REC_AGG_WIDTH]);
+        pz_local[..REC_AGG_WIDTH]
+            .copy_from_slice(&proof.opened_values.trace_local[..REC_AGG_WIDTH]);
         pz_next[..REC_AGG_WIDTH].copy_from_slice(&trace_next[..REC_AGG_WIDTH]);
         let mut px_quot = [Val::ZERO; 3];
         let mut pz_quot = [Challenge::ZERO; 3];
@@ -3010,7 +3011,8 @@ mod tests {
         let trace_next = proof.opened_values.trace_next.as_ref().expect("trace_next");
         let mut pz_local = [Challenge::ZERO; REC_AGG_WIDTH];
         let mut pz_next = [Challenge::ZERO; REC_AGG_WIDTH];
-        pz_local[..REC_AGG_WIDTH].copy_from_slice(&proof.opened_values.trace_local[..REC_AGG_WIDTH]);
+        pz_local[..REC_AGG_WIDTH]
+            .copy_from_slice(&proof.opened_values.trace_local[..REC_AGG_WIDTH]);
         pz_next[..REC_AGG_WIDTH].copy_from_slice(&trace_next[..REC_AGG_WIDTH]);
         let mut pz_quot = [Challenge::ZERO; 3];
         pz_quot.copy_from_slice(&proof.opened_values.quotient_chunks[0][..3]);
