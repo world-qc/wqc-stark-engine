@@ -3276,6 +3276,12 @@ mod tests {
         // Idle single-matrix first-layer ChallengeMmcs (W=6, log_h=2, QI>>1).
         assert_eq!(fold_ys0.len(), 1, "idle single-matrix FL");
         assert_eq!(fold_ys0[0].log_folded_height, 2);
+        use crate::plonky3_stark::recursion::deep_ro_native::{
+            deep_quotient_reduce_row, ef_from_projective_line,
+        };
+        use crate::plonky3_stark::recursion::fri_fold_native::{
+            cfft_permute_index, challenge_to_limbs, point_v_n, standard_nth_point,
+        };
         use p3_field::BasedVectorSpace;
         let mut fl_concat = Vec::with_capacity(6);
         for e in [fold_ys0[0].v0, fold_ys0[0].v1] {
@@ -3301,16 +3307,86 @@ mod tests {
             "q0 Unitary single-matrix FL root"
         );
 
+        // Idle fri_ro height merge: Trace+16 Quot share log_h=3 (bits_reduced=0) → one λ.
+        assert_eq!(view.lambdas.len(), 1, "idle height-merged RO");
+        assert_eq!(y_shift, 0);
+        assert_eq!(quot_shift, 0);
+        assert_eq!(trace_log_height, 3);
+        let log_n = 2usize;
+        let bits_reduced = 0usize;
+        let zeta_next = init_trace_domain.next_point(chal.zeta).expect("zeta_next");
+        let (at_x, at_y) = ef_from_projective_line(chal.zeta);
+        let (atn_x, atn_y) = ef_from_projective_line(zeta_next);
+        let limbs_u32 = |c: Challenge| -> Vec<u32> {
+            challenge_to_limbs(c)
+                .iter()
+                .map(|x| x.as_canonical_u32())
+                .collect()
+        };
+        let alpha = chal.batch_alpha;
+        let orig_idx = cfft_permute_index(qi >> bits_reduced, trace_log_height);
+        let p = standard_nth_point(trace_log_height, orig_idx);
+        let trace_next = proof.opened_values.trace_next.as_ref().expect("trace_next");
+        let deep_t0 = deep_quotient_reduce_row(
+            alpha,
+            p.x,
+            p.y,
+            chal.zeta,
+            row,
+            &proof.opened_values.trace_local,
+        );
+        let deep_t1 = deep_quotient_reduce_row(alpha, p.x, p.y, zeta_next, row, trace_next);
+        let mut ro = deep_t0;
+        let mut offset = alpha.exp_u64(21).square();
+        ro += offset * deep_t1;
+        offset *= alpha.exp_u64(21).square();
+        let mut out_pre_quot = Vec::with_capacity(num_quot);
+        for i in 0..num_quot {
+            let dq = deep_quotient_reduce_row(
+                alpha,
+                p.x,
+                p.y,
+                chal.zeta,
+                &quot_open.opened_values[i],
+                &proof.opened_values.quotient_chunks[i],
+            );
+            out_pre_quot.push(limbs_u32(dq));
+            ro += offset * dq;
+            offset *= alpha.exp_u64(3).square();
+        }
+        let v_n = point_v_n(p.x, log_n);
+        let lambda = view.lambdas[0];
+        let deep_out = ro - lambda * Challenge::from(v_n);
+        let fl_slot = if (qi & 1) == 0 {
+            fold_ys0[0].v0
+        } else {
+            fold_ys0[0].v1
+        };
+        assert_eq!(deep_out, fl_slot, "DeepRo==FL Flatten slot");
+        let deep_limbs = limbs_u32(deep_out);
+        let fl_slot_limbs: Vec<u32> = if (qi & 1) == 0 {
+            fl_concat[..3]
+                .iter()
+                .map(|x| x.as_canonical_u32())
+                .collect()
+        } else {
+            fl_concat[3..6]
+                .iter()
+                .map(|x| x.as_canonical_u32())
+                .collect()
+        };
+        assert_eq!(deep_limbs, fl_slot_limbs, "DeepRo limbs==fl_concat slot");
+
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6; FriFsChal/Chal commit/DeepRo/fold deferred — Partial leaf FriFsAuth"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten; FriFsChal/Chal commit/fold deferred — Partial leaf FriFsAuth"
         };
 
         let deferred = if full_auth_geometry {
             serde_json::Value::Array(vec![])
         } else {
-            serde_json::json!(["FriFsChal", "Chal commit", "DeepRo", "fold_y / fold_x"])
+            serde_json::json!(["FriFsChal", "Chal commit", "fold_y / fold_x"])
         };
         // Split large digests/rows out of json! to stay under macro recursion limits.
         let mut golden = serde_json::json!({
@@ -3318,7 +3394,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot+FL query 0 (FS-bound)",
             "measured_at": "2026-09-09",
-            "approx_r1cs": 1445908,
+            "approx_r1cs": 1754277,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
             "quot_width": 48,
@@ -3419,6 +3495,92 @@ mod tests {
                 )
                 .unwrap(),
             );
+            obj.insert(
+                "batch_alpha".into(),
+                serde_json::to_value(limbs_u32(alpha)).unwrap(),
+            );
+            obj.insert(
+                "zeta".into(),
+                serde_json::to_value(limbs_u32(chal.zeta)).unwrap(),
+            );
+            obj.insert(
+                "zeta_next".into(),
+                serde_json::to_value(limbs_u32(zeta_next)).unwrap(),
+            );
+            obj.insert(
+                "lambda".into(),
+                serde_json::to_value(limbs_u32(lambda)).unwrap(),
+            );
+            obj.insert(
+                "at_x".into(),
+                serde_json::to_value(limbs_u32(at_x)).unwrap(),
+            );
+            obj.insert(
+                "at_y".into(),
+                serde_json::to_value(limbs_u32(at_y)).unwrap(),
+            );
+            obj.insert(
+                "atn_x".into(),
+                serde_json::to_value(limbs_u32(atn_x)).unwrap(),
+            );
+            obj.insert(
+                "atn_y".into(),
+                serde_json::to_value(limbs_u32(atn_y)).unwrap(),
+            );
+            obj.insert(
+                "pz_local".into(),
+                serde_json::to_value(
+                    proof
+                        .opened_values
+                        .trace_local
+                        .iter()
+                        .map(|&c| limbs_u32(c))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+            obj.insert(
+                "pz_next".into(),
+                serde_json::to_value(trace_next.iter().map(|&c| limbs_u32(c)).collect::<Vec<_>>())
+                    .unwrap(),
+            );
+            obj.insert(
+                "quot_ood".into(),
+                serde_json::to_value(
+                    proof
+                        .opened_values
+                        .quotient_chunks
+                        .iter()
+                        .map(|chunk| {
+                            assert_eq!(chunk.len(), 3, "EF_DIM");
+                            chunk.iter().map(|&c| limbs_u32(c)).collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+            obj.insert(
+                "out_pre_trace0".into(),
+                serde_json::to_value(limbs_u32(deep_t0)).unwrap(),
+            );
+            obj.insert(
+                "out_pre_trace1".into(),
+                serde_json::to_value(limbs_u32(deep_t1)).unwrap(),
+            );
+            obj.insert(
+                "out_pre_quot".into(),
+                serde_json::to_value(out_pre_quot).unwrap(),
+            );
+            obj.insert(
+                "v_n".into(),
+                serde_json::to_value(v_n.as_canonical_u32()).unwrap(),
+            );
+            obj.insert("deep_out".into(), serde_json::to_value(deep_limbs).unwrap());
+            obj.insert("log_n".into(), serde_json::to_value(log_n as u32).unwrap());
+            obj.insert(
+                "trace_log_h".into(),
+                serde_json::to_value(trace_log_height as u32).unwrap(),
+            );
         }
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3436,6 +3598,7 @@ mod tests {
     #[test]
     #[allow(clippy::bool_assert_comparison)]
     fn lock_leaf_fri_fs_auth_golden() {
+        use p3_field::PrimeField32;
         use p3_mersenne_31::Mersenne31 as Val;
 
         use crate::plonky3_stark::recursion::pcs_geom::UNITARY_TRACE_WIDTH;
@@ -3542,7 +3705,8 @@ mod tests {
             v["fl_path_depth"].as_u64().unwrap() as usize
         );
         // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL); keep in sync.
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1445908);
+        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL+DeepRo→FL).
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1754277);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
@@ -3552,13 +3716,32 @@ mod tests {
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["commit_rounds"].as_u64().unwrap(), 1);
+        assert_eq!(v["log_n"].as_u64().unwrap(), 2);
+        assert_eq!(v["trace_log_h"].as_u64().unwrap(), 3);
+        let deep_out: Vec<u32> = v["deep_out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(deep_out.len(), 3);
+        let fl_slot: Vec<u32> = if (qi & 1) == 0 {
+            fl_row[..3].iter().map(|x| x.as_canonical_u32()).collect()
+        } else {
+            fl_row[3..6].iter().map(|x| x.as_canonical_u32()).collect()
+        };
+        assert_eq!(deep_out, fl_slot, "deep_out == FL Flatten slot");
         let deferred = v["deferred"].as_array().unwrap();
         assert!(deferred.iter().all(|d| {
             let s = d.as_str().unwrap();
-            s != "Quot ValMmcs" && s != "FL / Chal commit"
+            s != "Quot ValMmcs" && s != "FL / Chal commit" && s != "DeepRo"
         }));
         assert!(deferred
             .iter()
             .any(|d| d.as_str().unwrap() == "Chal commit"));
+        assert!(deferred.iter().any(|d| d.as_str().unwrap() == "FriFsChal"));
+        assert!(deferred
+            .iter()
+            .any(|d| d.as_str().unwrap() == "fold_y / fold_x"));
     }
 }
