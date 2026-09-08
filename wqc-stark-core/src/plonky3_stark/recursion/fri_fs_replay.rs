@@ -3273,22 +3273,56 @@ mod tests {
         );
         assert_eq!(quot_open.opening_proof.len(), quot_log_height);
 
+        // Idle single-matrix first-layer ChallengeMmcs (W=6, log_h=2, QI>>1).
+        assert_eq!(fold_ys0.len(), 1, "idle single-matrix FL");
+        assert_eq!(fold_ys0[0].log_folded_height, 2);
+        use p3_field::BasedVectorSpace;
+        let mut fl_concat = Vec::with_capacity(6);
+        for e in [fold_ys0[0].v0, fold_ys0[0].v1] {
+            fl_concat.extend_from_slice(BasedVectorSpace::<Val>::as_basis_coefficients_slice(&e));
+        }
+        assert_eq!(fl_concat.len(), 6, "2×EF3 Chal leaf");
+        let fl_shift = 1usize;
+        let fl_idx = qi >> fl_shift;
+        let fl_path_depth = input0.first_layer_proof.len();
+        assert_eq!(fl_path_depth, 2, "log2(4)");
+        assert!(
+            fl_path_depth <= 4,
+            "wrap ThickMmcsMaxDepth=4; got {fl_path_depth}"
+        );
+        let fl_root = *view
+            .first_layer_commitment
+            .roots()
+            .first()
+            .expect("first layer");
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(&fl_concat), &input0.first_layer_proof, fl_idx),
+            fl_root,
+            "q0 Unitary single-matrix FL root"
+        );
+
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace ValMmcs N=1 + Quot ValMmcs concat batch W=48 (num_quot=16); Chal/FL/DeepRo/fold deferred — Partial leaf FriFsAuth"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6; FriFsChal/Chal commit/DeepRo/fold deferred — Partial leaf FriFsAuth"
         };
 
-        let golden = serde_json::json!({
+        let deferred = if full_auth_geometry {
+            serde_json::Value::Array(vec![])
+        } else {
+            serde_json::json!(["FriFsChal", "Chal commit", "DeepRo", "fold_y / fold_x"])
+        };
+        // Split large digests/rows out of json! to stay under macro recursion limits.
+        let mut golden = serde_json::json!({
             "statement": "thick_leaf_fri_fs_auth_v0",
             "gate": "e5b-3d",
-            "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot ValMmcs query 0 (FS-bound)",
+            "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot+FL query 0 (FS-bound)",
             "measured_at": "2026-09-09",
-            // Locked by Go CompileThickLeafFriFsAuth remmeasure (Trace+Quot W=48).
-            "approx_r1cs": 1108267,
+            "approx_r1cs": 1445908,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
             "quot_width": 48,
+            "fl_width": 6,
             "degree_bits": proof.degree_bits,
             "log_blowup": log_blowup,
             "fri_log_max_height": chal.fri_log_max_height,
@@ -3296,8 +3330,11 @@ mod tests {
             "num_index_bits": num_index_bits,
             "y_shift": y_shift,
             "quot_shift": quot_shift,
+            "fl_shift": fl_shift,
             "path_depth": trace_log_height,
             "quot_path_depth": quot_log_height,
+            "fl_path_depth": fl_path_depth,
+            "fl_log_h": fold_ys0[0].log_folded_height,
             "num_quot": num_quot,
             "fold_ys_len": fold_ys0.len(),
             "fl_siblings_len": input0.first_layer_siblings.len(),
@@ -3306,24 +3343,83 @@ mod tests {
             "query_index": qi as u32,
             "trace_index": t_idx as u32,
             "quot_index": q_idx as u32,
-            "trace_root": trace_root.to_vec(),
-            "quot_root": quot_root.to_vec(),
-            "leaf_row": row.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>(),
-            "siblings": trace_open.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
-            "quot_leaf_row": quot_concat.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>(),
-            "quot_siblings": quot_open.opening_proof.iter().map(|s| s.to_vec()).collect::<Vec<_>>(),
-            "deferred": if full_auth_geometry {
-                serde_json::json!([])
-            } else {
-                serde_json::json!([
-                    "FriFsChal",
-                    "FL / Chal commit",
-                    "DeepRo",
-                    "fold_y / fold_x"
-                ])
-            },
+            "fl_index": fl_idx as u32,
+            "deferred": deferred,
             "notes": notes
         });
+        {
+            let obj = golden.as_object_mut().unwrap();
+            obj.insert(
+                "trace_root".into(),
+                serde_json::to_value(trace_root.to_vec()).unwrap(),
+            );
+            obj.insert(
+                "quot_root".into(),
+                serde_json::to_value(quot_root.to_vec()).unwrap(),
+            );
+            obj.insert(
+                "first_layer_root".into(),
+                serde_json::to_value(fl_root.to_vec()).unwrap(),
+            );
+            obj.insert(
+                "leaf_row".into(),
+                serde_json::to_value(row.iter().map(|x| x.as_canonical_u32()).collect::<Vec<_>>())
+                    .unwrap(),
+            );
+            obj.insert(
+                "siblings".into(),
+                serde_json::to_value(
+                    trace_open
+                        .opening_proof
+                        .iter()
+                        .map(|s| s.to_vec())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+            obj.insert(
+                "quot_leaf_row".into(),
+                serde_json::to_value(
+                    quot_concat
+                        .iter()
+                        .map(|x| x.as_canonical_u32())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+            obj.insert(
+                "quot_siblings".into(),
+                serde_json::to_value(
+                    quot_open
+                        .opening_proof
+                        .iter()
+                        .map(|s| s.to_vec())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+            obj.insert(
+                "fl_leaf_row".into(),
+                serde_json::to_value(
+                    fl_concat
+                        .iter()
+                        .map(|x| x.as_canonical_u32())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+            obj.insert(
+                "fl_siblings".into(),
+                serde_json::to_value(
+                    input0
+                        .first_layer_proof
+                        .iter()
+                        .map(|s| s.to_vec())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+        }
 
         let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../fixtures/e5b/wrap_leaf_fri_fs_auth_golden.json");
@@ -3426,19 +3522,43 @@ mod tests {
             quot_siblings.len(),
             v["quot_path_depth"].as_u64().unwrap() as usize
         );
-        // Remeasured after Go CompileThickLeafFriFsAuth (Trace W=21 + Quot W=48).
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1108267);
+
+        let fl_shift = v["fl_shift"].as_u64().unwrap() as usize;
+        let fl_idx = v["fl_index"].as_u64().unwrap() as usize;
+        assert_eq!(qi >> fl_shift, fl_idx);
+        assert_eq!(v["fl_width"].as_u64().unwrap(), 6);
+        assert_eq!(v["fl_path_depth"].as_u64().unwrap(), 2);
+        assert_eq!(v["fl_log_h"].as_u64().unwrap(), 2);
+        let fl_row = m31_row(&v, "fl_leaf_row");
+        assert_eq!(fl_row.len(), 6);
+        let fl_siblings = digest_path(&v, "fl_siblings");
+        let fl_root = digest32(&v, "first_layer_root");
+        assert_eq!(
+            merkle_root_from_path(hash_val_leaf(&fl_row), &fl_siblings, fl_idx),
+            fl_root
+        );
+        assert_eq!(
+            fl_siblings.len(),
+            v["fl_path_depth"].as_u64().unwrap() as usize
+        );
+        // Remeasured after Go CompileThickLeafFriFsAuth (Trace+Quot+FL); keep in sync.
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 1445908);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
         assert_eq!(v["y_shift"].as_u64().unwrap(), 0);
         assert_eq!(v["quot_shift"].as_u64().unwrap(), 0);
+        assert_eq!(v["fl_shift"].as_u64().unwrap(), 1);
         assert_eq!(v["path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["quot_path_depth"].as_u64().unwrap(), 3);
         assert_eq!(v["commit_rounds"].as_u64().unwrap(), 1);
         let deferred = v["deferred"].as_array().unwrap();
+        assert!(deferred.iter().all(|d| {
+            let s = d.as_str().unwrap();
+            s != "Quot ValMmcs" && s != "FL / Chal commit"
+        }));
         assert!(deferred
             .iter()
-            .all(|d| d.as_str().unwrap() != "Quot ValMmcs"));
+            .any(|d| d.as_str().unwrap() == "Chal commit"));
     }
 }
