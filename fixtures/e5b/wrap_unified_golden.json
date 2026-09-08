@@ -1,9 +1,9 @@
 {
   "statement": "thick_unified_v0",
   "gate": "e5b-3d",
-  "source": "compose thin + ValMmcs + FriVarLog + FriFsAuth + AggOOD + child-audit + RecAgg AIR + RecAgg FriFsAuth N=40 ultra + Chal path/batch + leaf OODs + child-verify depth-2 + unitary/Born/Traj leaf stark_digest binds",
+  "source": "compose thin + ValMmcs + FriVarLog + FriFsAuth + AggOOD + child-audit + RecAgg AIR + RecAgg FriFsAuth N=40 ultra + Chal path/batch + leaf OODs + child-verify depth-3 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-08",
-  "approx_r1cs": 383525583,
+  "approx_r1cs": 385346645,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
@@ -18,12 +18,12 @@
     "thick_ood_unitary_v0 Unitary leaf OOD",
     "thick_ood_shot_v0 ShotSampling leaf OOD",
     "thick_ood_born_v0 Born Distribution OOD K=2",
-    "thick_child_verify_d2_v0 depth-2 compose recurse",
+    "thick_child_verify_d3_v0 depth-3 compose recurse (~3.041M)",
     "thick_leaf_bind_unitary_v0 unitary leaf stark_digest bind",
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind"
   ],
-  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra ~125.25M) + RecAgg AIR + RecAgg FriFsAuth N=40 ultra (~254.26M remmeasured; supersedes FS-Mmcs N=1 in unified) + depth-2 child-verify + unitary/Born/Traj leaf binds; approx_r1cs locked by WQC_THICK_HUGE Compile-only remmeasure (2026-09-08, ~73.2min); full Plonky3 PCS / \u2261 verify_root_proof deferred",
+  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra ~125.25M) + RecAgg AIR + RecAgg FriFsAuth N=40 ultra (~254.26M) + OOD/AIR\u2194FriFsAuth opening cross-binds + depth-3 child-verify (~3.041M; replaces d2) + unitary/Born/Traj leaf binds; approx_r1cs estimate 385346645 = 383525583 - 1222031 + 3040711 + ~2382 eq-binds until WQC_THICK_HUGE remmeasure; QuotOpen\u2194Quotient/\u03b6/multi-chunk PCS / full leaf Auth / Settlement VK deferred",
   "mmcs_path_root": [
     252,
     223,
