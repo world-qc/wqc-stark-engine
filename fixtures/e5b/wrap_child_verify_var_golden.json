@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 11774122,
+  "approx_r1cs": 19710711,
   "depth": 4,
   "gate": "e5b-3d",
   "left_digest": [
@@ -37,7 +37,7 @@
     245
   ],
   "measured_at": "2026-09-09",
-  "notes": "Depth\u2208{1..4} soft-gated mini compose (~11.774M Compile+IsSolved); folded into thick_unified_v0; variable length / leaf Plonky3 / Settlement VK deferred",
+  "notes": "Depth∈{1..4} soft-gated mini compose + soft leaf FriFsAuth×2 (en1); folded into thick_unified_v0; Max→87KiB / deeper Auth slots / payload↔Auth bind / Settlement VK deferred",
   "outer_len": 1523,
   "right_digest": [
     42,
@@ -73,6 +73,6 @@
     255,
     143
   ],
-  "source": "mini compose Depth mux 1..4 (golden lock Depth=4)",
+  "source": "mini compose Depth mux 1..4 + soft leaf FriFsAuth×2 en1 (golden lock Depth=4)",
   "statement": "thick_child_verify_var_v0"
 }
