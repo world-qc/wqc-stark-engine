@@ -1,0 +1,9 @@
+{
+  "approx_r1cs": 5459419,
+  "auth_n": 1,
+  "gate": "e5b-3d",
+  "measured_at": "2026-09-09",
+  "notes": "Phase-3 Settlement VK working profile N=1 Compile measure (-tags thick_n1); ultra N=40 goldens unchanged",
+  "profile": "thick_n1",
+  "statement": "thick_fri_fs_auth_v0"
+}
