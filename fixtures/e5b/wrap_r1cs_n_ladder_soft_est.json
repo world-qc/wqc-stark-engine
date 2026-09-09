@@ -4,19 +4,32 @@
   "measured_at": "2026-09-09",
   "production_n": 40,
   "settlement_vk_working_target_r1cs": 20000000,
-  "residual_fixed_r1cs": 26707155,
+  "forbid_digest_var_fold_into_unified": true,
+  "residual_fixed_r1cs": 26454291,
+  "phase2": {
+    "soft_auth_elides_r1cs": false,
+    "child_verify_var_r1cs": 19710711,
+    "leaf_auth_r1cs": 4099834,
+    "auth_x2_still_compiled_r1cs": 8199668,
+    "implied_digest_mux_r1cs": 11511043,
+    "audit_dropped_r1cs": 252864,
+    "unified_soft_est_before_audit_drop": 406216679,
+    "unified_soft_est_after_audit_drop": 405963815
+  },
   "formula": {
     "agg_n": "round(125250450 * N / 40)",
     "recagg_n": "round(254259074 * N / 40)",
     "unified_n": "residual_fixed + agg(N) + recagg(N)",
-    "residual_fixed": "406216679 - 125250450 - 254259074"
+    "residual_fixed": "405963815 - 125250450 - 254259074"
   },
   "n40_sources": {
     "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs",
     "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs",
-    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs soft est",
+    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs soft est (Phase-2 Audit dropped)",
     "child_verify_var": 19710711,
-    "leaf_fri_fs_auth": 4099834
+    "leaf_fri_fs_auth": 4099834,
+    "child_audit_standalone": 252864,
+    "child_digest_var_standalone": 45878401
   },
   "cost_centers_n40": [
     {
@@ -27,7 +40,7 @@
     {
       "name": "agg_fri_fs_auth",
       "approx_r1cs": 125250450,
-      "pct_of_unified": 30.8
+      "pct_of_unified": 30.9
     },
     {
       "name": "child_verify_var_plus_auth_x2",
@@ -40,30 +53,30 @@
       "n": 1,
       "agg_fri_fs_auth_r1cs": 3131261,
       "recagg_fri_fs_auth_r1cs": 6356477,
-      "unified_soft_est_r1cs": 36194893,
+      "unified_soft_est_r1cs": 35942029,
       "method": "linear_soft_est"
     },
     {
       "n": 8,
       "agg_fri_fs_auth_r1cs": 25050090,
       "recagg_fri_fs_auth_r1cs": 50851815,
-      "unified_soft_est_r1cs": 102609060,
+      "unified_soft_est_r1cs": 102356196,
       "method": "linear_soft_est"
     },
     {
       "n": 16,
       "agg_fri_fs_auth_r1cs": 50100180,
       "recagg_fri_fs_auth_r1cs": 101703630,
-      "unified_soft_est_r1cs": 178510965,
+      "unified_soft_est_r1cs": 178258101,
       "method": "linear_soft_est"
     },
     {
       "n": 40,
       "agg_fri_fs_auth_r1cs": 125250450,
       "recagg_fri_fs_auth_r1cs": 254259074,
-      "unified_soft_est_r1cs": 406216679,
+      "unified_soft_est_r1cs": 405963815,
       "method": "measured"
     }
   ],
-  "notes": "Phase-1 shrink policy: N=40 measured; N\u2208{1,8,16} linear soft-est (Auth ~linear in N; residual fixed). Settlement VK working target \u226420M R1CS; keep thin_wrap_v0 while unified stays O(10^8). N=8\u2248103M and N=1\u224836M still above target without residual cut and/or recursive Auth wrap. Do not fold thick_child_digest_var_v0 Max=256 soft-mux (~45.878M) into unified under current model. Production ThickFriPackN/RecAggN remain 40 until explicit profile cutover."
+  "notes": "Phase-1/2 shrink policy: N=40 measured (unified soft est after Phase-2 Audit drop); N\u2208{1,8,16} linear soft-est. Soft Auth does NOT elide R1CS (child_verify_var 19.711M still compiles Auth\u00d72 \u22488199668; implied digest/mux \u224811511043). Dropped thick_child_audit from unified (\u2212252864). forbid_digest_var_fold_into_unified=true \u2014 Max=256 soft-mux (~45.878M) stays standalone. Settlement VK working target \u226420M R1CS; keep thin_wrap_v0 while O(10^8). Production ThickFriPackN/RecAggN remain 40. Phase 2b (strip Auth\u00d72 from var \u2248\u22128.2M) deferred."
 }
