@@ -3,7 +3,7 @@
   "gate": "e5b-3d",
   "source": "compose thin + ValMmcs + FriVarLog + FriFsAuth + AggOOD + child-audit + RecAgg AIR + RecAgg FriFsAuth N=40 ultra + Chal path/batch + leaf OODs + child-verify depth-3 + unitary/Born/Traj leaf stark_digest binds",
   "measured_at": "2026-09-09",
-  "approx_r1cs": 389546679,
+  "approx_r1cs": 398280090,
   "components": [
     "thin_wrap_v0 settle PI bind",
     "thick_mmcs_v0 ValMmcs leaf+path",
@@ -18,13 +18,13 @@
     "thick_ood_unitary_v0 Unitary leaf OOD",
     "thick_ood_shot_v0 ShotSampling leaf OOD",
     "thick_ood_born_v0 Born Distribution OOD K=2",
-    "thick_child_verify_d3_v0 depth-3 compose recurse (~3.041M)",
+    "thick_child_verify_var_v0 Depth\u2208{1..4} (~11.774M) folded into unified",
     "thick_leaf_bind_unitary_v0 unitary leaf stark_digest bind",
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind",
     "thick_leaf_fri_fs_auth_v0 Unitary FriFsChal+Auth N=1 (~4.100M) + OOD\u2194leaf Trace/\u03b1/Quotient multi-chunk zps(\u03b6) in unified"
   ],
-  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra ~125.25M) + RecAgg AIR + RecAgg FriFsAuth N=40 ultra (~254.26M) + OOD/AIR\u2194FriFsAuth binds (Trace/\u03b1 + Quotient\u2194recompose(QuotOpen) single-chunk; \u03b6 on Chal) + Unitary OOD\u2194leaf FriFsChal Trace/\u03b1/Quotient multi-chunk zps(\u03b6) + depth-3 child-verify (~3.041M) + leaf FriFsAuth N=1 FriFsChal+Trace+Quot+FL+DeepRo+fold_y+Chal commit+fold_x (~4.100M) + unitary/Born/Traj leaf binds; approx_r1cs estimate 389546679 until WQC_THICK_HUGE remmeasure; variable length / Depth\u22654 / var\u2192unified fold / Settlement VK deferred (standalone thick_child_verify_var_v0 ~4.496M)",
+  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra ~125.25M) + RecAgg AIR + RecAgg FriFsAuth N=40 ultra (~254.26M) + OOD/AIR\u2194FriFsAuth binds (Trace/\u03b1 + Quotient\u2194recompose(QuotOpen) single-chunk; \u03b6 on Chal) + Unitary OOD\u2194leaf FriFsChal Trace/\u03b1/Quotient multi-chunk zps(\u03b6) + child-verify-var Depth\u2208{1..4} (~11.774M) + leaf FriFsAuth N=1 FriFsChal+Trace+Quot+FL+DeepRo+fold_y+Chal commit+fold_x (~4.100M) + unitary/Born/Traj leaf binds; approx_r1cs estimate 398280090 until WQC_THICK_HUGE remmeasure; variable length / leaf Plonky3 / Settlement VK deferred",
   "mmcs_path_root": [
     252,
     223,
