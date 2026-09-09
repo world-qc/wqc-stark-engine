@@ -108,7 +108,7 @@
       "method": "measured"
     }
   ],
-  "notes": "Phase-3/4: thick_n1 measures Agg/RecAgg/unified N=1 (5459419 / 11459782 / 19732153 \u226420M). Residual cut strips child-verify and leaf FriFsAuth from unified. Ultra production_n=40 unchanged. POC keys path fixtures/thick_n1; production ceremony deferred. forbid digest_var / child_verify / leaf Auth re-fold into unified.",
+  "notes": "Phase-3/4: thick_n1 measures Agg/RecAgg/unified N=1 (5459419 / 11459782 / 19732153 \u226420M). Residual cut strips child-verify and leaf FriFsAuth from unified. Ultra production_n=40 unchanged. POC keys path fixtures/thick_n1; production ceremony deferred. forbid digest_var / child_verify / leaf Auth re-fold into unified. Phase-5 settle PI=17; Solidity export tooling ready; production MPC ceremony open.",
   "phase4": {
     "unified_n1_measured": true,
     "unified_n1_r1cs": 19732153,
@@ -116,5 +116,13 @@
     "settlement_vk_working_target_met": true,
     "poc_setup": "fixtures/thick_n1 (disposable; not production ceremony)",
     "note": "Phase-4: Compile-measured thick_unified_v0 under -tags thick_n1; Groth16 Setup/Solidity export still POC/ceremony-gated"
+  },
+  "phase5": {
+    "settle_public_inputs": 17,
+    "nb_public_variables_gnark": 18,
+    "solidity_export_cmd": "go run -tags thick_n1 ./cmd/wrap-export-solidity-thick-n1",
+    "production_ceremony": false,
+    "settlement_v2_still_thin": true,
+    "note": "Phase-5: stripped gnark public tags from thick gadgets; only ThinWrapCircuit 17 PIs public. Local Setup\u2260MPC ceremony. See fixtures/thick_n1/CEREMONY.md"
   }
 }
