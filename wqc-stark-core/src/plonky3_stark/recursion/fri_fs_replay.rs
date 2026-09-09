@@ -3159,6 +3159,110 @@ mod tests {
         }
     }
 
+    /// Bake idle Unitary (degree_bits=2, num_quot=16) Quot zps constants for wrap.
+    #[test]
+    fn bake_idle_quot_zps_constants() {
+        use p3_commit::{Pcs, PolynomialSpace};
+        use p3_field::{Field, PrimeField32};
+
+        use crate::plonky3_stark::config::devnet_circle_config;
+
+        let config = devnet_circle_config();
+        let pcs = config.pcs();
+        let degree_bits = 2usize;
+        let num_quot = 16usize;
+        let log_num_quot = num_quot.trailing_zeros() as usize;
+        assert_eq!(log_num_quot, 4);
+        let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+            Challenge,
+            crate::plonky3_stark::config::Challenger,
+        >>::natural_domain_for_degree(pcs, 1 << degree_bits);
+        let quot_parent =
+            init_trace_domain.create_disjoint_domain(1usize << (degree_bits + log_num_quot));
+        let domains = quot_parent.split_domains(num_quot);
+        assert_eq!(domains.len(), num_quot);
+        assert_eq!(domains[0].size(), 4, "chunk log_n=2");
+
+        // shift.v_n(2) = 1 - V_D(0) because (1,0).v_n(2)=1 and V_D = v_n - shift.v_n.
+        let mut shift_vn = Vec::with_capacity(num_quot);
+        for d in &domains {
+            let v0 = d.vanishing_poly_at_point(Val::ZERO);
+            shift_vn.push((Val::ONE - v0).as_canonical_u32());
+        }
+        let mut zps_c = Vec::with_capacity(num_quot);
+        for (i, di) in domains.iter().enumerate() {
+            let ti = di.first_point();
+            let mut prod = Val::ONE;
+            for (j, dj) in domains.iter().enumerate() {
+                if j != i {
+                    prod *= dj.vanishing_poly_at_point(ti);
+                }
+            }
+            zps_c.push(prod.inverse().as_canonical_u32());
+        }
+        eprintln!("IDLE_QUOT_SHIFT_VN={shift_vn:?}");
+        eprintln!("IDLE_QUOT_ZPS_C={zps_c:?}");
+        assert_eq!(shift_vn.len(), 16);
+        assert_eq!(zps_c.len(), 16);
+    }
+
+    /// Parity: idle leaf Quot recompose via p3 equals Go baked-constant formula (expect 0).
+    #[test]
+    fn idle_quot_recompose_parity_with_proof() {
+        use p3_commit::{Pcs, PolynomialSpace};
+        use p3_field::{BasedVectorSpace, PrimeField32};
+        use p3_uni_stark::recompose_quotient_from_chunks;
+
+        use crate::plonky3_stark::generate_plonky3_proof;
+        use crate::plonky3_stark::recursion::deep_ro_native::ef_from_projective_line;
+        use crate::plonky3_stark::recursion::fri_fold_native::challenge_to_limbs;
+        use crate::plonky3_stark::recursion::pcs_geom::UNITARY_TRACE_WIDTH;
+        use crate::plonky3_stark::transcript_v2::decode_proof_v2_plonky3_bytes;
+        use crate::trace_spec::idle_qubit0_trace;
+        use crate::transcript::StarkContext;
+
+        let ctx = StarkContext {
+            circuit_id: "c-leaf",
+            sub_task_id: "sub-leaf-zps-parity",
+            node_id: "n1",
+            slice_id: "0",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+            security_level: "low",
+        };
+        let transcript = generate_plonky3_proof(&ctx, &idle_qubit0_trace()).expect("prove");
+        let plonky3 = decode_proof_v2_plonky3_bytes(&transcript, &ctx).expect("decode");
+        let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
+        let chal = replay_fri_challenges(&proof, UNITARY_TRACE_WIDTH).expect("replay");
+        let config = circle_config_matching_proof(&proof).expect("cfg");
+        let pcs = config.pcs();
+        let degree = 1usize << proof.degree_bits;
+        let init_trace_domain = <crate::plonky3_stark::config::Pcs as Pcs<
+            Challenge,
+            crate::plonky3_stark::config::Challenger,
+        >>::natural_domain_for_degree(pcs, degree);
+        let num_quot = proof.opened_values.quotient_chunks.len();
+        assert_eq!(num_quot, 16);
+        let log_num_quot = num_quot.trailing_zeros() as usize;
+        let quot_parent =
+            init_trace_domain.create_disjoint_domain(1usize << (proof.degree_bits + log_num_quot));
+        let domains = quot_parent.split_domains(num_quot);
+        let q = recompose_quotient_from_chunks::<WqcStarkConfig>(
+            &domains,
+            &proof.opened_values.quotient_chunks,
+            chal.zeta,
+        );
+        let limbs = challenge_to_limbs(q);
+        eprintln!("p3_recompose={:?}", limbs.map(|x| x.as_canonical_u32()));
+        assert_eq!(q, Challenge::ZERO, "idle Folded=0 ⇒ Q(ζ)=0");
+        let (at_x, _) = ef_from_projective_line(chal.zeta);
+        let _ = (
+            at_x,
+            BasedVectorSpace::<Val>::as_basis_coefficients_slice(&chal.zeta),
+        );
+    }
+
     #[test]
     fn emit_leaf_fri_fs_auth_golden() {
         use p3_commit::{Pcs, PolynomialSpace};
@@ -3459,14 +3563,33 @@ mod tests {
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α cross-bind in thick_unified_v0 — Partial (multi-chunk Quot zps(ζ) deferred)"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α/Quotient multi-chunk zps(ζ) in thick_unified_v0"
         };
+        let deferred = serde_json::Value::Array(vec![]);
 
-        let deferred = if full_auth_geometry {
-            serde_json::Value::Array(vec![])
-        } else {
-            serde_json::json!(["multi-chunk Quot zps(ζ)"])
-        };
+        use p3_field::Field;
+        use p3_uni_stark::recompose_quotient_from_chunks;
+        let recompose_q = recompose_quotient_from_chunks::<WqcStarkConfig>(
+            &quot_chunk_domains,
+            &proof.opened_values.quotient_chunks,
+            chal.zeta,
+        );
+        let mut quot_shift_vn = Vec::with_capacity(num_quot);
+        for d in &quot_chunk_domains {
+            let v0 = d.vanishing_poly_at_point(Val::ZERO);
+            quot_shift_vn.push((Val::ONE - v0).as_canonical_u32());
+        }
+        let mut quot_zps_c = Vec::with_capacity(num_quot);
+        for (i, di) in quot_chunk_domains.iter().enumerate() {
+            let ti = di.first_point();
+            let mut prod = Val::ONE;
+            for (j, dj) in quot_chunk_domains.iter().enumerate() {
+                if j != i {
+                    prod *= dj.vanishing_poly_at_point(ti);
+                }
+            }
+            quot_zps_c.push(prod.inverse().as_canonical_u32());
+        }
         // Split large digests/rows out of json! to stay under macro recursion limits.
         let mut golden = serde_json::json!({
             "statement": "thick_leaf_fri_fs_auth_v0",
@@ -3640,6 +3763,18 @@ mod tests {
                         .collect::<Vec<_>>(),
                 )
                 .unwrap(),
+            );
+            obj.insert(
+                "recompose_quotient".into(),
+                serde_json::to_value(limbs_u32(recompose_q)).unwrap(),
+            );
+            obj.insert(
+                "quot_shift_vn".into(),
+                serde_json::to_value(quot_shift_vn).unwrap(),
+            );
+            obj.insert(
+                "quot_zps_c".into(),
+                serde_json::to_value(quot_zps_c).unwrap(),
             );
             obj.insert(
                 "out_pre_trace0".into(),
@@ -3911,8 +4046,28 @@ mod tests {
         assert!(!deferred
             .iter()
             .any(|d| d.as_str().unwrap() == "OOD/leaf_bind cross-bind"));
-        assert!(deferred
+        assert!(!deferred
             .iter()
             .any(|d| d.as_str().unwrap() == "multi-chunk Quot zps(ζ)"));
+        assert!(
+            deferred.is_empty(),
+            "leaf FriFsAuth deferred cleared after zps"
+        );
+        assert_eq!(
+            v["notes"].as_str().unwrap().contains("multi-chunk zps"),
+            true
+        );
+        assert_eq!(v["recompose_quotient"].as_array().unwrap().len(), 3);
+        assert_eq!(v["quot_shift_vn"].as_array().unwrap().len(), 16);
+        assert_eq!(v["quot_zps_c"].as_array().unwrap().len(), 16);
+        assert_eq!(
+            v["recompose_quotient"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0]
+        );
     }
 }

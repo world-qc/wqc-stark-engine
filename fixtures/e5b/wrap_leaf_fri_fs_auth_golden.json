@@ -92,9 +92,7 @@
     0,
     0
   ],
-  "deferred": [
-    "multi-chunk Quot zps(ζ)"
-  ],
+  "deferred": [],
   "degree_bits": 2,
   "extra_query_index_bits": 1,
   "final_poly": [
@@ -311,7 +309,7 @@
   "log_n": 2,
   "measured_at": "2026-09-09",
   "n": 1,
-  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α cross-bind in thick_unified_v0 — Partial (multi-chunk Quot zps(ζ) deferred)",
+  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α/Quotient multi-chunk zps(ζ) in thick_unified_v0",
   "num_index_bits": 3,
   "num_quot": 16,
   "out_pre_quot": [
@@ -984,6 +982,24 @@
     12
   ],
   "quot_shift": 0,
+  "quot_shift_vn": [
+    1567857810,
+    280947147,
+    194696271,
+    2121318970,
+    505542828,
+    1580223790,
+    1133522282,
+    1690787918,
+    456695729,
+    1013961365,
+    567259857,
+    1641940819,
+    26164677,
+    1952787376,
+    1866536500,
+    579625837
+  ],
   "quot_siblings": [
     [
       36,
@@ -1089,6 +1105,29 @@
     ]
   ],
   "quot_width": 48,
+  "quot_zps_c": [
+    990017100,
+    2123672518,
+    40465891,
+    1882889757,
+    101832679,
+    693995334,
+    2001623307,
+    1662741032,
+    484742615,
+    145860340,
+    1453488313,
+    2045650968,
+    264593890,
+    2107017756,
+    23811129,
+    1157466547
+  ],
+  "recompose_quotient": [
+    0,
+    0,
+    0
+  ],
   "siblings": [
     [
       62,
