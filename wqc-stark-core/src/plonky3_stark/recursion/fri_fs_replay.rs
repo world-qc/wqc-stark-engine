@@ -3459,13 +3459,13 @@ mod tests {
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound) — Partial leaf FriFsAuth (OOD/leaf_bind cross-bind deferred)"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α cross-bind in thick_unified_v0 — Partial (multi-chunk Quot zps(ζ) deferred)"
         };
 
         let deferred = if full_auth_geometry {
             serde_json::Value::Array(vec![])
         } else {
-            serde_json::json!(["OOD/leaf_bind cross-bind"])
+            serde_json::json!(["multi-chunk Quot zps(ζ)"])
         };
         // Split large digests/rows out of json! to stay under macro recursion limits.
         let mut golden = serde_json::json!({
@@ -3908,5 +3908,11 @@ mod tests {
             .iter()
             .any(|d| d.as_str().unwrap() == "Chal commit"));
         assert!(!deferred.iter().any(|d| d.as_str().unwrap() == "fold_x"));
+        assert!(!deferred
+            .iter()
+            .any(|d| d.as_str().unwrap() == "OOD/leaf_bind cross-bind"));
+        assert!(deferred
+            .iter()
+            .any(|d| d.as_str().unwrap() == "multi-chunk Quot zps(ζ)"));
     }
 }

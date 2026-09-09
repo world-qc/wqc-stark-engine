@@ -93,7 +93,7 @@
     0
   ],
   "deferred": [
-    "OOD/leaf_bind cross-bind"
+    "multi-chunk Quot zps(ζ)"
   ],
   "degree_bits": 2,
   "extra_query_index_bits": 1,
@@ -311,7 +311,7 @@
   "log_n": 2,
   "measured_at": "2026-09-09",
   "n": 1,
-  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound) — Partial leaf FriFsAuth (OOD/leaf_bind cross-bind deferred)",
+  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α cross-bind in thick_unified_v0 — Partial (multi-chunk Quot zps(ζ) deferred)",
   "num_index_bits": 3,
   "num_quot": 16,
   "out_pre_quot": [
