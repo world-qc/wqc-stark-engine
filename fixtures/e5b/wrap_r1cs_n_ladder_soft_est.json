@@ -5,28 +5,36 @@
   "production_n": 40,
   "settlement_vk_working_target_r1cs": 20000000,
   "forbid_digest_var_fold_into_unified": true,
-  "residual_fixed_r1cs": 26454291,
+  "residual_fixed_r1cs": 18517702,
   "phase2": {
     "soft_auth_elides_r1cs": false,
-    "child_verify_var_r1cs": 19710711,
+    "child_verify_var_r1cs_before_auth_strip": 19710711,
     "leaf_auth_r1cs": 4099834,
-    "auth_x2_still_compiled_r1cs": 8199668,
-    "implied_digest_mux_r1cs": 11511043,
+    "auth_x2_estimate_from_leaf": 8199668,
+    "implied_digest_mux_from_leaf_x2": 11511043,
     "audit_dropped_r1cs": 252864,
     "unified_soft_est_before_audit_drop": 406216679,
     "unified_soft_est_after_audit_drop": 405963815
+  },
+  "phase2b": {
+    "auth_x2_stripped_from_child_verify_var": true,
+    "child_verify_var_r1cs": 11774122,
+    "auth_x2_stripped_r1cs": 7936589,
+    "unified_soft_est_before_auth_strip": 405963815,
+    "unified_soft_est_after_auth_strip": 398027226,
+    "note": "Explicit weaken: compose-walk Auth×2 removed from var; root LeafFriFsAuth N=1 and standalone thick_child_verify_leaf_auth_v0 remain. Soft Auth path deleted with strip."
   },
   "formula": {
     "agg_n": "round(125250450 * N / 40)",
     "recagg_n": "round(254259074 * N / 40)",
     "unified_n": "residual_fixed + agg(N) + recagg(N)",
-    "residual_fixed": "405963815 - 125250450 - 254259074"
+    "residual_fixed": "398027226 - 125250450 - 254259074"
   },
   "n40_sources": {
     "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs",
     "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs",
-    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs soft est (Phase-2 Audit dropped)",
-    "child_verify_var": 19710711,
+    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs soft est (Phase-2b Auth×2 stripped from var)",
+    "child_verify_var": 11774122,
     "leaf_fri_fs_auth": 4099834,
     "child_audit_standalone": 252864,
     "child_digest_var_standalone": 45878401
@@ -35,17 +43,17 @@
     {
       "name": "recagg_fri_fs_auth",
       "approx_r1cs": 254259074,
-      "pct_of_unified": 62.6
+      "pct_of_unified": 63.9
     },
     {
       "name": "agg_fri_fs_auth",
       "approx_r1cs": 125250450,
-      "pct_of_unified": 30.9
+      "pct_of_unified": 31.5
     },
     {
-      "name": "child_verify_var_plus_auth_x2",
-      "approx_r1cs": 19710711,
-      "pct_of_unified": 4.9
+      "name": "child_verify_var_digest_mux",
+      "approx_r1cs": 11774122,
+      "pct_of_unified": 3.0
     }
   ],
   "ladder": [
@@ -53,30 +61,30 @@
       "n": 1,
       "agg_fri_fs_auth_r1cs": 3131261,
       "recagg_fri_fs_auth_r1cs": 6356477,
-      "unified_soft_est_r1cs": 35942029,
+      "unified_soft_est_r1cs": 28005440,
       "method": "linear_soft_est"
     },
     {
       "n": 8,
       "agg_fri_fs_auth_r1cs": 25050090,
       "recagg_fri_fs_auth_r1cs": 50851815,
-      "unified_soft_est_r1cs": 102356196,
+      "unified_soft_est_r1cs": 94419607,
       "method": "linear_soft_est"
     },
     {
       "n": 16,
       "agg_fri_fs_auth_r1cs": 50100180,
       "recagg_fri_fs_auth_r1cs": 101703630,
-      "unified_soft_est_r1cs": 178258101,
+      "unified_soft_est_r1cs": 170321512,
       "method": "linear_soft_est"
     },
     {
       "n": 40,
       "agg_fri_fs_auth_r1cs": 125250450,
       "recagg_fri_fs_auth_r1cs": 254259074,
-      "unified_soft_est_r1cs": 405963815,
+      "unified_soft_est_r1cs": 398027226,
       "method": "measured"
     }
   ],
-  "notes": "Phase-1/2 shrink policy: N=40 measured (unified soft est after Phase-2 Audit drop); N\u2208{1,8,16} linear soft-est. Soft Auth does NOT elide R1CS (child_verify_var 19.711M still compiles Auth\u00d72 \u22488199668; implied digest/mux \u224811511043). Dropped thick_child_audit from unified (\u2212252864). forbid_digest_var_fold_into_unified=true \u2014 Max=256 soft-mux (~45.878M) stays standalone. Settlement VK working target \u226420M R1CS; keep thin_wrap_v0 while O(10^8). Production ThickFriPackN/RecAggN remain 40. Phase 2b (strip Auth\u00d72 from var \u2248\u22128.2M) deferred."
+  "notes": "Phase-1/2/2b shrink: N=40 soft est after Phase-2 Audit drop and Phase-2b Auth×2 strip from child_verify_var (measured 11774122; −7936589 vs pre-strip 19710711). Soft Auth did NOT elide R1CS (closed negative Phase-2); strip is explicit weaken. forbid_digest_var_fold_into_unified=true. Settlement VK working target ≤20M R1CS; keep thin_wrap_v0 while O(10^8). Production ThickFriPackN/RecAggN remain 40. Root LeafFriFsAuth N=1 and standalone leaf_auth Auth×2 KPI kept."
 }

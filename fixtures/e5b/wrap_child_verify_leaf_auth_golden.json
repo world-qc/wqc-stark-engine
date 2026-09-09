@@ -38,7 +38,7 @@
     143
   ],
   "measured_at": "2026-09-09",
-  "notes": "standalone Depth=1 walk + Auth×2; soft en1 fold into child_verify_var / deeper Auth slots / payload↔Auth bind / Settlement VK deferred",
+  "notes": "standalone Depth=1 walk + Auth\u00d72 KPI; Phase-2b Auth\u00d72 removed from child_verify_var; deeper Auth slots / payload\u2194Auth bind / Settlement VK deferred",
   "outer_len": 109,
   "right_digest": [
     211,
@@ -74,6 +74,6 @@
     170,
     118
   ],
-  "source": "Depth=1 mini compose digest walk + Unitary leaf FriFsAuth×2",
+  "source": "Depth=1 mini compose digest walk + Unitary leaf FriFsAuth\u00d72",
   "statement": "thick_child_verify_leaf_auth_v0"
 }
