@@ -1,0 +1,9 @@
+{
+  "approx_r1cs": 19732153,
+  "auth_n": 1,
+  "gate": "e5b-3d",
+  "measured_at": "2026-09-09",
+  "notes": "Phase-4 Compile-measured thick_unified_v0 under -tags thick_n1; \u226420M Settlement VK working target met; Groth16 Setup/ceremony deferred; ultra N=40 goldens unchanged",
+  "profile": "thick_n1",
+  "statement": "thick_unified_v0"
+}

@@ -31,12 +31,14 @@
     "planned_var_to_d3_insufficient": true,
     "child_verify_stripped_from_unified_r1cs": 11774122,
     "leaf_fri_fs_auth_stripped_from_unified_r1cs": 4099834,
-    "note": "N=1 Agg/RecAgg remmeasure non-linear (5.459M+11.460M vs linear 3.131M+6.357M). Fixed-d3 alone left ~26.7M; Phase-3 strips child-verify and leaf FriFsAuth from unified (both remain standalone KPIs) to clear ≤20M.",
+    "note": "N=1 Agg/RecAgg remmeasure non-linear (5.459M+11.460M vs linear 3.131M+6.357M). Fixed-d3 alone left ~26.7M; Phase-3 strips child-verify and leaf FriFsAuth from unified (both remain standalone KPIs) to clear \u226420M.",
     "agg_fri_fs_auth_n1_r1cs": 5459419,
     "recagg_fri_fs_auth_n1_r1cs": 11459782,
-    "unified_soft_est_n1": 19562947,
+    "unified_soft_est_n1": 19732153,
     "unified_soft_est_n40_after_strip": 382153270,
-    "auth_n_working_profile": 1
+    "auth_n_working_profile": 1,
+    "unified_soft_est_n1_was_soft": 19562947,
+    "composition_overhead_n1_r1cs": 169206
   },
   "formula": {
     "agg_n": "round(125250450 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
@@ -56,7 +58,8 @@
   },
   "n1_sources": {
     "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_n1_golden.json approx_r1cs",
-    "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_n1_golden.json approx_r1cs"
+    "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_n1_golden.json approx_r1cs",
+    "unified": "fixtures/e5b3/wrap_unified_n1_golden.json approx_r1cs"
   },
   "cost_centers_n40": [
     {
@@ -80,7 +83,7 @@
       "n": 1,
       "agg_fri_fs_auth_r1cs": 5459419,
       "recagg_fri_fs_auth_r1cs": 11459782,
-      "unified_soft_est_r1cs": 19562947,
+      "unified_soft_est_r1cs": 19732153,
       "method": "measured"
     },
     {
@@ -105,5 +108,13 @@
       "method": "measured"
     }
   ],
-  "notes": "Phase-3: thick_n1 build tag measures Agg/RecAgg N=1 (5459419 / 11459782). Soft-est linear N=1 was too low (fixed overhead). Residual cut strips child-verify and leaf FriFsAuth from unified (−11774122 −4099834); ChildVerifyD3/Var and leaf Auth stay standalone. Unified N=1 soft-est 19562947 ≤20M Settlement VK working target. Ultra production_n=40 unchanged. forbid digest_var / child_verify / leaf Auth re-fold into unified."
+  "notes": "Phase-3/4: thick_n1 measures Agg/RecAgg/unified N=1 (5459419 / 11459782 / 19732153 \u226420M). Residual cut strips child-verify and leaf FriFsAuth from unified. Ultra production_n=40 unchanged. POC keys path fixtures/thick_n1; production ceremony deferred. forbid digest_var / child_verify / leaf Auth re-fold into unified.",
+  "phase4": {
+    "unified_n1_measured": true,
+    "unified_n1_r1cs": 19732153,
+    "residual_from_n1_measure": 2812952,
+    "settlement_vk_working_target_met": true,
+    "poc_setup": "fixtures/thick_n1 (disposable; not production ceremony)",
+    "note": "Phase-4: Compile-measured thick_unified_v0 under -tags thick_n1; Groth16 Setup/Solidity export still POC/ceremony-gated"
+  }
 }
