@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 2196438,
+  "approx_r1cs": 4099834,
   "at_x": [
     125368000,
     699976714,
@@ -82,13 +82,18 @@
       6
     ]
   ],
+  "constraint_alpha": [
+    1957131010,
+    1981129838,
+    1071452798
+  ],
   "deep_out": [
     0,
     0,
     0
   ],
   "deferred": [
-    "FriFsChal"
+    "OOD/leaf_bind cross-bind"
   ],
   "degree_bits": 2,
   "extra_query_index_bits": 1,
@@ -306,7 +311,7 @@
   "log_n": 2,
   "measured_at": "2026-09-09",
   "n": 1,
-  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly; FriFsChal deferred — Partial leaf FriFsAuth",
+  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound) — Partial leaf FriFsAuth (OOD/leaf_bind cross-bind deferred)",
   "num_index_bits": 3,
   "num_quot": 16,
   "out_pre_quot": [
@@ -402,6 +407,7 @@
     0
   ],
   "path_depth": 3,
+  "pow_witness": 404,
   "pz_local": [
     [
       0,

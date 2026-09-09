@@ -3459,13 +3459,13 @@ mod tests {
         let notes = if full_auth_geometry {
             "Unitary leaf FriFsAuth N=1 full spine (single quot + two-matrix FL)"
         } else {
-            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly; FriFsChal deferred — Partial leaf FriFsAuth"
+            "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound) — Partial leaf FriFsAuth (OOD/leaf_bind cross-bind deferred)"
         };
 
         let deferred = if full_auth_geometry {
             serde_json::Value::Array(vec![])
         } else {
-            serde_json::json!(["FriFsChal"])
+            serde_json::json!(["OOD/leaf_bind cross-bind"])
         };
         // Split large digests/rows out of json! to stay under macro recursion limits.
         let mut golden = serde_json::json!({
@@ -3473,7 +3473,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot+FL query 0 (FS-bound)",
             "measured_at": "2026-09-09",
-            "approx_r1cs": 2196438,
+            "approx_r1cs": 4099834,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
             "quot_width": 48,
@@ -3501,6 +3501,7 @@ mod tests {
             "quot_index": q_idx as u32,
             "fl_index": fl_idx as u32,
             "commit_index": index as u32,
+            "pow_witness": view.fri_proof.pow_witness.as_canonical_u32(),
             "deferred": deferred,
             "notes": notes
         });
@@ -3706,6 +3707,10 @@ mod tests {
                     "out": limbs_u32(fold_x_out),
                 }),
             );
+            obj.insert(
+                "constraint_alpha".into(),
+                serde_json::to_value(limbs_u32(chal.constraint_alpha)).unwrap(),
+            );
             obj.insert("log_n".into(), serde_json::to_value(log_n as u32).unwrap());
             obj.insert(
                 "trace_log_h".into(),
@@ -3834,8 +3839,8 @@ mod tests {
             fl_siblings.len(),
             v["fl_path_depth"].as_u64().unwrap() as usize
         );
-        // Remeasured after Go CompileThickLeafFriFsAuth (+Chal commit Mmcs).
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 2196438);
+        // Remeasured after Go CompileThickLeafFriFsAuth (+FriFsChal α/ζ/β/roots).
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 4099834);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
@@ -3894,8 +3899,11 @@ mod tests {
                 && s != "fold_y / fold_x"
                 && s != "fold_x"
                 && s != "Chal commit"
+                && s != "FriFsChal"
         }));
-        assert!(deferred.iter().any(|d| d.as_str().unwrap() == "FriFsChal"));
+        assert_eq!(v["constraint_alpha"].as_array().unwrap().len(), 3);
+        assert_eq!(v["pow_witness"].as_u64().unwrap(), 404);
+        assert!(!deferred.iter().any(|d| d.as_str().unwrap() == "FriFsChal"));
         assert!(!deferred
             .iter()
             .any(|d| d.as_str().unwrap() == "Chal commit"));
