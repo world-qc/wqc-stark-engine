@@ -1,0 +1,69 @@
+{
+  "statement": "thick_unified_v0_r1cs_n_ladder",
+  "gate": "e5b-3d",
+  "measured_at": "2026-09-09",
+  "production_n": 40,
+  "settlement_vk_working_target_r1cs": 20000000,
+  "residual_fixed_r1cs": 26707155,
+  "formula": {
+    "agg_n": "round(125250450 * N / 40)",
+    "recagg_n": "round(254259074 * N / 40)",
+    "unified_n": "residual_fixed + agg(N) + recagg(N)",
+    "residual_fixed": "406216679 - 125250450 - 254259074"
+  },
+  "n40_sources": {
+    "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs",
+    "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs",
+    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs soft est",
+    "child_verify_var": 19710711,
+    "leaf_fri_fs_auth": 4099834
+  },
+  "cost_centers_n40": [
+    {
+      "name": "recagg_fri_fs_auth",
+      "approx_r1cs": 254259074,
+      "pct_of_unified": 62.6
+    },
+    {
+      "name": "agg_fri_fs_auth",
+      "approx_r1cs": 125250450,
+      "pct_of_unified": 30.8
+    },
+    {
+      "name": "child_verify_var_plus_auth_x2",
+      "approx_r1cs": 19710711,
+      "pct_of_unified": 4.9
+    }
+  ],
+  "ladder": [
+    {
+      "n": 1,
+      "agg_fri_fs_auth_r1cs": 3131261,
+      "recagg_fri_fs_auth_r1cs": 6356477,
+      "unified_soft_est_r1cs": 36194893,
+      "method": "linear_soft_est"
+    },
+    {
+      "n": 8,
+      "agg_fri_fs_auth_r1cs": 25050090,
+      "recagg_fri_fs_auth_r1cs": 50851815,
+      "unified_soft_est_r1cs": 102609060,
+      "method": "linear_soft_est"
+    },
+    {
+      "n": 16,
+      "agg_fri_fs_auth_r1cs": 50100180,
+      "recagg_fri_fs_auth_r1cs": 101703630,
+      "unified_soft_est_r1cs": 178510965,
+      "method": "linear_soft_est"
+    },
+    {
+      "n": 40,
+      "agg_fri_fs_auth_r1cs": 125250450,
+      "recagg_fri_fs_auth_r1cs": 254259074,
+      "unified_soft_est_r1cs": 406216679,
+      "method": "measured"
+    }
+  ],
+  "notes": "Phase-1 shrink policy: N=40 measured; N\u2208{1,8,16} linear soft-est (Auth ~linear in N; residual fixed). Settlement VK working target \u226420M R1CS; keep thin_wrap_v0 while unified stays O(10^8). N=8\u2248103M and N=1\u224836M still above target without residual cut and/or recursive Auth wrap. Do not fold thick_child_digest_var_v0 Max=256 soft-mux (~45.878M) into unified under current model. Production ThickFriPackN/RecAggN remain 40 until explicit profile cutover."
+}
