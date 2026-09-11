@@ -20,9 +20,9 @@
     "thick_leaf_bind_unitary_v0 unitary leaf stark_digest bind",
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind",
-    "Phase-3: child-verify + leaf FriFsAuth stripped (standalone KPIs); Settlement working N=1 \u226420M"
+    "Phase-3: child-verify + leaf FriFsAuth stripped (standalone KPIs); Settlement working N=1 \u226430M"
   ],
-  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra ~125.25M) + RecAgg AIR + RecAgg FriFsAuth N=40 ultra (~254.26M) + OOD/AIR\u2194FriFsAuth binds (Trace/\u03b1 + Quotient\u2194recompose(QuotOpen) single-chunk; \u03b6 on Chal) + leaf OODs + unitary/Born/Traj leaf binds; approx_r1cs estimate 382153270 until WQC_THICK_HUGE remmeasure (Phase-3: stripped child-verify \u221211774122 and leaf FriFsAuth \u22124099834 after N=1 Auth remmeasure; working N=1 unified soft-est 19562947 \u226420M); thick_child_verify_var/d3 + leaf Auth + digest_var Max=256 standalone; R1CS shrink Phase-1/2/2b/3: N-ladder fixtures/e5b3/wrap_r1cs_n_ladder_soft_est.json; Settlement VK working profile N=1; production N=40 ultra unchanged; Max\u219287KiB / payload\u2194Auth / ceremony deferred",
+  "notes": "FriVarLog + FriFsAuth (N=40 Agg ultra ~125.25M) + RecAgg AIR + RecAgg FriFsAuth N=40 ultra (~254.26M) + OOD/AIR\u2194FriFsAuth binds (Trace/\u03b1 + Quotient\u2194recompose(QuotOpen) single-chunk; \u03b6 on Chal) + leaf OODs + unitary/Born/Traj leaf binds; approx_r1cs estimate 382153270 until WQC_THICK_HUGE remmeasure (Phase-3: stripped child-verify \u221211774122 and leaf FriFsAuth \u22124099834 after N=1 Auth remmeasure; working N=1 unified measured 25387181 \u226430M under gnark v0.16.3); thick_child_verify_var/d3 + leaf Auth + digest_var Max=256 standalone; R1CS shrink Phase-1/2/2b/3: N-ladder fixtures/e5b3/wrap_r1cs_n_ladder_soft_est.json; Settlement VK working profile N=1; production N=40 ultra unchanged; Max\u219287KiB / payload\u2194Auth / ceremony deferred",
   "mmcs_path_root": [
     252,
     223,

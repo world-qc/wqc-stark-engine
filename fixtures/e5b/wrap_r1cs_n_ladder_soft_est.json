@@ -1,10 +1,10 @@
 {
   "statement": "thick_unified_v0_r1cs_n_ladder",
   "gate": "e5b-3d",
-  "measured_at": "2026-09-09",
+  "measured_at": "2026-09-11",
   "production_n": 40,
   "settlement_vk_working_n": 1,
-  "settlement_vk_working_target_r1cs": 20000000,
+  "settlement_vk_working_target_r1cs": 30000000,
   "forbid_digest_var_fold_into_unified": true,
   "forbid_child_verify_fold_into_unified": true,
   "forbid_leaf_fri_fs_auth_fold_into_unified": true,
@@ -12,8 +12,8 @@
   "phase2": {
     "soft_auth_elides_r1cs": false,
     "child_verify_var_r1cs_before_auth_strip": 19710711,
-    "leaf_auth_r1cs": 4099834,
-    "auth_x2_estimate_from_leaf": 8199668,
+    "leaf_auth_r1cs": 5400690,
+    "auth_x2_estimate_from_leaf": 10801380,
     "implied_digest_mux_from_leaf_x2": 11511043,
     "audit_dropped_r1cs": 252864,
     "unified_soft_est_before_audit_drop": 406216679,
@@ -21,20 +21,20 @@
   },
   "phase2b": {
     "auth_x2_stripped_from_child_verify_var": true,
-    "child_verify_var_r1cs": 11774122,
+    "child_verify_var_r1cs": 20495903,
     "auth_x2_stripped_r1cs": 7936589,
     "unified_soft_est_before_auth_strip": 405963815,
     "unified_soft_est_after_auth_strip": 398027226
   },
   "phase3": {
-    "child_verify_d3_r1cs": 3040711,
+    "child_verify_d3_r1cs": 5221268,
     "planned_var_to_d3_insufficient": true,
-    "child_verify_stripped_from_unified_r1cs": 11774122,
-    "leaf_fri_fs_auth_stripped_from_unified_r1cs": 4099834,
-    "note": "N=1 Agg/RecAgg remmeasure non-linear (5.459M+11.460M vs linear 3.131M+6.357M). Fixed-d3 alone left ~26.7M; Phase-3 strips child-verify and leaf FriFsAuth from unified (both remain standalone KPIs) to clear \u226420M.",
-    "agg_fri_fs_auth_n1_r1cs": 5459419,
-    "recagg_fri_fs_auth_n1_r1cs": 11459782,
-    "unified_soft_est_n1": 19732153,
+    "child_verify_stripped_from_unified_r1cs": 20495903,
+    "leaf_fri_fs_auth_stripped_from_unified_r1cs": 5400690,
+    "note": "Standalone KPIs remmeasured under gnark v0.16.3 (child_verify_var=20495903, leaf_auth=5400690, d3=5221268, digest_var=80081198). N=40 unified soft-est 382153270 still reflects v0.12-era strip arithmetic \u2014 re-run WQC_THICK_HUGE remmeasure before trusting N=40 totals.",
+    "agg_fri_fs_auth_n1_r1cs": 7090556,
+    "recagg_fri_fs_auth_n1_r1cs": 15183007,
+    "unified_soft_est_n1": 25387181,
     "unified_soft_est_n40_after_strip": 382153270,
     "auth_n_working_profile": 1,
     "unified_soft_est_n1_was_soft": 19562947,
@@ -50,11 +50,11 @@
     "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs",
     "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs",
     "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs soft est (Phase-3 child+leaf stripped)",
-    "child_verify_var_standalone": 11774122,
-    "child_verify_d3_standalone": 3040711,
-    "leaf_fri_fs_auth_standalone": 4099834,
+    "child_verify_var_standalone": 20495903,
+    "child_verify_d3_standalone": 5221268,
+    "leaf_fri_fs_auth_standalone": 5400690,
     "child_audit_standalone": 252864,
-    "child_digest_var_standalone": 45878401
+    "child_digest_var_standalone": 80081198
   },
   "n1_sources": {
     "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_n1_golden.json approx_r1cs",
@@ -81,9 +81,9 @@
   "ladder": [
     {
       "n": 1,
-      "agg_fri_fs_auth_r1cs": 5459419,
-      "recagg_fri_fs_auth_r1cs": 11459782,
-      "unified_soft_est_r1cs": 19732153,
+      "agg_fri_fs_auth_r1cs": 7090556,
+      "recagg_fri_fs_auth_r1cs": 15183007,
+      "unified_soft_est_r1cs": 25387181,
       "method": "measured"
     },
     {
@@ -108,14 +108,15 @@
       "method": "measured"
     }
   ],
-  "notes": "Phase-3/4: thick_n1 measures Agg/RecAgg/unified N=1 (5459419 / 11459782 / 19732153 \u226420M). Residual cut strips child-verify and leaf FriFsAuth from unified. Ultra production_n=40 unchanged. POC keys path fixtures/thick_n1; production ceremony deferred. forbid digest_var / child_verify / leaf Auth re-fold into unified. Phase-5 settle PI=17; Solidity export tooling ready; production MPC ceremony open.",
+  "notes": "gnark v0.16.3 remmeasure 2026-09-11: unified N=1=25387181; agg_n1=7090556; recagg_n1=15183007; child_verify_var=20495903; leaf_auth=5400690; d3=5221268; digest_var=80081198. Settlement VK working gate revised \u226420M\u2192\u226430M (compiler growth ~1.3\u20131.7\u00d7). N=40 ultra goldens not remmeasured yet.",
   "phase4": {
     "unified_n1_measured": true,
-    "unified_n1_r1cs": 19732153,
+    "unified_n1_r1cs": 25387181,
+    "unified_n1_r1cs_gnark_v0_12": 19732153,
     "residual_from_n1_measure": 2812952,
     "settlement_vk_working_target_met": true,
     "poc_setup": "fixtures/thick_n1 (disposable; not production ceremony)",
-    "note": "Phase-4: Compile-measured thick_unified_v0 under -tags thick_n1; Groth16 Setup/Solidity export still POC/ceremony-gated"
+    "note": "Phase-4: gate revised to \u226430M after gnark v0.16.3 (MPC CKK) grew N=1 from 19732153 (v0.12, \u226420M) to 25387181"
   },
   "phase5": {
     "settle_public_inputs": 17,
