@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 11774122,
+  "approx_r1cs": 20495903,
   "depth": 4,
   "gate": "e5b-3d",
   "left_digest": [
@@ -36,8 +36,8 @@
     190,
     245
   ],
-  "measured_at": "2026-09-09",
-  "notes": "Depth\u2208{1..4} soft-gated mini compose digest walk (Phase-2b: Auth\u00d72 stripped); folded into thick_unified_v0; standalone thick_child_verify_leaf_auth_v0 keeps Auth\u00d72 KPI; Max\u219287KiB / deeper Auth / payload\u2194Auth / Settlement VK deferred",
+  "measured_at": "2026-09-11",
+  "notes": "Depth∈{1..4} soft-gated mini compose digest walk (Phase-2b: Auth×2 stripped); folded into thick_unified_v0; standalone thick_child_verify_leaf_auth_v0 keeps Auth×2 KPI; Max→87KiB / deeper Auth / payload↔Auth / Settlement VK deferred; remmeasure gnark v0.16.3 was 11774122; remmeasure gnark v0.16.3 was 20495903",
   "outer_len": 1523,
   "right_digest": [
     42,
@@ -73,6 +73,6 @@
     255,
     143
   ],
-  "source": "mini compose Depth mux 1..4 (golden lock Depth=4; Phase-2b no Auth\u00d72)",
+  "source": "mini compose Depth mux 1..4 (golden lock Depth=4; Phase-2b no Auth×2)",
   "statement": "thick_child_verify_var_v0"
 }

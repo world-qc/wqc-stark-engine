@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 4099834,
+  "approx_r1cs": 5400690,
   "at_x": [
     125368000,
     699976714,
@@ -307,9 +307,9 @@
   "leaf_width": 21,
   "log_blowup": 1,
   "log_n": 2,
-  "measured_at": "2026-09-09",
+  "measured_at": "2026-09-11",
   "n": 1,
-  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α/Quotient multi-chunk zps(ζ) in thick_unified_v0",
+  "notes": "Unitary Trace W=21 + Quot concat W=48 + single-matrix FL W=6 + DeepRo→FL Flatten + fold_y + Chal commit Mmcs + fold_x→FinalPoly + FriFsChal (α/ζ/β/roots FS-bound); OOD↔leaf Trace/α/Quotient multi-chunk zps(ζ) in thick_unified_v0; remmeasure gnark v0.16.3 was 4099834; remmeasure gnark v0.16.3 was 5400690",
   "num_index_bits": 3,
   "num_quot": 16,
   "out_pre_quot": [

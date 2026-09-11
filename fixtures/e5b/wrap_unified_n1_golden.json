@@ -1,11 +1,11 @@
 {
-  "approx_r1cs": 19732153,
+  "approx_r1cs": 25387181,
   "auth_n": 1,
   "gate": "e5b-3d",
-  "measured_at": "2026-09-09",
-  "notes": "Phase-5 PI shrink: settle-aligned 17 public inputs; R1CS 19732153 \u226420M; POC setup\u2260production ceremony",
-  "profile": "thick_n1",
-  "statement": "thick_unified_v0",
+  "measured_at": "2026-09-11",
   "nb_public_settle": 17,
-  "nb_public_variables_gnark": 18
+  "nb_public_variables_gnark": 18,
+  "notes": "gnark v0.16.3 remmeasure: settle PI=17; R1CS exceeds prior ≤20M working gate (was 19732153 on v0.12)",
+  "profile": "thick_n1",
+  "statement": "thick_unified_v0"
 }

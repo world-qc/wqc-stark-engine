@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 45878401,
+  "approx_r1cs": 80081198,
   "gate": "e5b-3d",
   "left_digest": [
     200,
@@ -37,8 +37,8 @@
   ],
   "left_len": 64,
   "max_child_bytes": 256,
-  "measured_at": "2026-09-09",
-  "notes": "standalone Len∈{1..256} soft-mux SHA3; Max→1523/87KiB / unified fold / Settlement VK deferred",
+  "measured_at": "2026-09-11",
+  "notes": "standalone Len∈{1..256} soft-mux SHA3; Max→1523/87KiB / unified fold / Settlement VK deferred; remmeasure gnark v0.16.3 was 45878401; remmeasure gnark v0.16.3 was 80081198",
   "right_digest": [
     16,
     78,

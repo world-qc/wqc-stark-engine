@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 3040711,
+  "approx_r1cs": 5221268,
   "gate": "e5b-3d",
   "left_digest": [
     246,
@@ -35,9 +35,9 @@
     86,
     36
   ],
-  "measured_at": "2026-09-08",
+  "measured_at": "2026-09-11",
   "mid_len": 311,
-  "notes": "standalone depth-3 digest walk (~3.041M remmeasured); leaf Plonky3 / variable length / unified fold remmeasure deferred",
+  "notes": "standalone depth-3 digest walk (~3.041M remmeasured); leaf Plonky3 / variable length / unified fold remmeasure deferred; remmeasure gnark v0.16.3 was 3040711; remmeasure gnark v0.16.3 was 5221268",
   "outer_len": 715,
   "right_digest": [
     90,
@@ -73,6 +73,6 @@
     72,
     166
   ],
-  "source": "fixed mini compose-v3 depth-3 (outer\u2192D2\u00d72, 715B; 8 leaves/side)",
+  "source": "fixed mini compose-v3 depth-3 (outer→D2×2, 715B; 8 leaves/side)",
   "statement": "thick_child_verify_d3_v0"
 }

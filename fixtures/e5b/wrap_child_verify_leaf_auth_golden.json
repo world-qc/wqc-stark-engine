@@ -1,8 +1,8 @@
 {
-  "approx_r1cs": 8431256,
+  "approx_r1cs": 11306328,
   "depth": 1,
   "gate": "e5b-3d",
-  "leaf_auth_r1cs": 4099834,
+  "leaf_auth_r1cs": 5400690,
   "left_digest": [
     122,
     60,
@@ -37,8 +37,8 @@
     102,
     143
   ],
-  "measured_at": "2026-09-09",
-  "notes": "standalone Depth=1 walk + Auth\u00d72 KPI; Phase-2b Auth\u00d72 removed from child_verify_var; deeper Auth slots / payload\u2194Auth bind / Settlement VK deferred",
+  "measured_at": "2026-09-11",
+  "notes": "standalone Depth=1 walk + Auth\u00d72 KPI; Phase-2b Auth\u00d72 removed from child_verify_var; deeper Auth slots / payload\u2194Auth bind / Settlement VK deferred; remmeasure gnark v0.16.3 was 8431256; remmeasure gnark v0.16.3 was 11306328",
   "outer_len": 109,
   "right_digest": [
     211,
