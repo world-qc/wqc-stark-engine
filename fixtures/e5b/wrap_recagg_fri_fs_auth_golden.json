@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 254259074,
+  "approx_r1cs": 255965638,
   "at_x": [
     1265698533,
     366385644,
@@ -13317,9 +13317,9 @@
       0
     ]
   ],
-  "measured_at": "2026-09-08",
+  "measured_at": "2026-09-12",
   "n": 40,
-  "notes": "FriFsChal N=40 ultra + Trace/Quot ValMmcs W=330 + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x\u2192FinalPoly; approx_r1cs locked by WQC_THICK_HUGE Compile-only remmeasure (2026-09-08, ~44.9min); \u2261verify_root_proof deferred",
+  "notes": "FriFsChal N=40 ultra + Trace/Quot ValMmcs W=330 + Chal FL/FRI-commit + DeepRo Flatten/fold_y + commit fold_x→FinalPoly; approx_r1cs locked by WQC_THICK_HUGE Compile-only remmeasure (2026-09-08, ~44.9min); ≡verify_root_proof deferred; remmeasure gnark v0.16.3 was 254259074",
   "path_depth": 3,
   "query_index": [
     10,
@@ -19285,7 +19285,7 @@
   "quot_shift": 0,
   "quot_width": 3,
   "rec_agg_width": 330,
-  "source": "RecursiveAggregationAir ultra-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo\u2192FL Flatten/fold_y + commit-phase fold_x\u2192FinalPoly (W=330 N=40)",
+  "source": "RecursiveAggregationAir ultra-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly (W=330 N=40)",
   "statement": "thick_recagg_fri_fs_auth_v0",
   "trace_index": [
     5,

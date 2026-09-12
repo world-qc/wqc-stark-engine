@@ -1,14 +1,14 @@
 {
   "statement": "thick_unified_v0_r1cs_n_ladder",
   "gate": "e5b-3d",
-  "measured_at": "2026-09-11",
+  "measured_at": "2026-09-12",
   "production_n": 40,
   "settlement_vk_working_n": 1,
   "settlement_vk_working_target_r1cs": 30000000,
   "forbid_digest_var_fold_into_unified": true,
   "forbid_child_verify_fold_into_unified": true,
   "forbid_leaf_fri_fs_auth_fold_into_unified": true,
-  "residual_fixed_r1cs": 2643746,
+  "residual_fixed_r1cs": 3113617,
   "phase2": {
     "soft_auth_elides_r1cs": false,
     "child_verify_var_r1cs_before_auth_strip": 19710711,
@@ -31,25 +31,25 @@
     "planned_var_to_d3_insufficient": true,
     "child_verify_stripped_from_unified_r1cs": 20495903,
     "leaf_fri_fs_auth_stripped_from_unified_r1cs": 5400690,
-    "note": "Standalone KPIs remmeasured under gnark v0.16.3 (child_verify_var=20495903, leaf_auth=5400690, d3=5221268, digest_var=80081198). N=40 unified soft-est 382153270 still reflects v0.12-era strip arithmetic \u2014 re-run WQC_THICK_HUGE remmeasure before trusting N=40 totals.",
+    "note": "N=40 remmeasured under gnark v0.16.3: agg=124864925, recagg=255965638, unified=383944180 (Compile peaks ~205GiB; OOM@192GiB, OK@320GiB).",
     "agg_fri_fs_auth_n1_r1cs": 7090556,
     "recagg_fri_fs_auth_n1_r1cs": 15183007,
     "unified_soft_est_n1": 25387181,
-    "unified_soft_est_n40_after_strip": 382153270,
+    "unified_soft_est_n40_after_strip": 383944180,
     "auth_n_working_profile": 1,
     "unified_soft_est_n1_was_soft": 19562947,
     "composition_overhead_n1_r1cs": 169206
   },
   "formula": {
-    "agg_n": "round(125250450 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
-    "recagg_n": "round(254259074 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
+    "agg_n": "round(124864925 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
+    "recagg_n": "round(255965638 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
     "unified_n": "residual_fixed + agg(N) + recagg(N)",
-    "residual_fixed": "382153270 - 125250450 - 254259074"
+    "residual_fixed": "383944180 - 124864925 - 255965638"
   },
   "n40_sources": {
-    "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs",
-    "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs",
-    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs soft est (Phase-3 child+leaf stripped)",
+    "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs (gnark v0.16.3 @128GiB)",
+    "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs (gnark v0.16.3 @192GiB)",
+    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs (gnark v0.16.3 Compile @320GiB)",
     "child_verify_var_standalone": 20495903,
     "child_verify_d3_standalone": 5221268,
     "leaf_fri_fs_auth_standalone": 5400690,
@@ -64,18 +64,18 @@
   "cost_centers_n40": [
     {
       "name": "recagg_fri_fs_auth",
-      "approx_r1cs": 254259074,
-      "pct_of_unified": 66.5
+      "approx_r1cs": 255965638,
+      "pct_of_unified": 66.7
     },
     {
       "name": "agg_fri_fs_auth",
-      "approx_r1cs": 125250450,
-      "pct_of_unified": 32.8
+      "approx_r1cs": 124864925,
+      "pct_of_unified": 32.5
     },
     {
       "name": "residual_fixed",
-      "approx_r1cs": 2643746,
-      "pct_of_unified": 0.7
+      "approx_r1cs": 3113617,
+      "pct_of_unified": 0.8
     }
   ],
   "ladder": [
@@ -88,27 +88,27 @@
     },
     {
       "n": 8,
-      "agg_fri_fs_auth_r1cs": 25050090,
-      "recagg_fri_fs_auth_r1cs": 50851815,
-      "unified_soft_est_r1cs": 78545651,
+      "agg_fri_fs_auth_r1cs": 24972985,
+      "recagg_fri_fs_auth_r1cs": 51193128,
+      "unified_soft_est_r1cs": 79279730,
       "method": "linear_soft_est"
     },
     {
       "n": 16,
-      "agg_fri_fs_auth_r1cs": 50100180,
-      "recagg_fri_fs_auth_r1cs": 101703630,
-      "unified_soft_est_r1cs": 154447556,
+      "agg_fri_fs_auth_r1cs": 49945970,
+      "recagg_fri_fs_auth_r1cs": 102386255,
+      "unified_soft_est_r1cs": 155445842,
       "method": "linear_soft_est"
     },
     {
       "n": 40,
-      "agg_fri_fs_auth_r1cs": 125250450,
-      "recagg_fri_fs_auth_r1cs": 254259074,
-      "unified_soft_est_r1cs": 382153270,
+      "agg_fri_fs_auth_r1cs": 124864925,
+      "recagg_fri_fs_auth_r1cs": 255965638,
+      "unified_soft_est_r1cs": 383944180,
       "method": "measured"
     }
   ],
-  "notes": "gnark v0.16.3 remmeasure 2026-09-11: unified N=1=25387181; agg_n1=7090556; recagg_n1=15183007; child_verify_var=20495903; leaf_auth=5400690; d3=5221268; digest_var=80081198. Settlement VK working gate revised \u226420M\u2192\u226430M (compiler growth ~1.3\u20131.7\u00d7). N=40 ultra goldens not remmeasured yet.",
+  "notes": "gnark v0.16.3 N=40 all measured 2026-09-12: Agg=124864925 (@128GiB), RecAgg=255965638 (@192GiB), Unified=383944180 (@320GiB n2-standard-80; peak~205GiB). N=1 Settlement \u226430M met (25387181).",
   "phase4": {
     "unified_n1_measured": true,
     "unified_n1_r1cs": 25387181,
