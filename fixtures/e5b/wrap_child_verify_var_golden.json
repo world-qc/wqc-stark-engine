@@ -37,7 +37,7 @@
     245
   ],
   "measured_at": "2026-09-11",
-  "notes": "Depth∈{1..4} soft-gated mini compose digest walk (Phase-2b: Auth×2 stripped); folded into thick_unified_v0; standalone thick_child_verify_leaf_auth_v0 keeps Auth×2 KPI; Max→87KiB / deeper Auth / payload↔Auth / Settlement VK deferred; remmeasure gnark v0.16.3 was 11774122; remmeasure gnark v0.16.3 was 20495903",
+  "notes": "Depth\u2208{1..4} soft-gated mini compose digest walk (Phase-2b: Auth\u00d72 stripped); Phase-3: not folded into thick_unified_v0; standalone thick_child_verify_leaf_auth_v0 / leaf_auth_bind_v0 KPIs; Max\u219287KiB / deeper Auth / Settlement VK deferred; remmeasure gnark v0.16.3 was 11774122; remmeasure gnark v0.16.3 was 20495903",
   "outer_len": 1523,
   "right_digest": [
     42,
@@ -73,6 +73,6 @@
     255,
     143
   ],
-  "source": "mini compose Depth mux 1..4 (golden lock Depth=4; Phase-2b no Auth×2)",
+  "source": "mini compose Depth mux 1..4 (golden lock Depth=4; Phase-2b no Auth\u00d72)",
   "statement": "thick_child_verify_var_v0"
 }

@@ -38,7 +38,7 @@
     143
   ],
   "measured_at": "2026-09-11",
-  "notes": "standalone Depth=1 walk + Auth\u00d72 KPI; Phase-2b Auth\u00d72 removed from child_verify_var; deeper Auth slots / payload\u2194Auth bind / Settlement VK deferred; remmeasure gnark v0.16.3 was 8431256; remmeasure gnark v0.16.3 was 11306328",
+  "notes": "standalone Depth=1 walk + Auth\u00d72 KPI (unbound 8B stubs); Phase-2b Auth\u00d72 removed from child_verify_var; Phase-3: not in unified; payload\u2194Auth = thick_child_verify_leaf_auth_bind_v0; Max\u219287KiB / deeper Auth / Settlement VK deferred; remmeasure gnark v0.16.3 was 8431256; remmeasure gnark v0.16.3 was 11306328",
   "outer_len": 109,
   "right_digest": [
     211,
