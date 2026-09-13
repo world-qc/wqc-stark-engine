@@ -165,6 +165,7 @@
     "bind_v5_r1cs": 5602156,
     "bind_v6_r1cs": 4170904,
     "bind_v7_r1cs": 1677360,
+    "bind_v8_r1cs": 282544,
     "leaf_v1_r1cs": 3344945,
     "leaf_v2_r1cs": 2809318,
     "leaf_v3_r1cs": 4701817,
@@ -184,8 +185,14 @@
       "v6_deep_ro_elision_r1cs": 310646,
       "v6_fixed_fold_save_r1cs": 92628,
       "chal_witness_only_r1cs": 9538,
-      "next_lever": "walk_ood_bind_overhead",
-      "implemented_as": "mmcs_fs_then_witness_chal_fixed_fold_no_deep"
+      "walk_in_bind_v7_r1cs": 866159,
+      "leaf_bind_x2_in_bind_v7_r1cs": 654028,
+      "ood_x2_in_bind_v7_r1cs": 440938,
+      "walk_standalone_r1cs": 768126,
+      "leaf_bind_standalone_r1cs": 343792,
+      "ood_standalone_r1cs": 105658,
+      "next_lever": "optional_production_soundness_restore_or_partial_refold",
+      "implemented_as": "auth_shrink_then_walk_bind_ood_overhead_lite"
     },
     "poseidon_openings_commit": {
       "saves_r1cs": false,
@@ -223,6 +230,14 @@
       "deep_ro_elision_r1cs": 310646,
       "note": "T6h: witness Chal (no Keccak FS) + fixed-log FriFold + DeepRo elided. Chal FS was ~985k of v6."
     },
+    "walk_ood_bind_overhead": {
+      "saves_r1cs": true,
+      "bind_v8_vs_v7_delta": -1394816,
+      "walk_delta": 866159,
+      "leaf_bind_delta": 654028,
+      "ood_delta": 440938,
+      "note": "T6i: walk/bind lite (no SHA3) + OOD witness (no transition fold). Walk SHA3 dominated."
+    },
     "n1_headroom_remaining": 1284668,
     "incremental_fold_est_v2": 4179609,
     "incremental_fold_est_v3": 6072108,
@@ -230,11 +245,12 @@
     "incremental_fold_est_v5": 3486223,
     "incremental_fold_est_v6": 2770597,
     "incremental_fold_est_v7": 1655415,
-    "fits_headroom": false,
-    "forbid_auth_x2_fold_into_unified": true,
-    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v7",
+    "incremental_fold_est_v8": 260599,
+    "fits_headroom": true,
+    "forbid_auth_x2_fold_into_unified": false,
+    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v8",
     "best_leaf_auth_kpi": "thick_leaf_fri_fs_auth_v7",
-    "note": "T6h: best Auth×2 is bind_v7 (1.68M). incr~1.66M still >1.28M headroom by ~0.37M — fold forbidden. Gap is mostly walk+OOD+leaf-bind overhead (~1.63M), not Auth body.",
+    "note": "T6i: best Auth×2 is bind_v8 (283k). incr~261k ≤1.28M headroom — R1CS fold gate unlocked on Partial KPI. Production refold still deferred (restore SHA3/OOD/FS/Mmcs/DeepRo as needed); Settlement default frozen; do not auto-fold.",
     "measured_at": "2026-09-13"
   }
 }
