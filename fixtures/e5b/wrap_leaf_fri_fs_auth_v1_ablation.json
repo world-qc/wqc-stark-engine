@@ -10,12 +10,14 @@
   "gate": "e5b-3d",
   "measured_at": "2026-09-13",
   "n1_headroom": 1284668,
-  "next_lever": "chal_openings_keccak",
-  "next_lever_reason": "chal_hard dominates or within 20% of deep_ro; prefer chal openings",
-  "implemented_as": "fs_openings_no_quot_open",
+  "next_lever": "trace_next_fs_elision_or_remaining_mmcs",
+  "next_lever_reason": "T6e implemented Quot Mmcs elision on v2 → leaf_v4/bind_v4; remaining budget is TraceNext FS or Trace/FL/Commit Mmcs",
+  "implemented_as": "fs_openings_no_quot_open_then_no_quot_val_mmcs",
   "leaf_v2_r1cs": 2809318,
   "bind_v2_r1cs": 6988927,
-  "notes": "T6b ablation; T6c implemented QuotOpen elision from FS (not in-circuit keccak-commit — that would not save R1CS). Fold Auth×2 forbidden until incremental ≤ headroom",
+  "leaf_v4_r1cs": 2224460,
+  "bind_v4_r1cs": 5819211,
+  "notes": "T6b ablation; T6c QuotOpen FS elision; T6e Quot ValMmcs elision (leaf_v4 2.22M / bind_v4 5.82M). Fold Auth×2 forbidden until incremental ≤ headroom",
   "rows": [
     {
       "approx_r1cs": 1628879,

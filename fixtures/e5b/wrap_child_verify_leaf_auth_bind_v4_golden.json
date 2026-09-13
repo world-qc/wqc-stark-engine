@@ -1,0 +1,15 @@
+{
+  "approx_r1cs": 5819211,
+  "fits_headroom": false,
+  "forbid_fold_into_unified": true,
+  "gate": "e5b-3d",
+  "incremental_fold_est": 3594751,
+  "leaf_auth": "thick_leaf_fri_fs_auth_v4",
+  "leaf_v4_approx_r1cs": 2224460,
+  "measured_at": "2026-09-13",
+  "n1_headroom": 1284668,
+  "notes": "T6e Auth×2@v4 no Quot Mmcs; fold forbidden unless incremental ≤ headroom",
+  "statement": "thick_child_verify_leaf_auth_bind_v4",
+  "unified_n1_r1cs": 28715332,
+  "v2_approx_r1cs": 6988927
+}
