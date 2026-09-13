@@ -1,0 +1,9 @@
+{
+  "approx_r1cs": 2809318,
+  "gate": "e5b-3d",
+  "lever": "fs_openings_no_quot_open",
+  "measured_at": "2026-09-13",
+  "notes": "T6c: flush3 absorbs TraceLocal‖TraceNext only; QuotOpen DeepRo-only; not production Plonky3 FS; IsSolved golden regen deferred (QI)",
+  "statement": "thick_leaf_fri_fs_auth_v2",
+  "v1_approx_r1cs": 3344945
+}

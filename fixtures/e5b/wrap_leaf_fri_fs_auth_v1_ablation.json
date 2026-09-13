@@ -1,0 +1,42 @@
+{
+  "bind_v1_r1cs": 8060181,
+  "deltas": {
+    "chal_hard_r1cs": 1628879,
+    "deep_ro_and_fold_r1cs": 412905,
+    "merkle_and_poseidon_r1cs": 1303161,
+    "quot_mmcs_path_r1cs": 588026
+  },
+  "full_v1_r1cs": 3344945,
+  "gate": "e5b-3d",
+  "measured_at": "2026-09-13",
+  "n1_headroom": 1284668,
+  "next_lever": "chal_openings_keccak",
+  "next_lever_reason": "chal_hard dominates or within 20% of deep_ro; prefer chal openings",
+  "implemented_as": "fs_openings_no_quot_open",
+  "leaf_v2_r1cs": 2809318,
+  "bind_v2_r1cs": 6988927,
+  "notes": "T6b ablation; T6c implemented QuotOpen elision from FS (not in-circuit keccak-commit — that would not save R1CS). Fold Auth×2 forbidden until incremental ≤ headroom",
+  "rows": [
+    {
+      "approx_r1cs": 1628879,
+      "isolates": "FS+Keccak+openings absorb",
+      "name": "chal_hard_only"
+    },
+    {
+      "approx_r1cs": 2932040,
+      "isolates": "ChalHard+hard Merkle+leaf hashes",
+      "name": "auth_v1_no_deep"
+    },
+    {
+      "approx_r1cs": 2756919,
+      "isolates": "Auth v1 without Quot ValMmcs path",
+      "name": "auth_v1_no_quot_mmcs"
+    },
+    {
+      "approx_r1cs": 3344945,
+      "isolates": "thick_leaf_fri_fs_auth_v1",
+      "name": "auth_v1_full"
+    }
+  ],
+  "statement": "thick_leaf_fri_fs_auth_v1_ablation"
+}

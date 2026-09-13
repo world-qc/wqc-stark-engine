@@ -155,5 +155,26 @@
     "ccs_re_freeze_cmd": "WQC_THICK_N1_CEREMONY_PREP=1 go run -tags thick_n1 ./cmd/wrap-ceremony-prep-thick-n1 -out fixtures/thick_n1",
     "note": "T5: leaf Auth v1 + Unitary OOD↔Auth bind folded; digest_var / child_verify / leaf Auth v0 remain forbidden. Re-export Solidity + re-seal MPC after CCS freeze.",
     "measured_at": "2026-09-13"
+  },
+  "phase6_auth_x2_shrink": {
+    "bind_v0_r1cs": 12171673,
+    "bind_v1_r1cs": 8060181,
+    "bind_v2_r1cs": 6988927,
+    "leaf_v1_r1cs": 3344945,
+    "leaf_v2_r1cs": 2809318,
+    "ablation": {
+      "chal_hard_r1cs": 1628879,
+      "deep_ro_and_fold_r1cs": 412905,
+      "merkle_and_poseidon_r1cs": 1303161,
+      "quot_mmcs_path_r1cs": 588026,
+      "next_lever": "chal_openings_keccak",
+      "implemented_as": "fs_openings_no_quot_open"
+    },
+    "n1_headroom_remaining": 1284668,
+    "incremental_fold_est_v2": 4179609,
+    "fits_headroom": false,
+    "forbid_auth_x2_fold_into_unified": true,
+    "note": "T6: Auth×2@v1 (−4.11M vs v0); ablation picked Chal openings; v2 drops QuotOpen from FS absorb (−0.54M/Auth, bind 6.99M). Incremental fold est ~4.18M ≫ 1.28M headroom — keep forbid. Not production Plonky3 FS (BatchAlpha independent of QuotOpen). Next: Poseidon openings commit or TraceNext elision / merkle shrink.",
+    "measured_at": "2026-09-13"
   }
 }
