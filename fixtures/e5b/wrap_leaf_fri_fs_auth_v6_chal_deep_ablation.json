@@ -1,0 +1,45 @@
+{
+  "deltas": {
+    "chal_fs_vs_witness_r1cs": 975187,
+    "deep_ro_and_fold_r1cs": 415582,
+    "deep_ro_elision_r1cs": 310646,
+    "fixed_fold_save_r1cs": 92628,
+    "v7_vs_v6_delta": -1378362
+  },
+  "gate": "e5b-3d",
+  "implemented_as": "witness_chal_plus_fixed_fold_plus_no_deep",
+  "measured_at": "2026-09-13",
+  "notes": "T6h: Chal Keccak FS dominates v6; DeepRo next; fixed-fold is modest honest win.",
+  "rows": [
+    {
+      "approx_r1cs": 1400307,
+      "name": "v6_full"
+    },
+    {
+      "approx_r1cs": 984725,
+      "isolates": "TraceLocal-FS Chal",
+      "name": "v6_chal_only"
+    },
+    {
+      "approx_r1cs": 1307679,
+      "delta_vs_v6": 92628,
+      "name": "v6_fixed_fold"
+    },
+    {
+      "approx_r1cs": 1089661,
+      "delta_vs_v6": 310646,
+      "name": "v6_no_deep"
+    },
+    {
+      "approx_r1cs": 9538,
+      "name": "chal_witness_only"
+    },
+    {
+      "approx_r1cs": 21945,
+      "name": "v7_witness_chal_fixed_fold_no_deep"
+    }
+  ],
+  "statement": "thick_leaf_fri_fs_auth_v6_chal_deep_ablation",
+  "v6_r1cs": 1400307,
+  "v7_r1cs": 21945
+}
