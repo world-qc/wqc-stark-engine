@@ -162,17 +162,19 @@
     "bind_v2_r1cs": 6988927,
     "bind_v3_r1cs": 10773925,
     "bind_v4_r1cs": 5819211,
+    "bind_v5_r1cs": 5602156,
     "leaf_v1_r1cs": 3344945,
     "leaf_v2_r1cs": 2809318,
     "leaf_v3_r1cs": 4701817,
     "leaf_v4_r1cs": 2224460,
+    "leaf_v5_r1cs": 2115933,
     "ablation": {
       "chal_hard_r1cs": 1628879,
       "deep_ro_and_fold_r1cs": 412905,
       "merkle_and_poseidon_r1cs": 1303161,
       "quot_mmcs_path_r1cs": 588026,
-      "next_lever": "trace_next_fs_elision_or_remaining_mmcs",
-      "implemented_as": "fs_openings_no_quot_open_then_no_quot_val_mmcs"
+      "next_lever": "remaining_trace_fl_commit_mmcs_or_chal_trace_local",
+      "implemented_as": "fs_openings_no_quot_open_then_no_quot_val_mmcs_then_fs_trace_local_only"
     },
     "poseidon_openings_commit": {
       "saves_r1cs": false,
@@ -186,15 +188,22 @@
       "bind_v4_vs_v2_delta": -1169716,
       "note": "T6e: elide Quot ValMmcs (QuotLeafRow DeepRo-only; QuotRoot unbound). Partial soundness KPI."
     },
+    "trace_next_fs_elision": {
+      "saves_r1cs": true,
+      "leaf_v5_vs_v4_delta": -108527,
+      "bind_v5_vs_v4_delta": -217055,
+      "note": "T6f: flush3 TraceLocal only (TraceNext DeepRo-only). Modest vs QuotOpen/Mmcs levers."
+    },
     "n1_headroom_remaining": 1284668,
     "incremental_fold_est_v2": 4179609,
     "incremental_fold_est_v3": 6072108,
     "incremental_fold_est_v4": 3594751,
+    "incremental_fold_est_v5": 3486223,
     "fits_headroom": false,
     "forbid_auth_x2_fold_into_unified": true,
-    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v4",
-    "best_leaf_auth_kpi": "thick_leaf_fri_fs_auth_v4",
-    "note": "T6e: best Auth×2 is bind_v4 (5.82M) via Quot Mmcs elision on v2. incr~3.59M ≫ 1.28M — fold still forbidden. Next: TraceNext FS elision or remaining Trace/FL/Commit Mmcs.",
+    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v5",
+    "best_leaf_auth_kpi": "thick_leaf_fri_fs_auth_v5",
+    "note": "T6f: best Auth×2 is bind_v5 (5.60M) via TraceNext FS elision on v4. incr~3.49M ≫ 1.28M — fold still forbidden. Next: remaining Trace/FL/Commit Mmcs or TraceLocal FS further shrink.",
     "measured_at": "2026-09-13"
   }
 }
