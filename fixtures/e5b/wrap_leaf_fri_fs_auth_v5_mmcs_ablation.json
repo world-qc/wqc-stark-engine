@@ -1,0 +1,41 @@
+{
+  "deltas": {
+    "all_remaining_mmcs_r1cs": 715626,
+    "commit_mmcs_r1cs": 130134,
+    "fl_mmcs_r1cs": 195304,
+    "trace_mmcs_r1cs": 390188
+  },
+  "gate": "e5b-3d",
+  "implemented_as": "elide_all_trace_fl_commit_mmcs",
+  "measured_at": "2026-09-13",
+  "notes": "T6g: Trace leaf-hash+path dominates; FL/Commit smaller (narrower leaves). v6 elides all three.",
+  "rows": [
+    {
+      "approx_r1cs": 2115933,
+      "name": "v5_full"
+    },
+    {
+      "approx_r1cs": 1725745,
+      "delta_vs_v5": 390188,
+      "name": "v5_no_trace_mmcs"
+    },
+    {
+      "approx_r1cs": 1920629,
+      "delta_vs_v5": 195304,
+      "name": "v5_no_fl_mmcs"
+    },
+    {
+      "approx_r1cs": 1985799,
+      "delta_vs_v5": 130134,
+      "name": "v5_no_commit_mmcs"
+    },
+    {
+      "approx_r1cs": 1400307,
+      "delta_vs_v5": 715626,
+      "name": "v6_no_trace_fl_commit_mmcs"
+    }
+  ],
+  "statement": "thick_leaf_fri_fs_auth_v5_mmcs_ablation",
+  "v5_r1cs": 2115933,
+  "v6_r1cs": 1400307
+}
