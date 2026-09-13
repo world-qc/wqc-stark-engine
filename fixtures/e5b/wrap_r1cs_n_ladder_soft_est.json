@@ -1,14 +1,14 @@
 {
   "statement": "thick_unified_v0_r1cs_n_ladder",
   "gate": "e5b-3d",
-  "measured_at": "2026-09-12",
+  "measured_at": "2026-09-13",
   "production_n": 40,
   "settlement_vk_working_n": 1,
   "settlement_vk_working_target_r1cs": 30000000,
   "forbid_digest_var_fold_into_unified": true,
   "forbid_child_verify_fold_into_unified": true,
-  "forbid_leaf_fri_fs_auth_fold_into_unified": true,
-  "residual_fixed_r1cs": 3113617,
+  "forbid_leaf_fri_fs_auth_fold_into_unified": false,
+  "residual_fixed_r1cs": 6441768,
   "phase2": {
     "soft_auth_elides_r1cs": false,
     "child_verify_var_r1cs_before_auth_strip": 19710711,
@@ -31,7 +31,7 @@
     "planned_var_to_d3_insufficient": true,
     "child_verify_stripped_from_unified_r1cs": 20495903,
     "leaf_fri_fs_auth_stripped_from_unified_r1cs": 5400690,
-    "note": "N=40 remmeasured under gnark v0.16.3: agg=124864925, recagg=255965638, unified=383944180 (Compile peaks ~205GiB; OOM@192GiB, OK@320GiB).",
+    "note": "N=40 remmeasured under gnark v0.16.3: agg=124864925, recagg=255965638, unified=383944180 (Compile peaks ~205GiB; OOM@192GiB, OK@320GiB). Strip-era baseline before T5 leaf Auth v1 refold.",
     "agg_fri_fs_auth_n1_r1cs": 7090556,
     "recagg_fri_fs_auth_n1_r1cs": 15183007,
     "unified_soft_est_n1": 25387181,
@@ -44,17 +44,18 @@
     "agg_n": "round(124864925 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
     "recagg_n": "round(255965638 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
     "unified_n": "residual_fixed + agg(N) + recagg(N)",
-    "residual_fixed": "383944180 - 124864925 - 255965638"
+    "residual_fixed": "387272331 - 124864925 - 255965638 (T5 soft-est: strip residual 3113617 + N=1 refold delta 3328151)"
   },
   "n40_sources": {
     "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs (gnark v0.16.3 @128GiB)",
     "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs (gnark v0.16.3 @192GiB)",
-    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs (gnark v0.16.3 Compile @320GiB)",
+    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs (soft_est_t5_refold; strip-era measured 383944180 @320GiB)",
     "child_verify_var_standalone": 20495903,
     "child_verify_d3_standalone": 5221268,
     "leaf_fri_fs_auth_standalone": 5400690,
     "child_audit_standalone": 252864,
-    "child_digest_var_standalone": 80081198
+    "child_digest_var_standalone": 80081198,
+    "leaf_fri_fs_auth_v1_standalone": 3344945
   },
   "n1_sources": {
     "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_n1_golden.json approx_r1cs",
@@ -65,17 +66,17 @@
     {
       "name": "recagg_fri_fs_auth",
       "approx_r1cs": 255965638,
-      "pct_of_unified": 66.7
+      "pct_of_unified": 66.1
     },
     {
       "name": "agg_fri_fs_auth",
       "approx_r1cs": 124864925,
-      "pct_of_unified": 32.5
+      "pct_of_unified": 32.2
     },
     {
       "name": "residual_fixed",
-      "approx_r1cs": 3113617,
-      "pct_of_unified": 0.8
+      "approx_r1cs": 6441768,
+      "pct_of_unified": 1.7
     }
   ],
   "ladder": [
@@ -83,32 +84,32 @@
       "n": 1,
       "agg_fri_fs_auth_r1cs": 7090556,
       "recagg_fri_fs_auth_r1cs": 15183007,
-      "unified_soft_est_r1cs": 25387181,
+      "unified_soft_est_r1cs": 28715332,
       "method": "measured"
     },
     {
       "n": 8,
       "agg_fri_fs_auth_r1cs": 24972985,
       "recagg_fri_fs_auth_r1cs": 51193128,
-      "unified_soft_est_r1cs": 79279730,
+      "unified_soft_est_r1cs": 82607881,
       "method": "linear_soft_est"
     },
     {
       "n": 16,
       "agg_fri_fs_auth_r1cs": 49945970,
       "recagg_fri_fs_auth_r1cs": 102386255,
-      "unified_soft_est_r1cs": 155445842,
+      "unified_soft_est_r1cs": 158773993,
       "method": "linear_soft_est"
     },
     {
       "n": 40,
       "agg_fri_fs_auth_r1cs": 124864925,
       "recagg_fri_fs_auth_r1cs": 255965638,
-      "unified_soft_est_r1cs": 383944180,
-      "method": "measured"
+      "unified_soft_est_r1cs": 387272331,
+      "method": "soft_est_t5_refold"
     }
   ],
-  "notes": "gnark v0.16.3 N=40 all measured 2026-09-12: Agg=124864925 (@128GiB), RecAgg=255965638 (@192GiB), Unified=383944180 (@320GiB n2-standard-80; peak~205GiB). N=1 Settlement \u226430M met (25387181).",
+  "notes": "T5 2026-09-13: fold thick_leaf_fri_fs_auth_v1 + Unitary OOD↔Auth into unified. N=1 measured 28715332 ≤30M (delta +3328151 vs strip-era 25387181). N=40 unified soft-est 387272331 (strip measured 383944180 + delta). leaf Auth v0 type still forbidden; digest_var / child_verify forbid remain true. Ceremony keys/CCS stale — re-prep + Phase2 seal.",
   "phase4": {
     "unified_n1_measured": true,
     "unified_n1_r1cs": 25387181,
@@ -116,7 +117,7 @@
     "residual_from_n1_measure": 2812952,
     "settlement_vk_working_target_met": true,
     "poc_setup": "fixtures/thick_n1 (disposable; not production ceremony)",
-    "note": "Phase-4: gate revised to \u226430M after gnark v0.16.3 (MPC CKK) grew N=1 from 19732153 (v0.12, \u226420M) to 25387181"
+    "note": "Phase-4 strip-era: gate revised to ≤30M after gnark v0.16.3 (MPC CKK) grew N=1 from 19732153 (v0.12, ≤20M) to 25387181"
   },
   "phase5": {
     "settle_public_inputs": 17,
@@ -124,6 +125,35 @@
     "solidity_export_cmd": "go run -tags thick_n1 ./cmd/wrap-export-solidity-thick-n1",
     "production_ceremony": false,
     "settlement_v2_still_thin": true,
-    "note": "Phase-5: stripped gnark public tags from thick gadgets; only ThinWrapCircuit 17 PIs public. Local Setup\u2260MPC ceremony. See fixtures/thick_n1/CEREMONY.md"
+    "note": "Phase-5: stripped gnark public tags from thick gadgets; only ThinWrapCircuit 17 PIs public. Local Setup≠MPC ceremony. See fixtures/thick_n1/CEREMONY.md"
+  },
+  "phase4_shrink": {
+    "leaf_fri_fs_auth_v0_r1cs": 5400690,
+    "leaf_fri_fs_auth_v1_r1cs": 3344945,
+    "n1_headroom": 4612819,
+    "v1_fits_headroom_alone": true,
+    "v1_levers": [
+      "hard_merkle_paths_3_3_2_1",
+      "chal_no_reflush_MaxAlgebraReflush_elided"
+    ],
+    "note": "T4: Auth×1 v1 fits ~4.61M headroom; Auth×2 + walk/bind still ≫ headroom",
+    "measured_at": "2026-09-13"
+  },
+  "phase5_refold": {
+    "leaf_fri_fs_auth_v1_folded": true,
+    "unitary_ood_leaf_auth_bind": true,
+    "forbid_leaf_fri_fs_auth_v0_type": true,
+    "unified_n1_r1cs_before": 25387181,
+    "unified_n1_r1cs": 28715332,
+    "delta_r1cs": 3328151,
+    "leaf_v1_standalone_r1cs": 3344945,
+    "n1_headroom_remaining": 1284668,
+    "settlement_vk_working_target_met": true,
+    "n40_unified_soft_est": 387272331,
+    "residual_fixed_r1cs": 6441768,
+    "ceremony_keys_stale": true,
+    "ccs_re_freeze_cmd": "WQC_THICK_N1_CEREMONY_PREP=1 go run -tags thick_n1 ./cmd/wrap-ceremony-prep-thick-n1 -out fixtures/thick_n1",
+    "note": "T5: leaf Auth v1 + Unitary OOD↔Auth bind folded; digest_var / child_verify / leaf Auth v0 remain forbidden. Re-export Solidity + re-seal MPC after CCS freeze.",
+    "measured_at": "2026-09-13"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "approx_r1cs": 383944180,
+  "approx_r1cs": 387272331,
   "born_folded": [
     1834117649,
     564625647,
@@ -225,7 +225,8 @@
     "thick_leaf_bind_unitary_v0 unitary leaf stark_digest bind",
     "thick_leaf_bind_born_v0 Born leaf stark_digest bind",
     "thick_leaf_bind_traj_v0 Traj leaf stark_digest bind",
-    "Phase-3: child-verify + leaf FriFsAuth stripped (standalone KPIs); Settlement working N=1 ≤30M"
+    "Phase-3: child-verify + leaf FriFsAuth v0 stripped (standalone KPIs)",
+    "T5: thick_leaf_fri_fs_auth_v1 + Unitary OOD↔Auth bind folded; N=40 soft-est = strip 383944180 + N=1 delta 3328151"
   ],
   "fri_fold_x_log_h": 2,
   "fri_fold_x_out": [
@@ -605,7 +606,7 @@
     127,
     75
   ],
-  "notes": "soft est 383474309 = residual 2643746 + agg 124864925 + recagg 255965638 (agg/recagg remmeasured gnark v0.16.3; unified Compile OOM on n2-standard-48 / 192GiB; was 382153270); remmeasure gnark v0.16.3 Compile was 383474309",
+  "notes": "T5 soft_est_t5_refold 387272331 = residual 6441768 + agg 124864925 + recagg 255965638 (strip-era unified measured 383944180 @320GiB; +N=1 refold delta 3328151; farm remmeasure optional)",
   "ood_folded": [
     1244492532,
     255900976,
