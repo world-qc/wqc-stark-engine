@@ -1,0 +1,13 @@
+{
+  "approx_r1cs": 4701817,
+  "gate": "e5b-3d",
+  "lever": "poseidon_openings_commit",
+  "measured_at": "2026-09-13",
+  "notes": "T6d NEGATIVE: Poseidon2-HashValLeaf(270 limbs, 34 perms) + keccak(64) is WORSE than v1 Keccak openings (4701817 > 3344945) and v2 no-Quot FS (2809318). Dead-end for R1CS; keep as regression KPI. Next lever: merkle/Poseidon path shrink (~1.30M) or TraceNext FS elision.",
+  "r1cs_vs_v1_delta": 1356872,
+  "r1cs_vs_v2_delta": 1892499,
+  "saves_r1cs": false,
+  "statement": "thick_leaf_fri_fs_auth_v3",
+  "v1_approx_r1cs": 3344945,
+  "v2_approx_r1cs": 2809318
+}

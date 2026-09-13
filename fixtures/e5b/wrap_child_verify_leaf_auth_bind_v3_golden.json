@@ -1,0 +1,16 @@
+{
+  "approx_r1cs": 10773925,
+  "fits_headroom": false,
+  "forbid_fold_into_unified": true,
+  "gate": "e5b-3d",
+  "incremental_fold_est": 6072108,
+  "leaf_auth": "thick_leaf_fri_fs_auth_v3",
+  "leaf_v3_approx_r1cs": 4701817,
+  "measured_at": "2026-09-13",
+  "n1_headroom": 1284668,
+  "notes": "T6d NEGATIVE: Auth×2@v3 10.77M > bind_v2 6.99M; Poseidon openings commit regresses. Fold forbidden. Prefer bind_v2 until merkle shrink.",
+  "saves_r1cs_vs_v2": false,
+  "statement": "thick_child_verify_leaf_auth_bind_v3",
+  "unified_n1_r1cs": 28715332,
+  "v2_approx_r1cs": 6988927
+}

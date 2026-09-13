@@ -160,8 +160,10 @@
     "bind_v0_r1cs": 12171673,
     "bind_v1_r1cs": 8060181,
     "bind_v2_r1cs": 6988927,
+    "bind_v3_r1cs": 10773925,
     "leaf_v1_r1cs": 3344945,
     "leaf_v2_r1cs": 2809318,
+    "leaf_v3_r1cs": 4701817,
     "ablation": {
       "chal_hard_r1cs": 1628879,
       "deep_ro_and_fold_r1cs": 412905,
@@ -170,11 +172,19 @@
       "next_lever": "chal_openings_keccak",
       "implemented_as": "fs_openings_no_quot_open"
     },
+    "poseidon_openings_commit": {
+      "saves_r1cs": false,
+      "leaf_v3_vs_v1_delta": 1356872,
+      "leaf_v3_vs_v2_delta": 1892499,
+      "note": "Poseidon HashValLeaf(270)/34 perms + keccak(64) costs more than Keccak raw openings; dead-end"
+    },
     "n1_headroom_remaining": 1284668,
     "incremental_fold_est_v2": 4179609,
+    "incremental_fold_est_v3": 6072108,
     "fits_headroom": false,
     "forbid_auth_x2_fold_into_unified": true,
-    "note": "T6: Auth×2@v1 (−4.11M vs v0); ablation picked Chal openings; v2 drops QuotOpen from FS absorb (−0.54M/Auth, bind 6.99M). Incremental fold est ~4.18M ≫ 1.28M headroom — keep forbid. Not production Plonky3 FS (BatchAlpha independent of QuotOpen). Next: Poseidon openings commit or TraceNext elision / merkle shrink.",
+    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v2",
+    "note": "T6: best Auth×2 is bind_v2 (6.99M). Poseidon openings commit (v3) regresses. Next: merkle/Poseidon path shrink (~1.30M ablation) or TraceNext FS elision on v2.",
     "measured_at": "2026-09-13"
   }
 }
