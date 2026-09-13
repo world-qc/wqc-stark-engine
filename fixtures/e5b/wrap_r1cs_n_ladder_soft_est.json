@@ -258,8 +258,11 @@
       "fits_headroom": true,
       "next_walk_sha3_est": 866159,
       "next_walk_sha3_fits": false,
-      "note": "T6k: restore full LeafBindUnitary×2 SHA3 on v9. Delta~556k < ablation 654k. spare~266k < Walk SHA3 est → stop Walk restore; optional cheaper pieces only."
+      "note": "T6k: restore full LeafBindUnitary×2 SHA3 on v9. Delta~556k < ablation 654k. spare~266k < Walk SHA3 est → stop Walk restore."
     },
+    "restore_ladder_frozen": true,
+    "restore_ladder_frozen_at": "bind_v10",
+    "restore_ladder_freeze_reason": "Walk SHA3 (~866k) exceeds spare (~266k); N=1 ≤30M headroom absolute; approve freeze of Partial bind_v10",
     "bind_v9_r1cs": 484950,
     "bind_v10_r1cs": 1040873,
     "n1_headroom_remaining": 1284668,
@@ -277,7 +280,12 @@
     "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v10",
     "best_leaf_auth_kpi": "thick_leaf_fri_fs_auth_v7",
     "best_fitting_minimal_partial": "thick_child_verify_leaf_auth_bind_v8",
-    "note": "T6k: bind_v10 (1.04M) restores leaf-bind SHA3×2 + OOD×2; incr~1.02M ≤1.28M; spare~266k. Walk SHA3 (~866k) does not fit — restore ladder stops on Walk. Production fold deferred. Settlement frozen.",
+    "next_priorities": [
+      "devnet_v3_packed_rehearsal",
+      "max_child_bytes_toward_87kib",
+      "grant_audit_docs_bind_v10"
+    ],
+    "note": "T6k FREEZE: bind_v10 (1.04M) is the frozen Partial Auth×2 KPI (OOD×2 + leaf-bind SHA3×2; WalkLite; Auth v7). incr~1,018,928 ≤1.28M; spare~266k. Walk SHA3 / Chal FS / Mmcs / DeepRo restores stopped. Production unified fold + Settlement default remain deferred/frozen. Next: Devnet V3 rehearsal, Max→87KiB, grant/audit brief.",
     "measured_at": "2026-09-13"
   }
 }

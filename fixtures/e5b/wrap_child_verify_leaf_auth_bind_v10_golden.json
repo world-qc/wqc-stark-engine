@@ -11,8 +11,9 @@
   "n1_headroom": 1284668,
   "next_walk_sha3_est": 866159,
   "next_walk_sha3_fits": false,
-  "notes": "T6k: v9 + full LeafBindUnitary×2 (SHA3) restored; WalkLite kept. Budget-honest; production unified fold deferred. Next Walk SHA3 only if spare ≥ est.",
+  "restore_ladder_frozen": true,
   "spare_vs_headroom": 265740,
   "statement": "thick_child_verify_leaf_auth_bind_v10",
-  "v9_approx_r1cs": 484950
+  "v9_approx_r1cs": 484950,
+  "notes": "FROZEN Partial Auth×2 KPI (T6k). Restored: full Unitary OOD×2 + LeafBindUnitary SHA3×2. Still Partial: WalkLite (no compose SHA3), Auth v7 (witness Chal, no Mmcs/DeepRo/FS). incr=1018928 ≤1284668; spare=265740 < Walk SHA3 est — restore ladder stopped. Production unified fold + Settlement default deferred/frozen."
 }
