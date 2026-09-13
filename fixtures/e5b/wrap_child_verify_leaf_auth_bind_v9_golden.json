@@ -1,0 +1,18 @@
+{
+  "approx_r1cs": 484950,
+  "fits_headroom": true,
+  "forbid_fold_into_unified": true,
+  "gate": "e5b-3d",
+  "incremental_fold_est": 463005,
+  "leaf_auth": "thick_leaf_fri_fs_auth_v7",
+  "leaf_v7_approx_r1cs": 21945,
+  "measured_at": "2026-09-13",
+  "n1_headroom": 1284668,
+  "next_leaf_bind_sha3_est": 654028,
+  "next_leaf_bind_sha3_fits": true,
+  "notes": "T6j: v8 lite walk/bind + Auth v7×2 + full Unitary OOD×2 restored. Budget-honest; production unified fold still deferred. Next leaf-bind SHA3 only if spare ≥ est.",
+  "ood_restore_delta_vs_v8": 202406,
+  "spare_vs_headroom": 821663,
+  "statement": "thick_child_verify_leaf_auth_bind_v9",
+  "v8_approx_r1cs": 282544
+}

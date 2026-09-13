@@ -238,6 +238,18 @@
       "ood_delta": 440938,
       "note": "T6i: walk/bind lite (no SHA3) + OOD witness (no transition fold). Walk SHA3 dominated."
     },
+    "ood_transition_restore": {
+      "saves_r1cs": false,
+      "bind_v9_r1cs": 484950,
+      "bind_v9_vs_v8_delta": 202406,
+      "incremental_fold_est_v9": 463005,
+      "spare_vs_headroom": 821663,
+      "fits_headroom": true,
+      "next_leaf_bind_sha3_est": 654028,
+      "next_leaf_bind_sha3_fits": true,
+      "note": "T6j budget-honest: restore full Unitary OOD×2 on v8 spine. Delta vs v8 smaller than v7 ablation (~441k) because v8 already paid witness OOD in-field. spare~822k ≥ leaf-bind SHA3 est → next candidate green."
+    },
+    "bind_v9_r1cs": 484950,
     "n1_headroom_remaining": 1284668,
     "incremental_fold_est_v2": 4179609,
     "incremental_fold_est_v3": 6072108,
@@ -246,11 +258,13 @@
     "incremental_fold_est_v6": 2770597,
     "incremental_fold_est_v7": 1655415,
     "incremental_fold_est_v8": 260599,
+    "incremental_fold_est_v9": 463005,
     "fits_headroom": true,
-    "forbid_auth_x2_fold_into_unified": false,
-    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v8",
+    "forbid_auth_x2_fold_into_unified": true,
+    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v9",
     "best_leaf_auth_kpi": "thick_leaf_fri_fs_auth_v7",
-    "note": "T6i: best Auth×2 is bind_v8 (283k). incr~261k ≤1.28M headroom — R1CS fold gate unlocked on Partial KPI. Production refold still deferred (restore SHA3/OOD/FS/Mmcs/DeepRo as needed); Settlement default frozen; do not auto-fold.",
+    "best_fitting_minimal_partial": "thick_child_verify_leaf_auth_bind_v8",
+    "note": "T6j: bind_v9 (485k) restores OOD×2; incr~463k ≤1.28M; spare~822k. Next restore candidate = leaf-bind SHA3×2 (est~654k fits). Production unified fold still deferred (Partial). Settlement frozen.",
     "measured_at": "2026-09-13"
   }
 }
