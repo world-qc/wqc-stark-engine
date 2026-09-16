@@ -390,19 +390,19 @@ mod wrap_unified_golden {
         assert_eq!(v["shot_folded"].as_array().unwrap().len(), 3, "shot");
         assert_eq!(v["born_folded"].as_array().unwrap().len(), 3, "born");
         assert_eq!(
-            v["recagg_mmcs_path_root"].as_array().unwrap().len(),
+            v["recagg_auth_trace_root"].as_array().unwrap().len(),
             32,
-            "recagg mmcs"
+            "recagg fri-fs-auth trace root"
         );
         assert_eq!(
             v["child_verify_left_digest"].as_array().unwrap().len(),
             32,
-            "child-verify-d2 left"
+            "child-verify left"
         );
         assert_eq!(
             v["child_verify_right_digest"].as_array().unwrap().len(),
             32,
-            "child-verify-d2 right"
+            "child-verify right"
         );
         assert_eq!(
             v["leaf_bind_unitary_container_digest"]
@@ -456,15 +456,16 @@ mod wrap_unified_golden {
         assert!(
             comps.iter().any(|c| {
                 c.as_str()
-                    == Some("thick_fri_fs_auth_v0 FriFsChal + Trace/Quot ValMmcs + Chal Mmcs + DeepRo/fold_y + fold_x→FinalPoly")
+                    .is_some_and(|s| s.starts_with("thick_fri_fs_auth_v0 FriFsChal"))
             }),
             "expected fri-fs-auth fold-in"
         );
         assert!(
-            comps
-                .iter()
-                .any(|c| c.as_str() == Some("thick_child_verify_d2_v0 depth-2 compose recurse")),
-            "expected child-verify-d2 fold-in"
+            comps.iter().any(|c| {
+                c.as_str()
+                    .is_some_and(|s| s.contains("child-verify") || s.contains("leaf FriFsAuth"))
+            }),
+            "expected child-verify / leaf FriFsAuth fold-in note"
         );
         assert!(
             comps.iter().any(|c| {

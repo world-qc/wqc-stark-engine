@@ -1278,7 +1278,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "AggregationAir ultra-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly",
             "measured_at": "2026-09-08",
-            "approx_r1cs": 125250450,
+            "approx_r1cs": 124864925,
             "agg_width": AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -1360,8 +1360,8 @@ mod tests {
             assert_eq!(fx[0]["log_h"].as_u64().unwrap(), 2);
             assert_eq!(fx[1]["log_h"].as_u64().unwrap(), 1);
         }
-        // approx_r1cs locked after Go remmeasure (N=40 + fold_x chain)
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 125250450);
+        // approx_r1cs locked after gnark v0.16.3 remmeasure (N=40 + fold_x chain)
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 124864925);
 
         let ctx = AggregationContext {
             parent_task_id: "parent",
@@ -2836,8 +2836,8 @@ mod tests {
             "gate": "e5b-3d",
             "source": "RecursiveAggregationAir ultra-security Trace/Quot ValMmcs + Chal Mmcs + DeepRo→FL Flatten/fold_y + commit-phase fold_x→FinalPoly (W=330 N=40)",
             "measured_at": "2026-09-08",
-            // locked by WQC_THICK_HUGE Compile-only remmeasure
-            "approx_r1cs": 254259074,
+            // locked by gnark v0.16.3 remmeasure (prior WQC_THICK_HUGE was 254259074)
+            "approx_r1cs": 255965638,
             "rec_agg_width": REC_AGG_WIDTH,
             "quot_width": 3,
             "chal_leaf_width": 6,
@@ -2934,8 +2934,8 @@ mod tests {
             assert_eq!(fx[0]["log_h"].as_u64().unwrap(), 2);
             assert_eq!(fx[1]["log_h"].as_u64().unwrap(), 1);
         }
-        // approx_r1cs locked by WQC_THICK_HUGE Compile-only remmeasure (N=40 RecAgg ultra)
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 254259074);
+        // approx_r1cs locked by gnark v0.16.3 remmeasure (N=40 RecAgg ultra)
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 255965638);
 
         let ctx = RecursiveAggregationContext {
             parent_task_id: "parent",
