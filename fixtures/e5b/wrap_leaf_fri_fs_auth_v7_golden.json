@@ -1,0 +1,12 @@
+{
+  "approx_r1cs": 21945,
+  "chal_only_r1cs": 984725,
+  "deep_ro_delta": 310646,
+  "fixed_fold_save": 92628,
+  "gate": "e5b-3d",
+  "lever": "witness_chal_fixed_fold_no_deep",
+  "measured_at": "2026-09-13",
+  "notes": "T6h: witness Chal (no Keccak FS) + fixed-log FriFold + DeepRo elided. Partial.",
+  "statement": "thick_leaf_fri_fs_auth_v7",
+  "v6_approx_r1cs": 1400307
+}

@@ -1,0 +1,17 @@
+{
+  "approx_r1cs": 3344945,
+  "fits_headroom": true,
+  "gate": "e5b-3d",
+  "measured_at": "2026-09-13",
+  "n1_headroom": 4612819,
+  "notes": "T4 shrink KPI; hard Merkle paths (3/3/2/1) + no-reflush Chal; fits N=1 headroom alone; Auth\u00d72 walk/bind still over budget; forbid_* until refold plan",
+  "path_depths": [
+    3,
+    3,
+    2,
+    1
+  ],
+  "source": "hard-path leaf FriFsAuth + no-reflush Chal (exact depths 3/3/2/1)",
+  "statement": "thick_leaf_fri_fs_auth_v1",
+  "v0_approx_r1cs": 5400690
+}

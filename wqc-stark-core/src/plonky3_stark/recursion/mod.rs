@@ -72,6 +72,7 @@ pub use deep_ro_leaf_trace_air::{
     generate_deep_ro_leaf_trace_proof, verify_deep_ro_leaf_trace_proof, DeepRoLeafTraceAir,
     DeepRoLeafTraceStepProof,
 };
+pub use deep_ro_native::deep_ro_recagg_trace_witness;
 pub use deep_ro_trace_air::{
     generate_deep_ro_trace_proof, verify_deep_ro_trace_proof, DeepRoTraceAir, DeepRoTraceStepProof,
 };
@@ -97,7 +98,7 @@ pub use fri_fold_m4c::{
 };
 pub use fri_fs_replay::{
     circle_config_matching_proof, fri_queries_from_proof, replay_agg_fri_challenges,
-    replay_fri_challenges, AggFriChallenges,
+    replay_fri_challenges, replay_rec_agg_fri_challenges, AggFriChallenges,
 };
 pub use fri_mmcs::verify_agg_fri_openings;
 pub use fri_mmcs_bind::{

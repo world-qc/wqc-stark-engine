@@ -175,3 +175,310 @@ mod tests {
         assert_eq!(header.left_child_hash, header2.left_child_hash);
     }
 }
+
+#[cfg(test)]
+mod wrap_child_audit_golden {
+    use super::child_digest;
+
+    #[test]
+    fn emit_child_audit_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_child_audit_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_child_audit_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        let left: Vec<u8> = (0u8..64).collect();
+        let right: Vec<u8> = (64u8..128).collect();
+        let got_left = child_digest(&left);
+        let got_right = child_digest(&right);
+
+        let want_left: Vec<u8> = v["left_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_right: Vec<u8> = v["right_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(got_left.as_slice(), want_left.as_slice());
+        assert_eq!(got_right.as_slice(), want_right.as_slice());
+    }
+}
+
+#[cfg(test)]
+mod wrap_child_verify_golden {
+    use super::{child_digest, encode_compose_v3, is_compose_v3, V3_COMPOSE_MARKER};
+
+    fn encode_mini(left_gc: &[u8], right_gc: &[u8]) -> Vec<u8> {
+        encode_compose_v3("p", "L", "", left_gc, right_gc)
+    }
+
+    #[test]
+    fn emit_child_verify_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_child_verify_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_child_verify_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(V3_COMPOSE_MARKER.len(), 16);
+        assert_eq!(v["mini_compose_len"].as_u64().unwrap(), 109);
+
+        let left = encode_mini(&[1, 2, 3, 4, 5, 6, 7, 8], &[9, 10, 11, 12, 13, 14, 15, 16]);
+        let right = encode_mini(
+            &[17, 18, 19, 20, 21, 22, 23, 24],
+            &[25, 26, 27, 28, 29, 30, 31, 32],
+        );
+        assert_eq!(left.len(), 109);
+        assert_eq!(right.len(), 109);
+        assert!(is_compose_v3(&left));
+        assert!(is_compose_v3(&right));
+
+        let want_left: Vec<u8> = v["left_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_right: Vec<u8> = v["right_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(child_digest(&left).as_slice(), want_left.as_slice());
+        assert_eq!(child_digest(&right).as_slice(), want_right.as_slice());
+        assert_eq!(v["left_kind"].as_u64().unwrap(), 1);
+        assert_eq!(v["right_kind"].as_u64().unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
+mod wrap_child_verify_d2_golden {
+    use super::{child_digest, encode_compose_v3, is_compose_v3, V3_COMPOSE_MARKER};
+
+    fn encode_mini(left_gc: &[u8], right_gc: &[u8]) -> Vec<u8> {
+        encode_compose_v3("p", "L", "", left_gc, right_gc)
+    }
+
+    fn encode_d2(left_mid: &[u8], right_mid: &[u8]) -> Vec<u8> {
+        let out = encode_compose_v3("p", "L", "", left_mid, right_mid);
+        assert_eq!(out.len(), 311);
+        out
+    }
+
+    #[test]
+    fn emit_child_verify_d2_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_child_verify_d2_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_child_verify_d2_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_child_verify_d2_v0");
+        assert_eq!(V3_COMPOSE_MARKER.len(), 16);
+        assert_eq!(v["d2_outer_len"].as_u64().unwrap(), 311);
+        assert_eq!(v["d2_mid_len"].as_u64().unwrap(), 109);
+
+        let left = encode_d2(
+            &encode_mini(&[1, 2, 3, 4, 5, 6, 7, 8], &[9, 10, 11, 12, 13, 14, 15, 16]),
+            &encode_mini(
+                &[17, 18, 19, 20, 21, 22, 23, 24],
+                &[25, 26, 27, 28, 29, 30, 31, 32],
+            ),
+        );
+        let right = encode_d2(
+            &encode_mini(
+                &[33, 34, 35, 36, 37, 38, 39, 40],
+                &[41, 42, 43, 44, 45, 46, 47, 48],
+            ),
+            &encode_mini(
+                &[49, 50, 51, 52, 53, 54, 55, 56],
+                &[57, 58, 59, 60, 61, 62, 63, 64],
+            ),
+        );
+        assert!(is_compose_v3(&left));
+        assert!(is_compose_v3(&right));
+
+        let want_left: Vec<u8> = v["left_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_right: Vec<u8> = v["right_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(child_digest(&left).as_slice(), want_left.as_slice());
+        assert_eq!(child_digest(&right).as_slice(), want_right.as_slice());
+        assert_eq!(v["left_kind"].as_u64().unwrap(), 1);
+        assert_eq!(v["right_kind"].as_u64().unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
+mod wrap_unified_golden {
+    use super::child_digest;
+
+    #[test]
+    fn emit_unified_goldens() {
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/e5b/wrap_unified_golden.json"
+        );
+        let raw = std::fs::read_to_string(golden_path).expect("wrap_unified_golden.json");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
+
+        assert_eq!(v["statement"].as_str().unwrap(), "thick_unified_v0");
+
+        let left: Vec<u8> = (0u8..64).collect();
+        let right: Vec<u8> = (64u8..128).collect();
+        let want_left: Vec<u8> = v["child_left_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        let want_right: Vec<u8> = v["child_right_digest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(child_digest(&left).as_slice(), want_left.as_slice());
+        assert_eq!(child_digest(&right).as_slice(), want_right.as_slice());
+
+        // Cross-lock component public limbs already covered by per-gadget goldens.
+        assert_eq!(
+            v["fri_fold_y_out"].as_array().unwrap().len(),
+            3,
+            "fri y out"
+        );
+        assert_eq!(v["ood_folded"].as_array().unwrap().len(), 3, "ood folded");
+        assert_eq!(
+            v["mmcs_path_root"].as_array().unwrap().len(),
+            32,
+            "mmcs root"
+        );
+        assert_eq!(
+            v["recagg_folded"].as_array().unwrap().len(),
+            3,
+            "recagg folded"
+        );
+        assert_eq!(
+            v["chal_path_root"].as_array().unwrap().len(),
+            32,
+            "chal path"
+        );
+        assert_eq!(
+            v["chal_batch_root"].as_array().unwrap().len(),
+            32,
+            "chal batch"
+        );
+        assert_eq!(v["unitary_folded"].as_array().unwrap().len(), 3, "unitary");
+        assert_eq!(v["shot_folded"].as_array().unwrap().len(), 3, "shot");
+        assert_eq!(v["born_folded"].as_array().unwrap().len(), 3, "born");
+        assert_eq!(
+            v["recagg_auth_trace_root"].as_array().unwrap().len(),
+            32,
+            "recagg fri-fs-auth trace root"
+        );
+        assert_eq!(
+            v["child_verify_left_digest"].as_array().unwrap().len(),
+            32,
+            "child-verify left"
+        );
+        assert_eq!(
+            v["child_verify_right_digest"].as_array().unwrap().len(),
+            32,
+            "child-verify right"
+        );
+        assert_eq!(
+            v["leaf_bind_unitary_container_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind unitary container"
+        );
+        assert_eq!(
+            v["leaf_bind_unitary_stark_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind unitary stark"
+        );
+        assert_eq!(
+            v["leaf_bind_born_container_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind born container"
+        );
+        assert_eq!(
+            v["leaf_bind_born_stark_digest"].as_array().unwrap().len(),
+            32,
+            "leaf-bind born stark"
+        );
+        assert_eq!(
+            v["leaf_bind_traj_container_digest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32,
+            "leaf-bind traj container"
+        );
+        assert_eq!(
+            v["leaf_bind_traj_stark_digest"].as_array().unwrap().len(),
+            32,
+            "leaf-bind traj stark"
+        );
+        let comps = v["components"].as_array().unwrap();
+        assert!(
+            comps.iter().any(|c| {
+                c.as_str() == Some("thick_fri_varlog_v0 fold_y@4 + fold_x@2 log_h mux")
+            }),
+            "expected fri-varlog fold-in"
+        );
+        assert!(
+            comps.iter().any(|c| {
+                c.as_str()
+                    .is_some_and(|s| s.starts_with("thick_fri_fs_auth_v0 FriFsChal"))
+            }),
+            "expected fri-fs-auth fold-in"
+        );
+        assert!(
+            comps.iter().any(|c| {
+                c.as_str()
+                    .is_some_and(|s| s.contains("child-verify") || s.contains("leaf FriFsAuth"))
+            }),
+            "expected child-verify / leaf FriFsAuth fold-in note"
+        );
+        assert!(
+            comps.iter().any(|c| {
+                c.as_str() == Some("thick_leaf_bind_born_v0 Born leaf stark_digest bind")
+            }),
+            "expected leaf-bind born fold-in"
+        );
+        assert!(
+            comps.iter().any(|c| {
+                c.as_str() == Some("thick_leaf_bind_traj_v0 Traj leaf stark_digest bind")
+            }),
+            "expected leaf-bind traj fold-in"
+        );
+        assert!(comps.len() >= 17, "expected fri-fs-sponge fold-in");
+    }
+}

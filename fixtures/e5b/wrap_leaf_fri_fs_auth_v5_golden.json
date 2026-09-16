@@ -1,0 +1,9 @@
+{
+  "approx_r1cs": 2115933,
+  "gate": "e5b-3d",
+  "lever": "fs_trace_local_only",
+  "measured_at": "2026-09-13",
+  "notes": "T6f: v4 body + flush3 TraceLocal only (TraceNext+QuotOpen DeepRo-only). Partial: not production Plonky3 FS; QuotRoot unbound to QuotLeafRow.",
+  "statement": "thick_leaf_fri_fs_auth_v5",
+  "v4_approx_r1cs": 2224460
+}

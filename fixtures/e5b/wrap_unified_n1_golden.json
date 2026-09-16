@@ -1,0 +1,11 @@
+{
+  "approx_r1cs": 28715332,
+  "auth_n": 1,
+  "gate": "e5b-3d",
+  "measured_at": "2026-09-11",
+  "nb_public_settle": 17,
+  "nb_public_variables_gnark": 18,
+  "notes": "gnark v0.16.3 remmeasure: settle PI=17; ≤30M working gate (was ≤20M / 19732153 on v0.12)",
+  "profile": "thick_n1",
+  "statement": "thick_unified_v0"
+}

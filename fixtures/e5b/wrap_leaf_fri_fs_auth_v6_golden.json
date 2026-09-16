@@ -1,0 +1,12 @@
+{
+  "approx_r1cs": 1400307,
+  "commit_mmcs_delta": 130134,
+  "fl_mmcs_delta": 195304,
+  "gate": "e5b-3d",
+  "lever": "no_trace_fl_commit_mmcs",
+  "measured_at": "2026-09-13",
+  "notes": "T6g: v5 Chal + DeepRo→fold; Trace/FL/Commit ValMmcs elided (leaf rows unbound). Partial.",
+  "statement": "thick_leaf_fri_fs_auth_v6",
+  "trace_mmcs_delta": 390188,
+  "v5_approx_r1cs": 2115933
+}

@@ -1,0 +1,291 @@
+{
+  "statement": "thick_unified_v0_r1cs_n_ladder",
+  "gate": "e5b-3d",
+  "measured_at": "2026-09-13",
+  "production_n": 40,
+  "settlement_vk_working_n": 1,
+  "settlement_vk_working_target_r1cs": 30000000,
+  "forbid_digest_var_fold_into_unified": true,
+  "forbid_child_verify_fold_into_unified": true,
+  "forbid_leaf_fri_fs_auth_fold_into_unified": false,
+  "residual_fixed_r1cs": 6441768,
+  "phase2": {
+    "soft_auth_elides_r1cs": false,
+    "child_verify_var_r1cs_before_auth_strip": 19710711,
+    "leaf_auth_r1cs": 5400690,
+    "auth_x2_estimate_from_leaf": 10801380,
+    "implied_digest_mux_from_leaf_x2": 11511043,
+    "audit_dropped_r1cs": 252864,
+    "unified_soft_est_before_audit_drop": 406216679,
+    "unified_soft_est_after_audit_drop": 405963815
+  },
+  "phase2b": {
+    "auth_x2_stripped_from_child_verify_var": true,
+    "child_verify_var_r1cs": 20495903,
+    "auth_x2_stripped_r1cs": 7936589,
+    "unified_soft_est_before_auth_strip": 405963815,
+    "unified_soft_est_after_auth_strip": 398027226
+  },
+  "phase3": {
+    "child_verify_d3_r1cs": 5221268,
+    "planned_var_to_d3_insufficient": true,
+    "child_verify_stripped_from_unified_r1cs": 20495903,
+    "leaf_fri_fs_auth_stripped_from_unified_r1cs": 5400690,
+    "note": "N=40 remmeasured under gnark v0.16.3: agg=124864925, recagg=255965638, unified=383944180 (Compile peaks ~205GiB; OOM@192GiB, OK@320GiB). Strip-era baseline before T5 leaf Auth v1 refold.",
+    "agg_fri_fs_auth_n1_r1cs": 7090556,
+    "recagg_fri_fs_auth_n1_r1cs": 15183007,
+    "unified_soft_est_n1": 25387181,
+    "unified_soft_est_n40_after_strip": 383944180,
+    "auth_n_working_profile": 1,
+    "unified_soft_est_n1_was_soft": 19562947,
+    "composition_overhead_n1_r1cs": 169206
+  },
+  "formula": {
+    "agg_n": "round(124864925 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
+    "recagg_n": "round(255965638 * N / 40) for soft-est ladder; N=1 uses measured n1 golden",
+    "unified_n": "residual_fixed + agg(N) + recagg(N)",
+    "residual_fixed": "387272331 - 124864925 - 255965638 (T5 soft-est: strip residual 3113617 + N=1 refold delta 3328151)"
+  },
+  "n40_sources": {
+    "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_golden.json approx_r1cs (gnark v0.16.3 @128GiB)",
+    "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_golden.json approx_r1cs (gnark v0.16.3 @192GiB)",
+    "unified": "fixtures/e5b3/wrap_unified_golden.json approx_r1cs (soft_est_t5_refold; strip-era measured 383944180 @320GiB)",
+    "child_verify_var_standalone": 20495903,
+    "child_verify_d3_standalone": 5221268,
+    "leaf_fri_fs_auth_standalone": 5400690,
+    "child_audit_standalone": 252864,
+    "child_digest_var_standalone": 80081198,
+    "leaf_fri_fs_auth_v1_standalone": 3344945
+  },
+  "n1_sources": {
+    "agg_fri_fs_auth": "fixtures/e5b3/wrap_fri_fs_auth_n1_golden.json approx_r1cs",
+    "recagg_fri_fs_auth": "fixtures/e5b3/wrap_recagg_fri_fs_auth_n1_golden.json approx_r1cs",
+    "unified": "fixtures/e5b3/wrap_unified_n1_golden.json approx_r1cs"
+  },
+  "cost_centers_n40": [
+    {
+      "name": "recagg_fri_fs_auth",
+      "approx_r1cs": 255965638,
+      "pct_of_unified": 66.1
+    },
+    {
+      "name": "agg_fri_fs_auth",
+      "approx_r1cs": 124864925,
+      "pct_of_unified": 32.2
+    },
+    {
+      "name": "residual_fixed",
+      "approx_r1cs": 6441768,
+      "pct_of_unified": 1.7
+    }
+  ],
+  "ladder": [
+    {
+      "n": 1,
+      "agg_fri_fs_auth_r1cs": 7090556,
+      "recagg_fri_fs_auth_r1cs": 15183007,
+      "unified_soft_est_r1cs": 28715332,
+      "method": "measured"
+    },
+    {
+      "n": 8,
+      "agg_fri_fs_auth_r1cs": 24972985,
+      "recagg_fri_fs_auth_r1cs": 51193128,
+      "unified_soft_est_r1cs": 82607881,
+      "method": "linear_soft_est"
+    },
+    {
+      "n": 16,
+      "agg_fri_fs_auth_r1cs": 49945970,
+      "recagg_fri_fs_auth_r1cs": 102386255,
+      "unified_soft_est_r1cs": 158773993,
+      "method": "linear_soft_est"
+    },
+    {
+      "n": 40,
+      "agg_fri_fs_auth_r1cs": 124864925,
+      "recagg_fri_fs_auth_r1cs": 255965638,
+      "unified_soft_est_r1cs": 387272331,
+      "method": "soft_est_t5_refold"
+    }
+  ],
+  "notes": "T5 2026-09-13: fold thick_leaf_fri_fs_auth_v1 + Unitary OOD↔Auth into unified. N=1 measured 28715332 ≤30M (delta +3328151 vs strip-era 25387181). N=40 unified soft-est 387272331 (strip measured 383944180 + delta). leaf Auth v0 type still forbidden; digest_var / child_verify forbid remain true. Ceremony keys/CCS stale — re-prep + Phase2 seal.",
+  "phase4": {
+    "unified_n1_measured": true,
+    "unified_n1_r1cs": 25387181,
+    "unified_n1_r1cs_gnark_v0_12": 19732153,
+    "residual_from_n1_measure": 2812952,
+    "settlement_vk_working_target_met": true,
+    "poc_setup": "fixtures/thick_n1 (disposable; not production ceremony)",
+    "note": "Phase-4 strip-era: gate revised to ≤30M after gnark v0.16.3 (MPC CKK) grew N=1 from 19732153 (v0.12, ≤20M) to 25387181"
+  },
+  "phase5": {
+    "settle_public_inputs": 17,
+    "nb_public_variables_gnark": 18,
+    "solidity_export_cmd": "go run -tags thick_n1 ./cmd/wrap-export-solidity-thick-n1",
+    "production_ceremony": false,
+    "settlement_v2_still_thin": true,
+    "note": "Phase-5: stripped gnark public tags from thick gadgets; only ThinWrapCircuit 17 PIs public. Local Setup≠MPC ceremony. See fixtures/thick_n1/CEREMONY.md"
+  },
+  "phase4_shrink": {
+    "leaf_fri_fs_auth_v0_r1cs": 5400690,
+    "leaf_fri_fs_auth_v1_r1cs": 3344945,
+    "n1_headroom": 4612819,
+    "v1_fits_headroom_alone": true,
+    "v1_levers": [
+      "hard_merkle_paths_3_3_2_1",
+      "chal_no_reflush_MaxAlgebraReflush_elided"
+    ],
+    "note": "T4: Auth×1 v1 fits ~4.61M headroom; Auth×2 + walk/bind still ≫ headroom",
+    "measured_at": "2026-09-13"
+  },
+  "phase5_refold": {
+    "leaf_fri_fs_auth_v1_folded": true,
+    "unitary_ood_leaf_auth_bind": true,
+    "forbid_leaf_fri_fs_auth_v0_type": true,
+    "unified_n1_r1cs_before": 25387181,
+    "unified_n1_r1cs": 28715332,
+    "delta_r1cs": 3328151,
+    "leaf_v1_standalone_r1cs": 3344945,
+    "n1_headroom_remaining": 1284668,
+    "settlement_vk_working_target_met": true,
+    "n40_unified_soft_est": 387272331,
+    "residual_fixed_r1cs": 6441768,
+    "ceremony_keys_stale": true,
+    "ccs_re_freeze_cmd": "WQC_THICK_N1_CEREMONY_PREP=1 go run -tags thick_n1 ./cmd/wrap-ceremony-prep-thick-n1 -out fixtures/thick_n1",
+    "note": "T5: leaf Auth v1 + Unitary OOD↔Auth bind folded; digest_var / child_verify / leaf Auth v0 remain forbidden. Re-export Solidity + re-seal MPC after CCS freeze.",
+    "measured_at": "2026-09-13"
+  },
+  "phase6_auth_x2_shrink": {
+    "bind_v0_r1cs": 12171673,
+    "bind_v1_r1cs": 8060181,
+    "bind_v2_r1cs": 6988927,
+    "bind_v3_r1cs": 10773925,
+    "bind_v4_r1cs": 5819211,
+    "bind_v5_r1cs": 5602156,
+    "bind_v6_r1cs": 4170904,
+    "bind_v7_r1cs": 1677360,
+    "bind_v8_r1cs": 282544,
+    "leaf_v1_r1cs": 3344945,
+    "leaf_v2_r1cs": 2809318,
+    "leaf_v3_r1cs": 4701817,
+    "leaf_v4_r1cs": 2224460,
+    "leaf_v5_r1cs": 2115933,
+    "leaf_v6_r1cs": 1400307,
+    "leaf_v7_r1cs": 21945,
+    "ablation": {
+      "chal_hard_r1cs": 1628879,
+      "deep_ro_and_fold_r1cs": 412905,
+      "merkle_and_poseidon_r1cs": 1303161,
+      "quot_mmcs_path_r1cs": 588026,
+      "trace_mmcs_r1cs": 390188,
+      "fl_mmcs_r1cs": 195304,
+      "commit_mmcs_r1cs": 130134,
+      "v6_chal_only_r1cs": 984725,
+      "v6_deep_ro_elision_r1cs": 310646,
+      "v6_fixed_fold_save_r1cs": 92628,
+      "chal_witness_only_r1cs": 9538,
+      "walk_in_bind_v7_r1cs": 866159,
+      "leaf_bind_x2_in_bind_v7_r1cs": 654028,
+      "ood_x2_in_bind_v7_r1cs": 440938,
+      "walk_standalone_r1cs": 768126,
+      "leaf_bind_standalone_r1cs": 343792,
+      "ood_standalone_r1cs": 105658,
+      "next_lever": "optional_production_soundness_restore_or_partial_refold",
+      "implemented_as": "auth_shrink_then_walk_bind_ood_overhead_lite"
+    },
+    "poseidon_openings_commit": {
+      "saves_r1cs": false,
+      "leaf_v3_vs_v1_delta": 1356872,
+      "leaf_v3_vs_v2_delta": 1892499,
+      "note": "Poseidon HashValLeaf(270)/34 perms + keccak(64) costs more than Keccak raw openings; dead-end"
+    },
+    "quot_val_mmcs_elision": {
+      "saves_r1cs": true,
+      "leaf_v4_vs_v2_delta": -584858,
+      "bind_v4_vs_v2_delta": -1169716,
+      "note": "T6e: elide Quot ValMmcs (QuotLeafRow DeepRo-only; QuotRoot unbound). Partial soundness KPI."
+    },
+    "trace_next_fs_elision": {
+      "saves_r1cs": true,
+      "leaf_v5_vs_v4_delta": -108527,
+      "bind_v5_vs_v4_delta": -217055,
+      "note": "T6f: flush3 TraceLocal only (TraceNext DeepRo-only). Modest vs QuotOpen/Mmcs levers."
+    },
+    "trace_fl_commit_mmcs_elision": {
+      "saves_r1cs": true,
+      "leaf_v6_vs_v5_delta": -715626,
+      "bind_v6_vs_v5_delta": -1431252,
+      "trace_mmcs_delta": 390188,
+      "fl_mmcs_delta": 195304,
+      "commit_mmcs_delta": 130134,
+      "note": "T6g: elide Trace/FL/Commit ValMmcs (leaf rows DeepRo/fold-only; roots unbound). Trace dominates."
+    },
+    "chal_deep_shrink": {
+      "saves_r1cs": true,
+      "leaf_v7_vs_v6_delta": -1378362,
+      "bind_v7_vs_v6_delta": -2493544,
+      "witness_chal_saves": true,
+      "fixed_fold_save_r1cs": 92628,
+      "deep_ro_elision_r1cs": 310646,
+      "note": "T6h: witness Chal (no Keccak FS) + fixed-log FriFold + DeepRo elided. Chal FS was ~985k of v6."
+    },
+    "walk_ood_bind_overhead": {
+      "saves_r1cs": true,
+      "bind_v8_vs_v7_delta": -1394816,
+      "walk_delta": 866159,
+      "leaf_bind_delta": 654028,
+      "ood_delta": 440938,
+      "note": "T6i: walk/bind lite (no SHA3) + OOD witness (no transition fold). Walk SHA3 dominated."
+    },
+    "ood_transition_restore": {
+      "saves_r1cs": false,
+      "bind_v9_r1cs": 484950,
+      "bind_v9_vs_v8_delta": 202406,
+      "incremental_fold_est_v9": 463005,
+      "spare_vs_headroom": 821663,
+      "fits_headroom": true,
+      "next_leaf_bind_sha3_est": 654028,
+      "next_leaf_bind_sha3_fits": true,
+      "note": "T6j budget-honest: restore full Unitary OOD×2 on v8 spine. Delta vs v8 smaller than v7 ablation (~441k) because v8 already paid witness OOD in-field. spare~822k ≥ leaf-bind SHA3 est → next candidate green."
+    },
+    "leaf_bind_sha3_restore": {
+      "saves_r1cs": false,
+      "bind_v10_r1cs": 1040873,
+      "bind_v10_vs_v9_delta": 555923,
+      "incremental_fold_est_v10": 1018928,
+      "spare_vs_headroom": 265740,
+      "fits_headroom": true,
+      "next_walk_sha3_est": 866159,
+      "next_walk_sha3_fits": false,
+      "note": "T6k: restore full LeafBindUnitary×2 SHA3 on v9. Delta~556k < ablation 654k. spare~266k < Walk SHA3 est → stop Walk restore."
+    },
+    "restore_ladder_frozen": true,
+    "restore_ladder_frozen_at": "bind_v10",
+    "restore_ladder_freeze_reason": "Walk SHA3 (~866k) exceeds spare (~266k); N=1 ≤30M headroom absolute; approve freeze of Partial bind_v10",
+    "bind_v9_r1cs": 484950,
+    "bind_v10_r1cs": 1040873,
+    "n1_headroom_remaining": 1284668,
+    "incremental_fold_est_v2": 4179609,
+    "incremental_fold_est_v3": 6072108,
+    "incremental_fold_est_v4": 3594751,
+    "incremental_fold_est_v5": 3486223,
+    "incremental_fold_est_v6": 2770597,
+    "incremental_fold_est_v7": 1655415,
+    "incremental_fold_est_v8": 260599,
+    "incremental_fold_est_v9": 463005,
+    "incremental_fold_est_v10": 1018928,
+    "fits_headroom": true,
+    "forbid_auth_x2_fold_into_unified": true,
+    "best_auth_x2_kpi": "thick_child_verify_leaf_auth_bind_v10",
+    "best_leaf_auth_kpi": "thick_leaf_fri_fs_auth_v7",
+    "best_fitting_minimal_partial": "thick_child_verify_leaf_auth_bind_v8",
+    "next_priorities": [
+      "devnet_v3_packed_rehearsal",
+      "max_child_bytes_toward_87kib",
+      "grant_audit_docs_bind_v10"
+    ],
+    "note": "T6k FREEZE: bind_v10 (1.04M) is the frozen Partial Auth×2 KPI (OOD×2 + leaf-bind SHA3×2; WalkLite; Auth v7). incr~1,018,928 ≤1.28M; spare~266k. Walk SHA3 / Chal FS / Mmcs / DeepRo restores stopped. Production unified fold + Settlement default remain deferred/frozen. Next: Devnet V3 rehearsal, Max→87KiB, grant/audit brief.",
+    "measured_at": "2026-09-13"
+  }
+}

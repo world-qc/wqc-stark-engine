@@ -1,0 +1,13 @@
+{
+  "statement": "thick_leaf_bind_unitary_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine child_stark_binding / leaf_plonky3_payload (unitary v2 extract)",
+  "measured_at": "2026-09-06",
+  "approx_r1cs": 252591,
+  "mini_unitary_len": 43,
+  "payload_len": 8,
+  "kind": 0,
+  "container_digest": [168, 179, 150, 206, 137, 109, 151, 225, 251, 115, 91, 150, 59, 49, 7, 28, 166, 149, 210, 229, 105, 173, 124, 3, 2, 103, 207, 216, 108, 221, 209, 124],
+  "stark_digest": [201, 255, 184, 249, 215, 235, 193, 173, 188, 188, 49, 108, 254, 224, 52, 203, 161, 88, 183, 198, 201, 60, 52, 100, 42, 11, 132, 41, 102, 106, 61, 16],
+  "notes": "Fixed mini unitary v2: SHA3(container) + SHA3(Plonky3 payload)==stark_digest + Kind=LEAF; not full Plonky3 verify; multi-level / born-traj / ≡ verify_root_proof deferred"
+}

@@ -1,0 +1,14 @@
+{
+  "statement": "thick_child_verify_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine verify_composed_proof digest steps + child_stark_binding (compose-v3 / leaf fallback)",
+  "measured_at": "2026-09-06",
+  "approx_r1cs": 494874,
+  "mini_compose_len": 109,
+  "grandchild_len": 8,
+  "left_digest": [122, 60, 29, 220, 118, 37, 76, 19, 37, 228, 190, 71, 98, 147, 209, 38, 9, 101, 242, 116, 131, 216, 94, 23, 152, 248, 89, 93, 64, 78, 102, 143],
+  "right_digest": [211, 202, 2, 114, 95, 202, 176, 179, 212, 3, 246, 54, 138, 207, 121, 232, 154, 252, 64, 81, 23, 186, 122, 134, 212, 255, 25, 94, 79, 153, 170, 118],
+  "left_kind": 1,
+  "right_kind": 1,
+  "notes": "One-level compose recurse: container digests + AGG stark_digest bind + nested grandchild digests; multi-level walk / leaf Plonky3 / born-traj extract deferred"
+}

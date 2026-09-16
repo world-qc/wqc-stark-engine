@@ -1,0 +1,16 @@
+{
+  "statement": "thick_ood_unitary_v0",
+  "gate": "e5b-3d",
+  "source": "wqc-stark-engine fold_ood_native(Unitary) / QuantumExecutionAir transition_constraint_expr",
+  "measured_at": "2026-09-05",
+  "kind": "unitary",
+  "width": 21,
+  "alpha": [9, 2, 3],
+  "is_transition": [1, 0, 0],
+  "inv_vanishing": [3, 4, 5],
+  "link": 1,
+  "next_amp_re0": 5,
+  "folded": [25, 0, 0],
+  "quotient": [75, 100, 125],
+  "notes": "identity-gate row (selectors 0); leaf Unitary OOD — Born/Shot still open"
+}

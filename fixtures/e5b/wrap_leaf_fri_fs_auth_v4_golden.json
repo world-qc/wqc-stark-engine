@@ -1,0 +1,9 @@
+{
+  "approx_r1cs": 2224460,
+  "gate": "e5b-3d",
+  "lever": "no_quot_val_mmcs_path",
+  "measured_at": "2026-09-13",
+  "notes": "T6e: v2 Chal + Trace/FL/Commit Mmcs; Quot ValMmcs elided (QuotLeafRow DeepRo-only). Partial: QuotRoot unbound to QuotLeafRow.",
+  "statement": "thick_leaf_fri_fs_auth_v4",
+  "v2_approx_r1cs": 2809318
+}

@@ -1,0 +1,59 @@
+{
+  "bind_v7_r1cs": 1677360,
+  "bind_v8_r1cs": 282544,
+  "deltas": {
+    "auth_x2_r1cs": 43890,
+    "leaf_bind_standalone": 343792,
+    "leaf_bind_x2_r1cs": 654028,
+    "ood_standalone": 105658,
+    "ood_x2_r1cs": 440938,
+    "walk_r1cs": 866159,
+    "walk_standalone": 768126
+  },
+  "gate": "e5b-3d",
+  "implemented_as": "walk_lite_bind_lite_ood_witness",
+  "measured_at": "2026-09-13",
+  "notes": "T6i: SHA3 digests dominate walk/leaf-bind; OOD transition fold is next; v8 elides all three.",
+  "rows": [
+    {
+      "approx_r1cs": 1677360,
+      "name": "bind_v7"
+    },
+    {
+      "approx_r1cs": 811201,
+      "delta_vs_v7": 866159,
+      "name": "v7_no_walk"
+    },
+    {
+      "approx_r1cs": 1023332,
+      "delta_vs_v7": 654028,
+      "name": "v7_no_leaf_bind"
+    },
+    {
+      "approx_r1cs": 1236422,
+      "delta_vs_v7": 440938,
+      "name": "v7_no_ood"
+    },
+    {
+      "approx_r1cs": 43890,
+      "name": "v7_auth_only"
+    },
+    {
+      "approx_r1cs": 768126,
+      "name": "walk_only"
+    },
+    {
+      "approx_r1cs": 343792,
+      "name": "leaf_bind_only"
+    },
+    {
+      "approx_r1cs": 105658,
+      "name": "ood_unitary_only"
+    },
+    {
+      "approx_r1cs": 282544,
+      "name": "bind_v8"
+    }
+  ],
+  "statement": "thick_child_verify_leaf_auth_bind_v7_overhead_ablation"
+}

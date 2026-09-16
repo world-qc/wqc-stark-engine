@@ -1,0 +1,14 @@
+{
+  "statement": "thick_chal_mmcs_v0",
+  "gate": "e5b-3d",
+  "source": "flatten EF3×2 → ValMmcs Poseidon2 path (ChallengeMmcs single-matrix, query=1)",
+  "measured_at": "2026-09-05",
+  "chal_v0": [1, 2, 3],
+  "chal_v1": [4, 5, 6],
+  "leaf_row": [1, 2, 3, 4, 5, 6],
+  "leaf_digest": [108, 203, 222, 34, 253, 133, 166, 41, 49, 245, 254, 44, 171, 102, 241, 9, 229, 219, 255, 10, 100, 189, 233, 7, 217, 1, 208, 113, 5, 84, 128, 84],
+  "sibling_limbs": [7, 7, 7, 7, 7, 7, 7, 7],
+  "path_index": 0,
+  "path_root": [251, 14, 235, 85, 237, 26, 227, 6, 115, 85, 115, 127, 32, 148, 72, 37, 249, 54, 124, 108, 40, 125, 162, 109, 179, 37, 134, 59, 161, 171, 172, 25],
+  "notes": "commit-phase / unitary first-layer single matrix W=6; Aggregation multi-height batch+inject deferred"
+}

@@ -1,0 +1,19 @@
+{
+  "statement": "thick_fri_v0",
+  "gate": "e5b-3b",
+  "source": "wqc-stark-engine verify_fri_fold_{x,y}_native / fri_fold_step_limbs_*",
+  "measured_at": "2026-09-05",
+  "log_folded_height": 3,
+  "index": 1,
+  "beta": [11, 22, 33],
+  "v0": [1, 2, 3],
+  "v1": [4, 5, 6],
+  "fold_x": {
+    "t_inv": 1177558791,
+    "out": [559677532, 1378615361, 459538457]
+  },
+  "fold_y": {
+    "t_inv": 628957573,
+    "out": [1833882531, 1104419935, 1083967864]
+  }
+}
