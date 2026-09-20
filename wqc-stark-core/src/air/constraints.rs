@@ -3,6 +3,8 @@
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mersenne_31::Mersenne31;
 
+use crate::trace_spec::{GATE_RX, GATE_RY, GATE_RZ};
+
 /// One expanded AIR row parameterized over a ring type.
 #[derive(Debug, Clone)]
 pub struct AirRow<FR> {
@@ -169,14 +171,57 @@ pub fn transition_accumulator<FR: Field>(
         + (next.v1_re - expected_cc_v1_re).square()
         + (next.v1_im - expected_cc_v1_im).square();
 
-    let rot_0 = (next.v0_re * scale_factor) - (curr.v0_re * curr.p_cos - curr.v1_re * curr.p_sin);
-    let rot_1 = (next.v0_im * scale_factor) - (curr.v0_im * curr.p_cos - curr.v1_im * curr.p_sin);
-    let rot_2 = (next.v1_re * scale_factor) - (curr.v1_re * curr.p_cos + curr.v0_re * curr.p_sin);
-    let rot_3 = (next.v1_im * scale_factor) - (curr.v1_im * curr.p_cos + curr.v0_im * curr.p_sin);
-    let cost_rot = (rot_0 * scale_inverse).square()
-        + (rot_1 * scale_inverse).square()
-        + (rot_2 * scale_inverse).square()
-        + (rot_3 * scale_inverse).square();
+    let rot_ry_0 =
+        (next.v0_re * scale_factor) - (curr.v0_re * curr.p_cos - curr.v1_re * curr.p_sin);
+    let rot_ry_1 =
+        (next.v0_im * scale_factor) - (curr.v0_im * curr.p_cos - curr.v1_im * curr.p_sin);
+    let rot_ry_2 =
+        (next.v1_re * scale_factor) - (curr.v1_re * curr.p_cos + curr.v0_re * curr.p_sin);
+    let rot_ry_3 =
+        (next.v1_im * scale_factor) - (curr.v1_im * curr.p_cos + curr.v0_im * curr.p_sin);
+    let cost_ry = (rot_ry_0 * scale_inverse).square()
+        + (rot_ry_1 * scale_inverse).square()
+        + (rot_ry_2 * scale_inverse).square()
+        + (rot_ry_3 * scale_inverse).square();
+
+    // RX(θ): v0' = c·v0 − i·s·v1, v1' = −i·s·v0 + c·v1
+    let rot_rx_0 =
+        (next.v0_re * scale_factor) - (curr.v0_re * curr.p_cos + curr.v1_im * curr.p_sin);
+    let rot_rx_1 =
+        (next.v0_im * scale_factor) - (curr.v0_im * curr.p_cos - curr.v1_re * curr.p_sin);
+    let rot_rx_2 =
+        (next.v1_re * scale_factor) - (curr.v1_re * curr.p_cos + curr.v0_im * curr.p_sin);
+    let rot_rx_3 =
+        (next.v1_im * scale_factor) - (curr.v1_im * curr.p_cos - curr.v0_re * curr.p_sin);
+    let cost_rx = (rot_rx_0 * scale_inverse).square()
+        + (rot_rx_1 * scale_inverse).square()
+        + (rot_rx_2 * scale_inverse).square()
+        + (rot_rx_3 * scale_inverse).square();
+
+    // RZ(θ): v0' = e^{-iθ/2} v0, v1' = e^{iθ/2} v1
+    let rot_rz_0 =
+        (next.v0_re * scale_factor) - (curr.v0_re * curr.p_cos + curr.v0_im * curr.p_sin);
+    let rot_rz_1 =
+        (next.v0_im * scale_factor) - (curr.v0_im * curr.p_cos - curr.v0_re * curr.p_sin);
+    let rot_rz_2 =
+        (next.v1_re * scale_factor) - (curr.v1_re * curr.p_cos - curr.v1_im * curr.p_sin);
+    let rot_rz_3 =
+        (next.v1_im * scale_factor) - (curr.v1_im * curr.p_cos + curr.v1_re * curr.p_sin);
+    let cost_rz = (rot_rz_0 * scale_inverse).square()
+        + (rot_rz_1 * scale_inverse).square()
+        + (rot_rz_2 * scale_inverse).square()
+        + (rot_rz_3 * scale_inverse).square();
+
+    // Lagrange on gate_id ∈ {RX=10, RY=11, RZ=12} while sel_rot is the enable bit.
+    let gt = curr.gate_type;
+    let ten = FR::from_u32(GATE_RX);
+    let eleven = FR::from_u32(GATE_RY);
+    let twelve = FR::from_u32(GATE_RZ);
+    let inv2 = FR::from_u32(2).inverse();
+    let is_rx = (gt - eleven) * (gt - twelve) * inv2;
+    let is_ry = -(gt - ten) * (gt - twelve);
+    let is_rz = (gt - ten) * (gt - eleven) * inv2;
+    let cost_rot = is_rx * cost_rx + is_ry * cost_ry + is_rz * cost_rz;
 
     let gate_costs = curr.sel_x * cost_x
         + curr.sel_y * cost_y

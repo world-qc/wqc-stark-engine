@@ -116,18 +116,55 @@ where
         + (next[17].into() - expected_cc_v1_re).square()
         + (next[18].into() - expected_cc_v1_im).square();
 
-    let rot_0 = (next[15].into() * scale_factor.clone())
+    let rot_ry_0 = (next[15].into() * scale_factor.clone())
         - (curr[15].into() * curr[13].into() - curr[17].into() * curr[14].into());
-    let rot_1 = (next[16].into() * scale_factor.clone())
+    let rot_ry_1 = (next[16].into() * scale_factor.clone())
         - (curr[16].into() * curr[13].into() - curr[18].into() * curr[14].into());
-    let rot_2 = (next[17].into() * scale_factor.clone())
+    let rot_ry_2 = (next[17].into() * scale_factor.clone())
         - (curr[17].into() * curr[13].into() + curr[15].into() * curr[14].into());
-    let rot_3 = (next[18].into() * scale_factor.clone())
+    let rot_ry_3 = (next[18].into() * scale_factor.clone())
         - (curr[18].into() * curr[13].into() + curr[16].into() * curr[14].into());
-    let cost_rot = (rot_0 * scale_inverse.clone()).square()
-        + (rot_1 * scale_inverse.clone()).square()
-        + (rot_2 * scale_inverse.clone()).square()
-        + (rot_3 * scale_inverse).square();
+    let cost_ry = (rot_ry_0 * scale_inverse.clone()).square()
+        + (rot_ry_1 * scale_inverse.clone()).square()
+        + (rot_ry_2 * scale_inverse.clone()).square()
+        + (rot_ry_3 * scale_inverse.clone()).square();
+
+    let rot_rx_0 = (next[15].into() * scale_factor.clone())
+        - (curr[15].into() * curr[13].into() + curr[18].into() * curr[14].into());
+    let rot_rx_1 = (next[16].into() * scale_factor.clone())
+        - (curr[16].into() * curr[13].into() - curr[17].into() * curr[14].into());
+    let rot_rx_2 = (next[17].into() * scale_factor.clone())
+        - (curr[17].into() * curr[13].into() + curr[16].into() * curr[14].into());
+    let rot_rx_3 = (next[18].into() * scale_factor.clone())
+        - (curr[18].into() * curr[13].into() - curr[15].into() * curr[14].into());
+    let cost_rx = (rot_rx_0 * scale_inverse.clone()).square()
+        + (rot_rx_1 * scale_inverse.clone()).square()
+        + (rot_rx_2 * scale_inverse.clone()).square()
+        + (rot_rx_3 * scale_inverse.clone()).square();
+
+    let rot_rz_0 = (next[15].into() * scale_factor.clone())
+        - (curr[15].into() * curr[13].into() + curr[16].into() * curr[14].into());
+    let rot_rz_1 = (next[16].into() * scale_factor.clone())
+        - (curr[16].into() * curr[13].into() - curr[15].into() * curr[14].into());
+    let rot_rz_2 = (next[17].into() * scale_factor.clone())
+        - (curr[17].into() * curr[13].into() - curr[18].into() * curr[14].into());
+    let rot_rz_3 = (next[18].into() * scale_factor.clone())
+        - (curr[18].into() * curr[13].into() + curr[17].into() * curr[14].into());
+    let cost_rz = (rot_rz_0 * scale_inverse.clone()).square()
+        + (rot_rz_1 * scale_inverse.clone()).square()
+        + (rot_rz_2 * scale_inverse.clone()).square()
+        + (rot_rz_3 * scale_inverse).square();
+
+    // Lagrange on gate_id ∈ {10,11,12}; sel_rot (curr[10]) enables the family.
+    let gt: AB::Expr = curr[0].into();
+    let ten: AB::Expr = AB::F::from_u32(10).into();
+    let eleven: AB::Expr = AB::F::from_u32(11).into();
+    let twelve: AB::Expr = AB::F::from_u32(12).into();
+    let inv2: AB::Expr = AB::F::from_u32(2).inverse().into();
+    let is_rx = (gt.clone() - eleven.clone()) * (gt.clone() - twelve.clone()) * inv2.clone();
+    let is_ry = -(gt.clone() - ten.clone()) * (gt.clone() - twelve);
+    let is_rz = (gt.clone() - ten) * (gt - eleven) * inv2;
+    let cost_rot = is_rx * cost_rx + is_ry * cost_ry + is_rz * cost_rz;
 
     let gate_costs = curr[1].into() * cost_x
         + curr[2].into() * cost_y
