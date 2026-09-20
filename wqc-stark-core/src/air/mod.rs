@@ -34,6 +34,18 @@ pub fn f64_to_m31(val: f64) -> Mersenne31 {
     }
 }
 
+/// Inverse of [`f64_to_m31`] for host-side AIR-exact amplitude snapping.
+pub fn m31_to_f64(val: Mersenne31) -> f64 {
+    const P: u32 = 2_147_483_647;
+    let v = val.as_canonical_u32();
+    let signed = if v > P / 2 {
+        (v as i64) - (P as i64)
+    } else {
+        v as i64
+    };
+    signed as f64 / FIXED_POINT_SCALE
+}
+
 /// Selector index for a gate id (1–12). Returns `None` for padding (`0`).
 pub fn selector_index_for_gate(gate_raw: u32) -> Option<usize> {
     match gate_raw {
