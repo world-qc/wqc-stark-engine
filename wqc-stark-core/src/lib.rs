@@ -22,6 +22,8 @@ pub use aggregation::{
     verify_unitary_trajectory_leaf_compose,
 };
 pub use air::evaluate_execution_trace;
+pub use air::f64_to_m31;
+pub use air::m31_to_f64;
 pub use air::trajectory::z_marginal_from_statevector;
 pub use distribution::{
     append_distribution_tail, base_proof_without_distribution_tail, calculate_probability_digest,
