@@ -269,7 +269,8 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
                 sub_task_id: context.sub_task_id,
                 probability_digest: &segment.probability_digest,
                 terminal_statevector_digest: sv_digest,
-                security_level: context.security_level,
+                // Prefer restored / orch tier (same as unitary FRI), not the raw caller string.
+                security_level: verify_ctx.security_level,
             };
             if !verify_born_stark_proof(&born_ctx, &segment, born_bytes) {
                 eprintln!("[STARK Core] Failed: Born zk STARK verification failed");
@@ -301,7 +302,7 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
                 context.sub_task_id,
                 &segment,
                 bundle,
-                context.security_level,
+                verify_ctx.security_level,
             ) {
                 eprintln!("[STARK Core] Failed: trajectory zk STARK verification failed");
                 return false;

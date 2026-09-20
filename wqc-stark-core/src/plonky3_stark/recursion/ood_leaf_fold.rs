@@ -330,43 +330,156 @@ where
         ),
     );
 
-    let rot_0 = ef_sub_limbs::<AB>(
+    let rot_ry_0 = ef_sub_limbs::<AB>(
         &ef_mul_limbs::<AB>(col::<AB>(next, 15), &scale_factor),
         &ef_sub_limbs::<AB>(
             &ef_mul_limbs::<AB>(col::<AB>(local, 15), col::<AB>(local, 13)),
             &ef_mul_limbs::<AB>(col::<AB>(local, 17), col::<AB>(local, 14)),
         ),
     );
-    let rot_1 = ef_sub_limbs::<AB>(
+    let rot_ry_1 = ef_sub_limbs::<AB>(
         &ef_mul_limbs::<AB>(col::<AB>(next, 16), &scale_factor),
         &ef_sub_limbs::<AB>(
             &ef_mul_limbs::<AB>(col::<AB>(local, 16), col::<AB>(local, 13)),
             &ef_mul_limbs::<AB>(col::<AB>(local, 18), col::<AB>(local, 14)),
         ),
     );
-    let rot_2 = ef_sub_limbs::<AB>(
+    let rot_ry_2 = ef_sub_limbs::<AB>(
         &ef_mul_limbs::<AB>(col::<AB>(next, 17), &scale_factor),
         &ef_add_limbs::<AB>(
             &ef_mul_limbs::<AB>(col::<AB>(local, 17), col::<AB>(local, 13)),
             &ef_mul_limbs::<AB>(col::<AB>(local, 15), col::<AB>(local, 14)),
         ),
     );
-    let rot_3 = ef_sub_limbs::<AB>(
+    let rot_ry_3 = ef_sub_limbs::<AB>(
         &ef_mul_limbs::<AB>(col::<AB>(next, 18), &scale_factor),
         &ef_add_limbs::<AB>(
             &ef_mul_limbs::<AB>(col::<AB>(local, 18), col::<AB>(local, 13)),
             &ef_mul_limbs::<AB>(col::<AB>(local, 16), col::<AB>(local, 14)),
         ),
     );
+    let cost_ry = ef_add_limbs::<AB>(
+        &ef_add_limbs::<AB>(
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_ry_0, &scale_inverse)),
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_ry_1, &scale_inverse)),
+        ),
+        &ef_add_limbs::<AB>(
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_ry_2, &scale_inverse)),
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_ry_3, &scale_inverse)),
+        ),
+    );
+
+    let rot_rx_0 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 15), &scale_factor),
+        &ef_add_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 15), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 18), col::<AB>(local, 14)),
+        ),
+    );
+    let rot_rx_1 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 16), &scale_factor),
+        &ef_sub_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 16), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 17), col::<AB>(local, 14)),
+        ),
+    );
+    let rot_rx_2 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 17), &scale_factor),
+        &ef_add_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 17), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 16), col::<AB>(local, 14)),
+        ),
+    );
+    let rot_rx_3 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 18), &scale_factor),
+        &ef_sub_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 18), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 15), col::<AB>(local, 14)),
+        ),
+    );
+    let cost_rx = ef_add_limbs::<AB>(
+        &ef_add_limbs::<AB>(
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rx_0, &scale_inverse)),
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rx_1, &scale_inverse)),
+        ),
+        &ef_add_limbs::<AB>(
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rx_2, &scale_inverse)),
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rx_3, &scale_inverse)),
+        ),
+    );
+
+    let rot_rz_0 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 15), &scale_factor),
+        &ef_add_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 15), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 16), col::<AB>(local, 14)),
+        ),
+    );
+    let rot_rz_1 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 16), &scale_factor),
+        &ef_sub_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 16), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 15), col::<AB>(local, 14)),
+        ),
+    );
+    let rot_rz_2 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 17), &scale_factor),
+        &ef_sub_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 17), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 18), col::<AB>(local, 14)),
+        ),
+    );
+    let rot_rz_3 = ef_sub_limbs::<AB>(
+        &ef_mul_limbs::<AB>(col::<AB>(next, 18), &scale_factor),
+        &ef_add_limbs::<AB>(
+            &ef_mul_limbs::<AB>(col::<AB>(local, 18), col::<AB>(local, 13)),
+            &ef_mul_limbs::<AB>(col::<AB>(local, 17), col::<AB>(local, 14)),
+        ),
+    );
+    let cost_rz = ef_add_limbs::<AB>(
+        &ef_add_limbs::<AB>(
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rz_0, &scale_inverse)),
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rz_1, &scale_inverse)),
+        ),
+        &ef_add_limbs::<AB>(
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rz_2, &scale_inverse)),
+            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_rz_3, &scale_inverse)),
+        ),
+    );
+
+    let ten = ef_embed_base::<AB>(AB::F::from_u32(10).into());
+    let eleven = ef_embed_base::<AB>(AB::F::from_u32(11).into());
+    let twelve = ef_embed_base::<AB>(AB::F::from_u32(12).into());
+    let inv2 = ef_embed_base::<AB>(AB::F::from_u32(2).inverse().into());
+    let gt = col::<AB>(local, 0);
+    let is_rx = ef_mul_limbs::<AB>(
+        &ef_mul_limbs::<AB>(
+            &ef_sub_limbs::<AB>(gt, &eleven),
+            &ef_sub_limbs::<AB>(gt, &twelve),
+        ),
+        &inv2,
+    );
+    // is_ry = -(gt-10)*(gt-12)
+    let is_ry = ef_sub_limbs::<AB>(
+        &ef_embed_base::<AB>(AB::F::ZERO.into()),
+        &ef_mul_limbs::<AB>(
+            &ef_sub_limbs::<AB>(gt, &ten),
+            &ef_sub_limbs::<AB>(gt, &twelve),
+        ),
+    );
+    let is_rz = ef_mul_limbs::<AB>(
+        &ef_mul_limbs::<AB>(
+            &ef_sub_limbs::<AB>(gt, &ten),
+            &ef_sub_limbs::<AB>(gt, &eleven),
+        ),
+        &inv2,
+    );
     let cost_rot = ef_add_limbs::<AB>(
         &ef_add_limbs::<AB>(
-            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_0, &scale_inverse)),
-            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_1, &scale_inverse)),
+            &ef_mul_limbs::<AB>(&is_rx, &cost_rx),
+            &ef_mul_limbs::<AB>(&is_ry, &cost_ry),
         ),
-        &ef_add_limbs::<AB>(
-            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_2, &scale_inverse)),
-            &ef_square_limbs::<AB>(&ef_mul_limbs::<AB>(&rot_3, &scale_inverse)),
-        ),
+        &ef_mul_limbs::<AB>(&is_rz, &cost_rz),
     );
 
     let gate_costs = ef_add_limbs::<AB>(

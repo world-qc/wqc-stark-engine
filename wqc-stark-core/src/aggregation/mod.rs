@@ -67,15 +67,32 @@ pub struct RootVerifyContext<'a> {
 }
 
 /// Verifies a single child proof (leaf or nested compose) before composition.
+///
+/// `security_level_fallback` is used when `leaf_ctx` is missing or has an empty
+/// `security_level` (Born / trajectory children do not carry a `SEC1` tag). Callers
+/// composing under a known orchestrator tier must pass [`ComposeContext::security_level`].
 pub fn verify_child_proof(
     child: &[u8],
     parent_task_id: &str,
     leaf_ctx: Option<&StarkContext<'_>>,
 ) -> Result<(), String> {
+    verify_child_proof_with_security(child, parent_task_id, leaf_ctx, "")
+}
+
+/// Like [`verify_child_proof`], with an explicit FRI-tier fallback for aux leaves.
+pub fn verify_child_proof_with_security(
+    child: &[u8],
+    parent_task_id: &str,
+    leaf_ctx: Option<&StarkContext<'_>>,
+    security_level_fallback: &str,
+) -> Result<(), String> {
     if child.is_empty() {
         return Err("child proof is empty".to_string());
     }
-    let security_level = leaf_ctx.map(|c| c.security_level).unwrap_or("");
+    let security_level = leaf_ctx
+        .map(|c| c.security_level)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(security_level_fallback);
     if is_trajectory_leaf_proof(child) {
         return verify_trajectory_leaf(parent_task_id, child, security_level)
             .map_err(|e| format!("trajectory leaf verification failed: {e}"));
@@ -121,6 +138,15 @@ pub fn verify_child_proof(
     let parsed =
         parse_leaf_binding(child).ok_or_else(|| "cannot parse leaf public inputs".to_string())?;
     let ctx = parsed_to_stark_context(&parsed);
+    // Prefer PI-bound SEC1; if absent, apply compose-level fallback.
+    let ctx = if ctx.security_level.is_empty() && !security_level_fallback.is_empty() {
+        StarkContext {
+            security_level: security_level_fallback,
+            ..ctx
+        }
+    } else {
+        ctx
+    };
     if verify_stark_proof_core(&ctx, child) {
         Ok(())
     } else {
@@ -163,8 +189,18 @@ pub fn compose_stark_proofs_with_pcs(
     if context.parent_task_id.is_empty() {
         return Err("parent_task_id is required".to_string());
     }
-    verify_child_proof(left_child, context.parent_task_id, left_leaf_ctx)?;
-    verify_child_proof(right_child, context.parent_task_id, right_leaf_ctx)?;
+    verify_child_proof_with_security(
+        left_child,
+        context.parent_task_id,
+        left_leaf_ctx,
+        context.security_level,
+    )?;
+    verify_child_proof_with_security(
+        right_child,
+        context.parent_task_id,
+        right_leaf_ctx,
+        context.security_level,
+    )?;
 
     let left_hash = child_digest(left_child);
     let right_hash = child_digest(right_child);
@@ -476,8 +512,18 @@ pub fn verify_composed_proof(context: &ComposeContext<'_>, proof: &[u8]) -> Resu
         }
     }
 
-    verify_child_proof(&left_child, context.parent_task_id, None)?;
-    verify_child_proof(&right_child, context.parent_task_id, None)?;
+    verify_child_proof_with_security(
+        &left_child,
+        context.parent_task_id,
+        None,
+        context.security_level,
+    )?;
+    verify_child_proof_with_security(
+        &right_child,
+        context.parent_task_id,
+        None,
+        context.security_level,
+    )?;
 
     #[cfg(feature = "plonky3-stark")]
     if let Some(rec_bytes) = rec_tail {
@@ -878,6 +924,96 @@ mod integration_tests {
 
     fn sample_trace() -> Vec<f64> {
         crate::trace_spec::idle_qubit0_trace()
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn compose_unitary_born_respects_low_security_level() {
+        use crate::distribution::{calculate_probability_digest, BornBinding};
+        use crate::generate_plonky3_stark_proof;
+        use crate::plonky3_stark::{generate_born_stark_proof, BornStarkContext};
+
+        let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
+        let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
+        let probs = vec![("00".into(), 0.5), ("11".into(), 0.5)];
+        let binding = BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv).expect("bind");
+        let segment = crate::distribution::DistributionSegment {
+            sample_seed: 42,
+            shots: 128,
+            measurement_spec_hash: String::new(),
+            probability_digest: calculate_probability_digest(&probs),
+            probabilities: probs,
+            born_binding: Some(binding),
+        };
+        let link = segment
+            .born_binding
+            .as_ref()
+            .unwrap()
+            .terminal_statevector_digest
+            .clone();
+        let link_ref: &str = Box::leak(link.into_boxed_str());
+        let ctx = StarkContext {
+            circuit_id: "circuit-bell",
+            sub_task_id: "sub-born-low",
+            node_id: "node-1",
+            slice_id: "0",
+            output_hash: "counts-hash",
+            terminal_statevector_digest: link_ref,
+            measurement_spec_hash: "",
+            security_level: "low",
+        };
+        let unitary =
+            generate_plonky3_stark_proof(&ctx, &crate::trace_spec::golden_h_q0_trace()).expect("u");
+        let born_ctx = BornStarkContext {
+            sub_task_id: "sub-born-low",
+            probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: link_ref,
+            security_level: "low",
+        };
+        let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born");
+        compose_unitary_born_leaf(&ctx, &unitary, &segment, &born_inner)
+            .expect("compose must keep low FRI tier on Born re-verify");
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn verify_child_born_uses_compose_security_fallback() {
+        use crate::distribution::{calculate_probability_digest, BornBinding};
+        use crate::plonky3_stark::{generate_born_stark_proof, BornStarkContext};
+
+        let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
+        let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
+        let probs = vec![("00".into(), 0.5), ("11".into(), 0.5)];
+        let binding = BornBinding::from_specs(2, 2, &[(0, 0), (1, 1)], sv).expect("bind");
+        let segment = crate::distribution::DistributionSegment {
+            sample_seed: 7,
+            shots: 64,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: calculate_probability_digest(&probs),
+            probabilities: probs,
+            born_binding: Some(binding),
+        };
+        let link = segment
+            .born_binding
+            .as_ref()
+            .unwrap()
+            .terminal_statevector_digest
+            .as_str();
+        let born_ctx = BornStarkContext {
+            sub_task_id: "sub-born-fb",
+            probability_digest: &segment.probability_digest,
+            terminal_statevector_digest: link,
+            security_level: "low",
+        };
+        let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born");
+        let child = encode_born_leaf("sub-born-fb", &segment, Some(&born_inner));
+
+        verify_child_proof_with_security(&child, "sub-born-fb", None, "low")
+            .expect("fallback low must verify");
+        assert!(
+            verify_child_proof_with_security(&child, "sub-born-fb", None, "").is_err(),
+            "empty fallback must expect 40 queries and reject low proof"
+        );
     }
 
     #[test]
