@@ -1008,11 +1008,7 @@ mod integration_tests {
         // Deferred /leaf_pcs receives the full unitary_born compose, not bare children.
         let bundle = crate::plonky3_stark::build_leaf_pcs_bundle_from_child(&composed)
             .expect("leaf PCS from unitary_born compose");
-        assert!(
-            bundle.certs.len() >= 2,
-            "expected unitary+born certs, got {}",
-            bundle.certs.len()
-        );
+        assert!(bundle.certs.len() >= 2, "expected unitary+born certs");
         crate::plonky3_stark::verify_leaf_pcs_bundle(&composed, &bundle)
             .expect("verify leaf PCS against compose");
     }
