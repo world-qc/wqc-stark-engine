@@ -241,17 +241,13 @@ pub unsafe extern "C" fn wqc_build_leaf_pcs_bundle(
         let proof_slice = slice::from_raw_parts(proof, proof_len as usize);
         let encoded = match build_encoded_leaf_pcs_bundle_from_child(proof_slice) {
             Ok(bytes) => bytes,
-            Err(err) => {
-                eprintln!("[Rust FFI] build_leaf_pcs failed: {err}");
+            Err(_err) => {
+                eprintln!("[Rust FFI] build_leaf_pcs failed");
                 return 0;
             }
         };
         if encoded.len() > out_buf_cap as usize {
-            eprintln!(
-                "[Rust FFI] build_leaf_pcs output too large: need {}, cap {}",
-                encoded.len(),
-                out_buf_cap
-            );
+            eprintln!("[Rust FFI] build_leaf_pcs output too large");
             return -2;
         }
         let out = slice::from_raw_parts_mut(out_buf, encoded.len());
@@ -291,8 +287,8 @@ pub unsafe extern "C" fn wqc_verify_leaf_pcs_bundle(
         };
         match verify_leaf_pcs_bundle(proof_slice, &bundle) {
             Ok(()) => 1,
-            Err(err) => {
-                eprintln!("[Rust FFI] verify_leaf_pcs failed: {err}");
+            Err(_err) => {
+                eprintln!("[Rust FFI] verify_leaf_pcs failed");
                 0
             }
         }
