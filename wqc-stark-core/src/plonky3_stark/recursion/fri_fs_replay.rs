@@ -3608,7 +3608,7 @@ mod tests {
             "gate": "e5b-3d",
             "source": "idle_qubit0_trace UnitaryAir low-security Trace+Quot+FL query 0 (FS-bound)",
             "measured_at": "2026-09-09",
-            "approx_r1cs": 4099834,
+            "approx_r1cs": 5400690,
             "n": 1,
             "leaf_width": UNITARY_TRACE_WIDTH,
             "quot_width": 48,
@@ -3986,8 +3986,8 @@ mod tests {
             fl_siblings.len(),
             v["fl_path_depth"].as_u64().unwrap() as usize
         );
-        // Remeasured after Go CompileThickLeafFriFsAuth (+FriFsChal α/ζ/β/roots).
-        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 4099834);
+        // Remeasured after Go CompileThickLeafFriFsAuth (+FriFsChal α/ζ/β/roots): 5400690.
+        assert_eq!(v["approx_r1cs"].as_u64().unwrap(), 5400690);
         assert_eq!(v["full_auth_geometry"].as_bool().unwrap(), false);
         assert_eq!(v["num_quot"].as_u64().unwrap(), 16);
         assert_eq!(v["fold_ys_len"].as_u64().unwrap(), 1);
