@@ -12,8 +12,8 @@ pub mod plonky3_stark;
 pub use aggregation::{
     born_proof_view, compose_stark_proofs, compose_stark_proofs_with_pcs,
     is_unitary_born_leaf_compose, is_unitary_trajectory_leaf_compose, parse_leaf_binding,
-    trajectory_proof_view, verify_child_proof, verify_composed_proof, verify_root_proof,
-    ComposeContext, ComposeHeader, ParsedLeafBinding, RootVerifyContext,
+    split_unitary_aux_compose, trajectory_proof_view, verify_child_proof, verify_composed_proof,
+    verify_root_proof, ComposeContext, ComposeHeader, ParsedLeafBinding, RootVerifyContext,
     UNITARY_BORN_COMPOSE_LABEL, UNITARY_TRAJ_COMPOSE_LABEL, V3_COMPOSE_MARKER,
 };
 #[cfg(feature = "plonky3-stark")]

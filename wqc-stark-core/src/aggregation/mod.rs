@@ -46,6 +46,19 @@ pub use transcript_v3::{
     ComposeHeader, CHILD_HASH_LEN, V3_COMPOSE_MARKER,
 };
 
+/// Splits a `leaf:unitary_born` / `leaf:unitary_traj` v3 compose into (left, right) children.
+///
+/// Strips RecAgg / AggregationAir tails before decoding. Used by deferred leaf PCS so the
+/// compose wrapper is not mistaken for a bare unitary v2 leaf.
+pub fn split_unitary_aux_compose(proof: &[u8]) -> Option<(&[u8], &[u8])> {
+    if !is_unitary_born_leaf_compose(proof) && !is_unitary_trajectory_leaf_compose(proof) {
+        return None;
+    }
+    let v3 = leaf_compose::compose_v3_body(proof);
+    let (_, left, right) = decode_compose_v3_slices(v3)?;
+    Some((left, right))
+}
+
 use crate::transcript::StarkContext;
 use crate::verify_stark_proof_core;
 
@@ -926,6 +939,24 @@ mod integration_tests {
         crate::trace_spec::idle_qubit0_trace()
     }
 
+    #[test]
+    fn split_unitary_aux_compose_born_and_traj_labels() {
+        let left = b"left-unitary-bytes";
+        let right = b"right-aux-bytes";
+        let born = encode_compose_v3("sub-born", UNITARY_BORN_COMPOSE_LABEL, "", left, right);
+        let (l, r) = split_unitary_aux_compose(&born).expect("born split");
+        assert_eq!(l, left.as_slice());
+        assert_eq!(r, right.as_slice());
+
+        let traj = encode_compose_v3("sub-traj", UNITARY_TRAJ_COMPOSE_LABEL, "", left, right);
+        let (l, r) = split_unitary_aux_compose(&traj).expect("traj split");
+        assert_eq!(l, left.as_slice());
+        assert_eq!(r, right.as_slice());
+
+        let root = encode_compose_v3("parent", "root", "m", left, right);
+        assert!(split_unitary_aux_compose(&root).is_none());
+    }
+
     #[cfg(feature = "plonky3-stark")]
     #[test]
     fn compose_unitary_born_respects_low_security_level() {
@@ -971,8 +1002,15 @@ mod integration_tests {
             security_level: "low",
         };
         let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born");
-        compose_unitary_born_leaf(&ctx, &unitary, &segment, &born_inner)
+        let composed = compose_unitary_born_leaf(&ctx, &unitary, &segment, &born_inner)
             .expect("compose must keep low FRI tier on Born re-verify");
+
+        // Deferred /leaf_pcs receives the full unitary_born compose, not bare children.
+        let bundle = crate::plonky3_stark::build_leaf_pcs_bundle_from_child(&composed)
+            .expect("leaf PCS from unitary_born compose");
+        assert!(bundle.certs.len() >= 2, "expected unitary+born certs");
+        crate::plonky3_stark::verify_leaf_pcs_bundle(&composed, &bundle)
+            .expect("verify leaf PCS against compose");
     }
 
     #[cfg(feature = "plonky3-stark")]

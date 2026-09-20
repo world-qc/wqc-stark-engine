@@ -15,7 +15,9 @@ use p3_uni_stark::Proof;
 use sha3::{Digest, Sha3_256};
 
 use crate::aggregation::{
-    is_born_leaf_proof, is_trajectory_leaf_proof, parse_leaf_binding, parsed_to_stark_context,
+    is_born_leaf_proof, is_trajectory_leaf_proof, is_unitary_born_leaf_compose,
+    is_unitary_trajectory_leaf_compose, parse_leaf_binding, parsed_to_stark_context,
+    split_unitary_aux_compose,
 };
 use crate::aggregation::{parse_born_leaf_prefix, parse_trajectory_leaf_prefix};
 use crate::distribution::base_proof_without_distribution_tail;
@@ -706,7 +708,61 @@ pub fn leaf_bundle_stmt_digest(bundle: &LeafPcsBundle) -> [u8; 32] {
     out
 }
 
+fn leaf_pcs_cert_count_for_child(child: &[u8]) -> Result<usize, String> {
+    if let Some((left, right)) = split_unitary_aux_compose(child) {
+        return Ok(leaf_pcs_cert_count_for_child(left)? + leaf_pcs_cert_count_for_child(right)?);
+    }
+    if is_trajectory_leaf_proof(child) {
+        return Ok(traj_plonky3_payloads_from_child(child)?.len());
+    }
+    // Born-only or unitary v2 leaf: one Circle STARK → one PCS cert.
+    Ok(1)
+}
+
+/// Prefer RecAgg-embedded left+right leaf PCS on `leaf:unitary_*` composes (no re-prove).
+fn try_bundle_from_unitary_aux_rec_agg(child: &[u8]) -> Result<Option<LeafPcsBundle>, String> {
+    if !is_unitary_born_leaf_compose(child) && !is_unitary_trajectory_leaf_compose(child) {
+        return Ok(None);
+    }
+    let Some((_, rec)) = super::prove::split_rec_tail(child) else {
+        return Ok(None);
+    };
+    let Some(sides) = super::transcript_v6::parse_rec_agg_sides_v6(rec) else {
+        return Ok(None);
+    };
+    let (Some(left), Some(right)) = (sides.left_leaf_bundle, sides.right_leaf_bundle) else {
+        return Ok(None);
+    };
+    let mut certs = left.certs;
+    certs.extend(right.certs);
+    let bundle = LeafPcsBundle { certs };
+    verify_leaf_pcs_bundle(child, &bundle)?;
+    Ok(Some(bundle))
+}
+
 pub fn verify_leaf_pcs_bundle(child: &[u8], bundle: &LeafPcsBundle) -> Result<(), String> {
+    if let Some((left, right)) = split_unitary_aux_compose(child) {
+        let left_n = leaf_pcs_cert_count_for_child(left)?;
+        let right_n = leaf_pcs_cert_count_for_child(right)?;
+        if bundle.certs.len() != left_n + right_n {
+            return Err(format!(
+                "unitary_aux compose cert count {} != left({})+right({})",
+                bundle.certs.len(),
+                left_n,
+                right_n
+            ));
+        }
+        let left_bundle = LeafPcsBundle {
+            certs: bundle.certs[..left_n].to_vec(),
+        };
+        let right_bundle = LeafPcsBundle {
+            certs: bundle.certs[left_n..].to_vec(),
+        };
+        verify_leaf_pcs_bundle(left, &left_bundle)?;
+        verify_leaf_pcs_bundle(right, &right_bundle)?;
+        return Ok(());
+    }
+
     if is_trajectory_leaf_proof(child) {
         let payloads = traj_plonky3_payloads_from_child(child)?;
         if payloads.len() != bundle.certs.len() {
@@ -749,8 +805,20 @@ pub fn verify_leaf_pcs_bundle(child: &[u8], bundle: &LeafPcsBundle) -> Result<()
     Ok(())
 }
 
-/// Builds a leaf PCS bundle from a unitary / born / traj child wrapper.
+/// Builds a leaf PCS bundle from a unitary / born / traj / unitary_aux-compose child wrapper.
 pub fn build_leaf_pcs_bundle_from_child(child_bytes: &[u8]) -> Result<LeafPcsBundle, String> {
+    if let Some(bundle) = try_bundle_from_unitary_aux_rec_agg(child_bytes)? {
+        return Ok(bundle);
+    }
+
+    if let Some((left, right)) = split_unitary_aux_compose(child_bytes) {
+        let mut left_bundle = build_leaf_pcs_bundle_from_child(left)?;
+        let right_bundle = build_leaf_pcs_bundle_from_child(right)?;
+        left_bundle.certs.extend(right_bundle.certs);
+        verify_leaf_pcs_bundle(child_bytes, &left_bundle)?;
+        return Ok(left_bundle);
+    }
+
     if is_trajectory_leaf_proof(child_bytes) {
         let payloads = traj_plonky3_payloads_from_child(child_bytes)?;
         let mut certs = Vec::with_capacity(payloads.len());
