@@ -326,6 +326,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes fixtures; run manually to regenerate golden"]
     fn emit_fri_fs_chain_golden() {
         use p3_field::BasedVectorSpace;
         use p3_field::PrimeField32;
@@ -886,6 +887,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes fixtures; run manually to regenerate golden"]
     fn emit_fri_fs_auth_golden() {
         use p3_commit::{Pcs, PolynomialSpace};
         use p3_field::PrimeField32;
@@ -1497,6 +1499,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes fixtures; run manually to regenerate golden"]
     fn emit_recagg_fs_mmcs_golden() {
         use p3_commit::{Pcs, PolynomialSpace};
         use p3_field::PrimeField32;
@@ -1662,6 +1665,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes fixtures; run manually to regenerate golden"]
     fn emit_recagg_fri_fs_observe_golden() {
         use p3_field::BasedVectorSpace;
         use p3_field::PrimeField32;
@@ -2018,6 +2022,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes fixtures; run manually to regenerate golden"]
     fn emit_recagg_fri_fs_chal_golden() {
         use p3_field::BasedVectorSpace;
         use p3_field::PrimeField32;
@@ -2430,6 +2435,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes fixtures; run manually to regenerate golden"]
     fn emit_recagg_fri_fs_auth_golden() {
         use p3_commit::{Pcs, PolynomialSpace};
         use p3_field::PrimeField32;
@@ -2909,6 +2915,11 @@ mod tests {
         );
         let raw =
             std::fs::read_to_string(golden_path).expect("wrap_recagg_fri_fs_auth_golden.json");
+        assert!(
+            !raw.trim().is_empty(),
+            "wrap_recagg_fri_fs_auth_golden.json is empty — likely a race with \
+             emit_recagg_fri_fs_auth_golden (that test must stay #[ignore])"
+        );
         let v: serde_json::Value = serde_json::from_str(&raw).expect("golden json");
         assert_eq!(
             v["statement"].as_str().unwrap(),
@@ -3264,6 +3275,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes fixtures; run manually to regenerate golden"]
     fn emit_leaf_fri_fs_auth_golden() {
         use p3_commit::{Pcs, PolynomialSpace};
         use p3_field::PrimeField32;
