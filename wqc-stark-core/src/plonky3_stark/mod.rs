@@ -54,7 +54,7 @@ pub use quantum_air::QuantumExecutionAir;
 pub use recursion::{
     append_rec_tail, build_agg_pcs_certificate, build_encoded_leaf_pcs_bundle_from_child,
     build_leaf_pcs_bundle_from_child, child_aggregation_transcript, child_stark_binding,
-    decode_leaf_pcs_bundle_bytes, encode_leaf_pcs_bundle_bytes,
+    decode_leaf_pcs_bundle_bytes, diagnose_parse_rec_agg_sides_v6, encode_leaf_pcs_bundle_bytes,
     generate_recursive_aggregation_proof, has_rec_tail, leaf_bundle_stark_sizes,
     parse_agg_v4_header, parse_agg_v4_header_any, parse_rec_agg_sides_v6, split_rec_tail,
     verify_agg_pcs_certificate, verify_leaf_pcs_bundle, verify_recursive_aggregation_proof,

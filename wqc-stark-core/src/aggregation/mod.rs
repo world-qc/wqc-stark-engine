@@ -699,6 +699,14 @@ fn rebuild_rec_context<'a>(
                 right_leaf_bundle: right_pcs.leaf_bundle,
                 security_level,
             });
+        } else {
+            eprintln!(
+                "[Aggregation] parse_rec_agg_sides_v6 failed (rec_len={}); falling back to rebuild PCS",
+                rec.len()
+            );
+            if let Err(reason) = crate::plonky3_stark::diagnose_parse_rec_agg_sides_v6(rec) {
+                eprintln!("[Aggregation] parse_rec_agg_sides_v6 diagnose: {reason}");
+            }
         }
     }
 
