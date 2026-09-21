@@ -704,8 +704,10 @@ fn rebuild_rec_context<'a>(
                 "[Aggregation] parse_rec_agg_sides_v6 failed (rec_len={}); falling back to rebuild PCS",
                 rec.len()
             );
-            if let Err(reason) = crate::plonky3_stark::diagnose_parse_rec_agg_sides_v6(rec) {
-                eprintln!("[Aggregation] parse_rec_agg_sides_v6 diagnose: {reason}");
+            if crate::plonky3_stark::diagnose_parse_rec_agg_sides_v6(rec).is_err() {
+                eprintln!(
+                    "[Aggregation] parse_rec_agg_sides_v6 diagnose failed (details redacted)"
+                );
             }
         }
     }
