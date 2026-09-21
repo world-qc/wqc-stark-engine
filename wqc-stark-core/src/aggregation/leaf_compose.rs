@@ -459,7 +459,7 @@ mod tests {
         TrajectorySegment {
             sample_seed: 7,
             shots: 1,
-            measurement_spec_hash: "spec".into(),
+            measurement_spec_hash: "aa".repeat(32),
             trajectory_digest: crate::trajectory::calculate_trajectory_digest(&traces),
             qubit_count: 2,
             unitary_link_digest: d0,
@@ -487,6 +487,7 @@ mod tests {
         let segment = sample_segment();
         let link_digest: &'static str =
             Box::leak(segment.unitary_link_digest.clone().into_boxed_str());
+        let msh: &'static str = Box::leak(segment.measurement_spec_hash.clone().into_boxed_str());
         let ctx = StarkContext {
             circuit_id: "circuit-if",
             sub_task_id: "sub-traj",
@@ -494,12 +495,13 @@ mod tests {
             slice_id: "0",
             output_hash: "counts-hash",
             terminal_statevector_digest: link_digest,
-            measurement_spec_hash: "spec",
-            security_level: "",
+            measurement_spec_hash: msh,
+            security_level: "low",
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
-        let bundle = generate_trajectory_stark_bundle("sub-traj", &segment, "").expect("traj zk");
+        let bundle =
+            generate_trajectory_stark_bundle("sub-traj", &segment, "low").expect("traj zk");
         let composed =
             compose_unitary_trajectory_leaf(&ctx, &unitary, &segment, &bundle).expect("compose");
         (ctx, composed)

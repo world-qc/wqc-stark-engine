@@ -905,55 +905,6 @@ fn encode_fri_chal_mmcs_query(out: &mut Vec<u8>, q: &FriChalMmcsQueryProof) {
     }
 }
 
-fn decode_fri_chal_mmcs_query(
-    proof: &[u8],
-    offset: usize,
-) -> Option<(FriChalMmcsQueryProof, usize)> {
-    let (first_layer, cursor) = decode_chal_batch(proof, offset)?;
-    let (n_idx, cursor) = read_u32_le(proof, cursor)?;
-    if n_idx as usize > AGG_FRI_MAX_ROUNDS {
-        return None;
-    }
-    let mut commit_indices = Vec::with_capacity(n_idx as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_idx {
-        let (i, next) = read_u32_le(proof, cursor)?;
-        commit_indices.push(i);
-        cursor = next;
-    }
-    let (n_sib, cursor) = read_u32_le(proof, cursor)?;
-    if n_sib != n_idx {
-        return None;
-    }
-    let mut commit_siblings = Vec::with_capacity(n_sib as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_sib {
-        let (s, next) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)?;
-        commit_siblings.push(s);
-        cursor = next;
-    }
-    let (n_paths, cursor) = read_u32_le(proof, cursor)?;
-    if n_paths != n_idx {
-        return None;
-    }
-    let mut commit_paths = Vec::with_capacity(n_paths as usize);
-    let mut cursor = cursor;
-    for _ in 0..n_paths {
-        let (p, next) = decode_fri_mmcs_path(proof, cursor)?;
-        commit_paths.push(p);
-        cursor = next;
-    }
-    Some((
-        FriChalMmcsQueryProof {
-            first_layer,
-            commit_indices,
-            commit_siblings,
-            commit_paths,
-        },
-        cursor,
-    ))
-}
-
 fn encode_fri_chal_mmcs(out: &mut Vec<u8>, qs: &[FriChalMmcsQueryProof]) {
     out.extend_from_slice(&(qs.len() as u32).to_le_bytes());
     for q in qs {
@@ -965,19 +916,83 @@ fn decode_fri_chal_mmcs(
     proof: &[u8],
     offset: usize,
 ) -> Option<(Vec<FriChalMmcsQueryProof>, usize)> {
-    let (len, cursor) = read_u32_le(proof, offset)?;
+    diagnose_decode_fri_chal_mmcs(proof, offset).ok()
+}
+
+fn diagnose_decode_fri_chal_mmcs(
+    proof: &[u8],
+    offset: usize,
+) -> Result<(Vec<FriChalMmcsQueryProof>, usize), String> {
+    let (len, cursor) = read_u32_le(proof, offset).ok_or("fri_chal_mmcs len")?;
     let n = len as usize;
     if n == 0 || n > AGG_FRI_PROVEN_QUERIES {
-        return None;
+        return Err(format!(
+            "fri_chal_mmcs len {n} out of range 1..={AGG_FRI_PROVEN_QUERIES}"
+        ));
     }
     let mut qs = Vec::with_capacity(n);
     let mut cursor = cursor;
-    for _ in 0..n {
-        let (q, next) = decode_fri_chal_mmcs_query(proof, cursor)?;
+    for i in 0..n {
+        let (q, next) = diagnose_decode_fri_chal_mmcs_query(proof, cursor)
+            .map_err(|e| format!("fri_chal_mmcs q{i}: {e}"))?;
         qs.push(q);
         cursor = next;
     }
-    Some((qs, cursor))
+    Ok((qs, cursor))
+}
+
+fn diagnose_decode_fri_chal_mmcs_query(
+    proof: &[u8],
+    offset: usize,
+) -> Result<(FriChalMmcsQueryProof, usize), String> {
+    let (first_layer, cursor) = decode_chal_batch(proof, offset).ok_or("chal first_layer")?;
+    let (n_idx, cursor) = read_u32_le(proof, cursor).ok_or("commit_indices len")?;
+    // Leaf shot-sampling FRI can exceed AggregationAir's commit-round count (4).
+    // Use the leaf ceiling so multi-cert traj RecAgg sides round-trip.
+    if n_idx as usize > LEAF_FRI_MAX_ROUNDS {
+        return Err(format!(
+            "commit_indices len {n_idx} > LEAF_FRI_MAX_ROUNDS ({LEAF_FRI_MAX_ROUNDS})"
+        ));
+    }
+    let mut commit_indices = Vec::with_capacity(n_idx as usize);
+    let mut cursor = cursor;
+    for j in 0..n_idx {
+        let (i, next) = read_u32_le(proof, cursor).ok_or(format!("commit_index {j}"))?;
+        commit_indices.push(i);
+        cursor = next;
+    }
+    let (n_sib, cursor) = read_u32_le(proof, cursor).ok_or("commit_siblings len")?;
+    if n_sib != n_idx {
+        return Err(format!("commit_siblings len {n_sib} != indices {n_idx}"));
+    }
+    let mut commit_siblings = Vec::with_capacity(n_sib as usize);
+    let mut cursor = cursor;
+    for j in 0..n_sib {
+        let (s, next) = decode_siblings(proof, cursor, FRI_MMCS_MAX_DEPTH)
+            .ok_or(format!("commit_siblings {j}"))?;
+        commit_siblings.push(s);
+        cursor = next;
+    }
+    let (n_paths, cursor) = read_u32_le(proof, cursor).ok_or("commit_paths len")?;
+    if n_paths != n_idx {
+        return Err(format!("commit_paths len {n_paths} != indices {n_idx}"));
+    }
+    let mut commit_paths = Vec::with_capacity(n_paths as usize);
+    let mut cursor = cursor;
+    for j in 0..n_paths {
+        let (p, next) = decode_fri_mmcs_path(proof, cursor).ok_or(format!("commit_path {j}"))?;
+        commit_paths.push(p);
+        cursor = next;
+    }
+    Ok((
+        FriChalMmcsQueryProof {
+            first_layer,
+            commit_indices,
+            commit_siblings,
+            commit_paths,
+        },
+        cursor,
+    ))
 }
 
 fn encode_deep_ro_leaf_trace(out: &mut Vec<u8>, deep: &DeepRoLeafTraceStepProof) {
@@ -1306,7 +1321,6 @@ fn decode_side(
     }
 }
 
-#[cfg(test)]
 fn diagnose_decode_leaf_pcs_opening(
     proof: &[u8],
     offset: usize,
@@ -1355,7 +1369,7 @@ fn diagnose_decode_leaf_pcs_opening(
             .ok_or("deep_ro_traces")?;
     let (ood, cursor) = decode_ood(proof, cursor).ok_or("ood")?;
     let (fri_val_mmcs, cursor) = decode_fri_val_mmcs(proof, cursor).ok_or("fri_val_mmcs")?;
-    let (fri_chal_mmcs, cursor) = decode_fri_chal_mmcs(proof, cursor).ok_or("fri_chal_mmcs")?;
+    let (fri_chal_mmcs, cursor) = diagnose_decode_fri_chal_mmcs(proof, cursor)?;
     Ok((
         LeafPcsCertificate {
             kind,
@@ -1381,7 +1395,6 @@ fn diagnose_decode_leaf_pcs_opening(
     ))
 }
 
-#[cfg(test)]
 fn diagnose_decode_side(
     proof: &[u8],
     offset: usize,
@@ -1582,48 +1595,65 @@ pub struct RecAggSidesV6 {
 
 /// Decode RecAgg V6 sides without requiring a pre-built expected context.
 pub fn parse_rec_agg_sides_v6(proof: &[u8]) -> Option<RecAggSidesV6> {
-    let marker_pos = locate_inner_marker(proof)?;
+    diagnose_parse_rec_agg_sides_v6(proof).ok()
+}
+
+/// Explains why [`parse_rec_agg_sides_v6`] would return `None` (for ops logs).
+pub fn diagnose_parse_rec_agg_sides_v6(proof: &[u8]) -> Result<RecAggSidesV6, String> {
+    let marker_pos = locate_inner_marker(proof).ok_or("inner marker not found")?;
     let parent_end = marker_pos.saturating_sub(1);
-    let parent_task_id = std::str::from_utf8(&proof[..parent_end]).ok()?.to_string();
+    let parent_task_id = std::str::from_utf8(&proof[..parent_end])
+        .map_err(|_| "parent_task_id utf8")?
+        .to_string();
 
     let cursor = marker_pos + V6_REC_AGG_INNER_MARKER.len();
-    let (compose_label, cursor) = read_cstr(proof, cursor)?;
-    let (manifest_root_hash, cursor) = read_cstr(proof, cursor)?;
-    let (left_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor)?;
-    let (right_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor)?;
-    let (left_stark, cursor) = read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor)?;
-    let (right_stark, cursor) = read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor)?;
-    let left_kind = *proof.get(cursor)?;
-    let right_kind = *proof.get(cursor + 1)?;
+    let (compose_label, cursor) = read_cstr(proof, cursor).ok_or("compose_label cstr")?;
+    let (manifest_root_hash, cursor) = read_cstr(proof, cursor).ok_or("manifest_root_hash cstr")?;
+    let (left_hash, cursor) = read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor).ok_or("left_hash")?;
+    let (right_hash, cursor) =
+        read_fixed::<{ CHILD_HASH_LEN }>(proof, cursor).ok_or("right_hash")?;
+    let (left_stark, cursor) =
+        read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor).ok_or("left_stark")?;
+    let (right_stark, cursor) =
+        read_fixed::<{ STARK_DIGEST_LEN }>(proof, cursor).ok_or("right_stark")?;
+    let left_kind = *proof.get(cursor).ok_or("left_kind")?;
+    let right_kind = *proof.get(cursor + 1).ok_or("right_kind")?;
     let cursor = cursor + 2;
-    let (left_cert, left_leaf, cursor) = decode_side(proof, cursor)?;
-    let (right_cert, right_leaf, cursor) = decode_side(proof, cursor)?;
+    let (left_cert, left_leaf, cursor) = diagnose_decode_side(proof, cursor, "left")?;
+    let (right_cert, right_leaf, cursor) = diagnose_decode_side(proof, cursor, "right")?;
 
     // Ensure the trailing Plonky3 payload is well-formed even though callers may
     // ignore it (they re-decode via [`decode_rec_agg_proof_owned_v6`]).
-    let (len, cursor) = read_u32_le(proof, cursor)?;
+    let (len, cursor) = read_u32_le(proof, cursor).ok_or("payload len")?;
     let end = cursor + len as usize;
-    let _ = proof.get(cursor..end)?;
+    let _ = proof
+        .get(cursor..end)
+        .ok_or_else(|| format!("payload truncated: need {end}, have {}", proof.len()))?;
     if end != proof.len() {
-        return None;
+        return Err(format!(
+            "trailing bytes after payload: end={end} proof_len={}",
+            proof.len()
+        ));
     }
     if left_kind > REC_KIND_AGG || right_kind > REC_KIND_AGG {
-        return None;
+        return Err(format!(
+            "kind out of range: left={left_kind} right={right_kind}"
+        ));
     }
     if left_kind == REC_KIND_LEAF && left_cert.is_some() {
-        return None;
+        return Err("left leaf kind but agg cert present".into());
     }
     if right_kind == REC_KIND_LEAF && right_cert.is_some() {
-        return None;
+        return Err("right leaf kind but agg cert present".into());
     }
     if left_kind == REC_KIND_AGG && (left_cert.is_none() || left_leaf.is_some()) {
-        return None;
+        return Err("left agg kind missing cert or has leaf bundle".into());
     }
     if right_kind == REC_KIND_AGG && (right_cert.is_none() || right_leaf.is_some()) {
-        return None;
+        return Err("right agg kind missing cert or has leaf bundle".into());
     }
 
-    Some(RecAggSidesV6 {
+    Ok(RecAggSidesV6 {
         parent_task_id,
         compose_label: compose_label.to_string(),
         manifest_root_hash: manifest_root_hash.to_string(),
