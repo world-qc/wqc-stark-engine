@@ -244,7 +244,7 @@ pub fn verify_born_stark_proof(
     let config = circle_config_for_security_level(context.security_level, 1);
     match verify(&config, &air, &p3_proof, &[]) {
         Ok(()) => {
-            eprintln!(
+            println!(
                 "[DistributionAir] Verification success (Born zk streaming, dim={}, outcomes={})",
                 air.dim, air.num_outcomes
             );

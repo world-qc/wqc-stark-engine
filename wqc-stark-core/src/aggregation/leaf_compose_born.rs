@@ -381,7 +381,7 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
         }
     }
 
-    eprintln!("[LeafCompose] Verification success (unitary+Born v3 compose, link={link})");
+    println!("[LeafCompose] Verification success (unitary+Born v3 compose, link={link})");
     true
 }
 

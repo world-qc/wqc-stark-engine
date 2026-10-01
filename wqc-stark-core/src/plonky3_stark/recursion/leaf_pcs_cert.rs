@@ -281,7 +281,7 @@ pub fn build_leaf_pcs_certificate(
         fri_queries_from_proof(proof)?,
     )?;
     if let Some(budget) = mem_plan.budget_bytes {
-        eprintln!(
+        println!(
             "[LeafPcs] memory plan: est={:.2} GiB budget={:.2} GiB chunk={}{}",
             mem_plan.estimate_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
             budget as f64 / (1024.0 * 1024.0 * 1024.0),
@@ -975,7 +975,7 @@ mod tests {
         );
 
         let sizes = leaf_pcs_stark_sizes(&cert);
-        eprintln!(
+        println!(
             "[B5 size] unitary leaf PCS STARKs total={} bytes ({:.2} MiB); mmcs_groups={} fri_fold={} deep_ro={} ood={}",
             sizes.total,
             sizes.total as f64 / (1024.0 * 1024.0),

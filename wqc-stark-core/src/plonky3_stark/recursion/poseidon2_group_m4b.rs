@@ -863,7 +863,7 @@ mod tests {
         let keccak = generate_keccak_group_fold_proof(&k_stmts).expect("keccak prove");
         assert!(verify_poseidon_group_fold_proof(&p_stmts, &poseidon));
         assert!(verify_keccak_group_fold_proof(&k_stmts, &keccak));
-        eprintln!(
+        println!(
             "M4b W=3 N=2 depth=1: poseidon_group={} vs keccak_group={}",
             poseidon.group_stark.len(),
             keccak.group_stark.len()

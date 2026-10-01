@@ -273,7 +273,7 @@ pub fn verify_trajectory_stark_bundle(
         return false;
     }
 
-    eprintln!(
+    println!(
         "[TrajectoryAir] Verification success (marginal + shot sampling zk, witnesses={}, events={})",
         witness_count,
         events.len()

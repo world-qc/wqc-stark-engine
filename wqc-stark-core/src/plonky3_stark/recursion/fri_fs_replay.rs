@@ -3211,8 +3211,8 @@ mod tests {
             }
             zps_c.push(prod.inverse().as_canonical_u32());
         }
-        eprintln!("IDLE_QUOT_SHIFT_VN={shift_vn:?}");
-        eprintln!("IDLE_QUOT_ZPS_C={zps_c:?}");
+        println!("IDLE_QUOT_SHIFT_VN={shift_vn:?}");
+        println!("IDLE_QUOT_ZPS_C={zps_c:?}");
         assert_eq!(shift_vn.len(), 16);
         assert_eq!(zps_c.len(), 16);
     }
@@ -3265,7 +3265,7 @@ mod tests {
             chal.zeta,
         );
         let limbs = challenge_to_limbs(q);
-        eprintln!("p3_recompose={:?}", limbs.map(|x| x.as_canonical_u32()));
+        println!("p3_recompose={:?}", limbs.map(|x| x.as_canonical_u32()));
         assert_eq!(q, Challenge::ZERO, "idle Folded=0 ⇒ Q(ζ)=0");
         let (at_x, _) = ef_from_projective_line(chal.zeta);
         let _ = (

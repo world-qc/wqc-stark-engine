@@ -195,7 +195,7 @@ pub fn plan_pcs_memory(
             for chunk in spill_chunk_candidates(requested) {
                 let est = estimate_pcs_peak_bytes(degree_bits, chunk, depth_hint, num_queries);
                 if est <= budget_bytes {
-                    eprintln!(
+                    println!(
                         "{PCS_MEMORY_ERR_PREFIX} spill: chunk {requested} → {chunk} (est {} GiB ≤ budget {} GiB)",
                         format_gib(est),
                         format_gib(budget_bytes),

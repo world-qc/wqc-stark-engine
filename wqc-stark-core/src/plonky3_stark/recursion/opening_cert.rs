@@ -145,7 +145,7 @@ pub fn build_agg_pcs_certificate(
         fri_queries_from_proof(&proof)?,
     )?;
     if let Some(budget) = mem_plan.budget_bytes {
-        eprintln!(
+        println!(
             "[AggPcs] memory plan: est={:.2} GiB budget={:.2} GiB chunk={}{}",
             mem_plan.estimate_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
             budget as f64 / (1024.0 * 1024.0 * 1024.0),

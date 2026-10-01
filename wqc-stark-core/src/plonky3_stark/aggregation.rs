@@ -113,7 +113,7 @@ pub fn verify_aggregation_proof(context: &AggregationContext<'_>, proof: &[u8]) 
     let air = AggregationAir;
     match verify(&config, &air, &p3_proof, &[]) {
         Ok(()) => {
-            eprintln!(
+            println!(
                 "[AggregationAir] Verification success (R2 compose={})",
                 context.compose_label
             );
