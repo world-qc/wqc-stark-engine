@@ -1084,7 +1084,7 @@ mod tests {
         let m4a1 = generate_fri_mmcs_batched_path_proof(&s1.row, &s1.siblings, s1.index, &s1.root)
             .expect("m4a1");
         let separate = m4a0.path_stark.len() + m4a1.path_stark.len();
-        eprintln!(
+        println!(
             "M4b size: group_stark={} vs 2×M4a={}",
             proof.group_stark.len(),
             separate
@@ -1114,7 +1114,7 @@ mod tests {
                 .expect("m4a");
             separate += p.path_stark.len();
         }
-        eprintln!(
+        println!(
             "M4b N=4 size: group_stark={} vs 4×M4a={}",
             proof.group_stark.len(),
             separate
@@ -1163,7 +1163,7 @@ mod tests {
                 .expect("m4a");
             separate += p.path_stark.len();
         }
-        eprintln!(
+        println!(
             "M4b W=48 N=2 size: group_stark={} vs 2×M4a={}",
             proof.group_stark.len(),
             separate

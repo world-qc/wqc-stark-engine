@@ -378,7 +378,7 @@ pub fn verify_unitary_trajectory_leaf_compose(context: &StarkContext<'_>, proof:
         }
     }
 
-    eprintln!(
+    println!(
         "[LeafCompose] Verification success (unitary+trajectory v3 compose, link={})",
         segment.unitary_link_digest
     );
@@ -524,7 +524,7 @@ mod tests {
         assert!(is_unitary_trajectory_leaf_compose(&composed));
         assert!(verify_unitary_trajectory_leaf_compose(&ctx, &composed));
         assert!(trajectory_child_from_compose(&composed).is_some());
-        eprintln!(
+        println!(
             "[M4c size] unitary↔traj compose={} bytes ({:.2} MiB)",
             composed.len(),
             composed.len() as f64 / (1024.0 * 1024.0)
@@ -533,7 +533,7 @@ mod tests {
             let (v3, agg) = crate::plonky3_stark::split_agg_tail(v3_and_agg)
                 .map(|(v, a)| (v, Some(a)))
                 .unwrap_or((v3_and_agg, None));
-            eprintln!(
+            println!(
                 "[M4c size] compose parts: v3={} agg_tail={} rec_tail={} (FriFold/DeepRo/OOD live in rec_tail PCS)",
                 v3.len(),
                 agg.map(|a| a.len()).unwrap_or(0),

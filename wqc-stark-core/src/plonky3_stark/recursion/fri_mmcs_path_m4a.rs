@@ -775,7 +775,7 @@ mod tests {
                 .iter()
                 .map(|p| p.stark.len())
                 .sum::<usize>();
-        eprintln!(
+        println!(
             "M4a size: path_stark={} vs poseidon digest-path wire={}",
             proof.path_stark.len(),
             nested_bytes
@@ -851,7 +851,7 @@ mod tests {
             &root,
             &proof
         ));
-        eprintln!(
+        println!(
             "M4a 2-perm leaf (W=48) path_stark={}",
             proof.path_stark.len()
         );

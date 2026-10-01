@@ -286,7 +286,7 @@ pub fn verify_recursive_aggregation_proof(
         verify(&config, &RecursiveAggregationAir, &p3_proof, &[]).is_ok()
     };
     if verified {
-        eprintln!(
+        println!(
             "[RecursiveAggregationAir] Verification success (R3-{} compose={})",
             if use_m1_air { "M1" } else { "M2" },
             context.compose_label

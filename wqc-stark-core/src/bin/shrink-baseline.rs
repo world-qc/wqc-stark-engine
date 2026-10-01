@@ -35,7 +35,7 @@ fn run() -> Result<(), String> {
         return run_poseidon_compose(&profile.security_level);
     }
 
-    eprintln!(
+    println!(
         "E5b shrink: proving idle two-leaf root (profile={}, {} FRI queries)…",
         profile.label(),
         profile.fri_num_queries()
@@ -78,7 +78,7 @@ fn run() -> Result<(), String> {
         // Public RecAgg root transcript (fixture). Do not log values tainted through
         // PCS helpers matching CodeQL's /cert/ sensitive-name heuristic.
         fs::write(&fixture, &root).map_err(|e| format!("write {}: {e}", fixture.display()))?;
-        eprintln!("wrote shrink fixture");
+        println!("wrote shrink fixture");
     }
 
     if write_baseline {
@@ -94,7 +94,7 @@ fn run() -> Result<(), String> {
             report.has_rec_agg_tail
         ));
         baseline.save_to_repo(&repo)?;
-        eprintln!("updated {}", repo.join(BASELINE_JSON).display());
+        println!("updated {}", repo.join(BASELINE_JSON).display());
     }
 
     if !report.has_rec_agg_tail {
@@ -137,7 +137,7 @@ fn unix_timestamp() -> String {
 }
 
 fn run_poseidon_benchmark(security_level: &str) -> Result<(), String> {
-    eprintln!("E5b Poseidon Mmcs benchmark: idle leaf PCS (security_level={security_level})…");
+    println!("E5b Poseidon Mmcs benchmark: idle leaf PCS (security_level={security_level})…");
     let report = benchmark_idle_leaf_poseidon_mmcs(security_level)?;
     let out = serde_json::json!({
         "benchmark": "idle_leaf_pcs_poseidon_mmcs_groups",
@@ -168,7 +168,7 @@ fn run_poseidon_benchmark(security_level: &str) -> Result<(), String> {
         serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?,
     )
     .map_err(|e| format!("write {}: {e}", path.display()))?;
-    eprintln!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
+    println!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
     Ok(())
 }
 
@@ -180,7 +180,7 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
     } else {
         security_level
     };
-    eprintln!("E5b Poseidon compose: idle two-leaf RecAgg (security_level={level_label})…");
+    println!("E5b Poseidon compose: idle two-leaf RecAgg (security_level={level_label})…");
     let report = benchmark_idle_two_leaf_poseidon_compose(security_level)?;
     let profile = ShrinkComposeProfile::from_env().with_security_level(security_level);
     let fri_q = profile.fri_num_queries();
@@ -246,6 +246,6 @@ fn run_poseidon_compose(security_level: &str) -> Result<(), String> {
         serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?,
     )
     .map_err(|e| format!("write {}: {e}", path.display()))?;
-    eprintln!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
+    println!("wrote {} (ref {SWEEP_REF_LABEL})", path.display());
     Ok(())
 }

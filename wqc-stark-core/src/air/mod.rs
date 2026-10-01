@@ -134,7 +134,7 @@ pub fn evaluate_air_sum(trace_matrix: &RowMajorMatrix<Mersenne31>) -> Mersenne31
         constraint_accumulations += row_acc;
 
         if debug_air && row_acc != Mersenne31::ZERO {
-            eprintln!(
+            println!(
                 "[STARK Core][AIR] row={} gate={} row_acc={}",
                 r,
                 curr.gate_type.as_canonical_u32(),

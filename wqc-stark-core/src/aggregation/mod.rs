@@ -271,7 +271,7 @@ pub fn compose_stark_proofs_with_pcs(
                 .map_err(|e| format!("R3-M2 recursive aggregation STARK prove failed: {e}"))?;
             out = append_rec_tail(out, &rec_proof);
         } else {
-            eprintln!(
+            println!(
                 "[Aggregation] skipping RecAgg V6: leaf/agg PCS incomplete on one or both children"
             );
         }
@@ -292,7 +292,7 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
     use crate::plonky3_stark::leaf_bundle_stark_sizes;
     if let Some(bundle) = &pcs.leaf_bundle {
         let s = leaf_bundle_stark_sizes(bundle);
-        eprintln!(
+        println!(
             "[M4c size] compose {side} leaf PCS STARKs total={} bytes ({:.2} MiB); certs={} mmcs_groups={} fri_fold={} deep_ro={} ood={}",
             s.total,
             s.total as f64 / (1024.0 * 1024.0),
@@ -320,7 +320,7 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
                         )
                     })
                     .collect();
-                eprintln!(
+                println!(
                     "[M4c size]   cert{i} {label}: {} group(s) [{}]",
                     gs.len(),
                     sizes.join("; ")
@@ -332,10 +332,10 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
             fmt("chal_first_layer", &g.chal_first_layer);
             fmt("chal_commit", &g.chal_commit);
             if g.pcs_combined {
-                eprintln!("[M4c size]   cert{i} pcs_combined=true (val+chal in val_trace)");
+                println!("[M4c size]   cert{i} pcs_combined=true (val+chal in val_trace)");
             }
             let xs = &cert.fri_fold_groups.fold_xs_by_log_h;
-            eprintln!(
+            println!(
                 "[M4c size]   cert{i} fri_fold: y={} xs={} (log_h={:?})",
                 cert.fri_fold_groups
                     .fold_ys
@@ -347,9 +347,9 @@ fn log_child_pcs_sizes(side: &str, pcs: &ChildPcs) {
             );
         }
     } else if pcs.agg_cert.is_some() {
-        eprintln!("[M4c size] compose {side} agg PCS present (nested)");
+        println!("[M4c size] compose {side} agg PCS present (nested)");
     } else {
-        eprintln!("[M4c size] compose {side} PCS absent (RecAgg skipped)");
+        println!("[M4c size] compose {side} PCS absent (RecAgg skipped)");
     }
 }
 
@@ -398,7 +398,7 @@ fn pcs_for_child(
                 .ok_or_else(|| "prebuilt leaf PCS bundle decode failed".to_string())?;
             verify_leaf_pcs_bundle(child, &bundle)
                 .map_err(|e| format!("prebuilt leaf PCS bundle verify failed: {e}"))?;
-            eprintln!(
+            println!(
                 "[Aggregation] using prebuilt leaf PCS bundle ({} bytes)",
                 bytes.len()
             );
@@ -415,7 +415,7 @@ fn pcs_for_child(
             .map_err(|e| format!("leaf PCS bundle build failed: {e}"))?;
         verify_leaf_pcs_bundle(child, &bundle)
             .map_err(|e| format!("leaf PCS bundle verify failed: {e}"))?;
-        eprintln!(
+        println!(
             "[Aggregation] built leaf PCS bundle fallback (certs={})",
             bundle.certs.len()
         );
@@ -762,7 +762,7 @@ fn pcs_from_embedded_or_build(
             if !verify_agg_pcs_certificate(&agg_ctx, agg, &cert) {
                 return Err("embedded AggregationAir PCS certificate verify failed".to_string());
             }
-            eprintln!("[Aggregation] using embedded agg PCS certificate from rec-agg proof");
+            println!("[Aggregation] using embedded agg PCS certificate from rec-agg proof");
             return Ok(ChildPcs {
                 kind: REC_KIND_AGG,
                 agg_cert: Some(cert),
@@ -783,7 +783,7 @@ fn pcs_from_embedded_or_build(
     if let Some(bundle) = embedded_leaf {
         verify_leaf_pcs_bundle(child, &bundle)
             .map_err(|e| format!("embedded leaf PCS bundle verify failed: {e}"))?;
-        eprintln!(
+        println!(
             "[Aggregation] using embedded leaf PCS bundle from rec-agg proof ({} certs)",
             bundle.certs.len()
         );
@@ -836,11 +836,11 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                     ) {
                         Ok(rec_ctx) => {
                             if !rec_context_pcs_complete(&rec_ctx) {
-                                eprintln!(
+                                println!(
                                     "[Aggregation] Root R3 PCS incomplete; falling back to audit walk"
                                 );
                             } else if verify_recursive_aggregation_proof(&rec_ctx, rec_bytes) {
-                                eprintln!(
+                                println!(
                                     "[Aggregation] Root proof verified (R3-M2 fast path) for task {}",
                                     context.parent_task_id
                                 );
@@ -882,7 +882,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                             "[Aggregation] Root aggregation STARK failed; continuing to audit walk"
                         );
                     } else {
-                        eprintln!(
+                        println!(
                             "[Aggregation] Root R2 AggregationAir ok; continuing to audit walk for child proofs"
                         );
                     }
@@ -914,7 +914,7 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
 
     match verify_composed_proof(&compose_ctx, proof) {
         Ok(()) => {
-            eprintln!(
+            println!(
                 "[Aggregation] Root proof verified (audit walk) for task {}",
                 context.parent_task_id
             );

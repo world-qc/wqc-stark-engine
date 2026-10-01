@@ -195,7 +195,7 @@ mod tests {
         let report = benchmark_idle_two_leaf_poseidon_compose("low").expect("compose");
         assert!(report.compose.has_rec_agg_tail);
         assert!(report.compose.root_bytes > 0);
-        eprintln!(
+        println!(
             "poseidon compose root={} saved_vs_ref={}",
             report.compose.root_bytes, report.root_saved_vs_keccak_ref
         );
