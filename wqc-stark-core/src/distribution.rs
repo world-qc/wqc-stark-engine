@@ -368,30 +368,70 @@ pub fn base_proof_without_distribution_tail(proof: &[u8]) -> &[u8] {
     crate::trajectory::base_proof_without_aux_tails(proof)
 }
 
-/// Verifies sorted keys, non-empty digest, and digest recomputation from embedded probs.
-pub fn verify_distribution_segment(segment: &DistributionSegment) -> bool {
+/// Structural distribution-segment failure, without printing.
+pub fn distribution_segment_error(segment: &DistributionSegment) -> Option<String> {
     if segment.probability_digest.is_empty() {
-        eprintln!("[STARK Core] Failed: distribution probability_digest is empty");
-        return false;
+        return Some("distribution probability_digest is empty".to_string());
     }
 
     for window in segment.probabilities.windows(2) {
         if window[0].0 >= window[1].0 {
-            eprintln!("[STARK Core] Failed: distribution outcome keys not strictly sorted");
-            return false;
+            return Some("distribution outcome keys not strictly sorted".to_string());
         }
     }
 
     let recomputed = calculate_probability_digest(&segment.probabilities);
     if recomputed != segment.probability_digest {
-        eprintln!(
-            "[STARK Core] Failed: distribution probability_digest mismatch (claimed {}, recomputed {})",
+        return Some(format!(
+            "distribution probability_digest mismatch (claimed {}, recomputed {})",
             segment.probability_digest, recomputed
-        );
-        return false;
+        ));
     }
 
-    true
+    None
+}
+
+/// Verifies sorted keys, non-empty digest, and digest recomputation from embedded probs.
+pub fn verify_distribution_segment(segment: &DistributionSegment) -> bool {
+    match distribution_segment_error(segment) {
+        None => true,
+        Some(reason) => {
+            eprintln!("[STARK Core] Failed: {reason}");
+            false
+        }
+    }
+}
+
+/// Decodes a distribution tail and returns the check that rejected it.
+pub fn try_decode_and_verify_distribution_tail(
+    payload: &[u8],
+    marker: &[u8],
+) -> Result<DistributionSegment, String> {
+    let decoded = if marker == DIST_V2_MARKER {
+        decode_distribution_segment(payload, 0)
+    } else {
+        decode_distribution_segment_v1(payload, 0)
+    };
+    let Some((segment, end)) = decoded else {
+        let reason = "malformed distribution segment".to_string();
+        eprintln!("[STARK Core] Failed: {reason}");
+        return Err(reason);
+    };
+    if end != payload.len() {
+        let reason = "distribution segment length mismatch".to_string();
+        eprintln!("[STARK Core] Failed: {reason}");
+        return Err(reason);
+    }
+    if let Some(reason) = distribution_segment_error(&segment) {
+        eprintln!("[STARK Core] Failed: {reason}");
+        return Err(reason);
+    }
+    if let Some((_, message)) = crate::air::distribution::born_constraint_failure(&segment) {
+        eprintln!("[STARK Core][Born] {message}");
+        eprintln!("[STARK Core] Failed: Born AIR constraint violation");
+        return Err(format!("Born AIR constraint violation: {message}"));
+    }
+    Ok(segment)
 }
 
 /// Decodes and verifies a distribution tail payload (post-marker bytes).
@@ -399,22 +439,7 @@ pub fn decode_and_verify_distribution_tail(
     payload: &[u8],
     marker: &[u8],
 ) -> Option<DistributionSegment> {
-    let (segment, end) = if marker == DIST_V2_MARKER {
-        decode_distribution_segment(payload, 0)?
-    } else {
-        decode_distribution_segment_v1(payload, 0)?
-    };
-    if end != payload.len() {
-        return None;
-    }
-    if !verify_distribution_segment(&segment) {
-        return None;
-    }
-    if crate::air::distribution::evaluate_born_constraint_sum(&segment) != 0 {
-        eprintln!("[STARK Core] Failed: Born AIR constraint violation");
-        return None;
-    }
-    Some(segment)
+    try_decode_and_verify_distribution_tail(payload, marker).ok()
 }
 
 /// Deterministic shot sampling — matches `wqc-core` `sample_counts_from_probabilities`.

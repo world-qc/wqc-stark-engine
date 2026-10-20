@@ -128,8 +128,8 @@ pub fn verify_trajectory_leaf(
     let (_, tail) = split_trajectory_tail(tail_body)
         .ok_or_else(|| "missing trajectory segment tail".to_string())?;
     let (payload, marker) = tail.ok_or_else(|| "missing trajectory segment tail".to_string())?;
-    let segment = decode_and_verify_trajectory_tail(payload, marker)
-        .ok_or_else(|| "invalid trajectory segment".to_string())?;
+    let segment = crate::trajectory::try_decode_and_verify_trajectory_tail(payload, marker)
+        .map_err(|reason| format!("invalid trajectory segment: {reason}"))?;
 
     #[cfg(feature = "plonky3-stark")]
     if has_trajectory_stark_tail(tail_body) {

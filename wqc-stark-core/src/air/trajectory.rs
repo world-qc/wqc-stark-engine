@@ -101,14 +101,14 @@ fn witness_matches_claimed_probs(witness: &TrajectoryMarginalWitness, qubit_coun
         && (witness.reference_p1 - p1).abs() <= TRAJ_MARGINAL_EPSILON
 }
 
-/// Algebraic verify: witnesses + per-shot claimed `p0/p1` vs pre-measure statevectors.
-pub fn evaluate_trajectory_marginal_constraints(segment: &TrajectorySegment) -> bool {
+/// Why a marginal witness fails, without printing. `None` when the constraints hold.
+pub fn marginal_constraint_error(segment: &TrajectorySegment) -> Option<&'static str> {
     if segment.marginal_witnesses.is_empty() {
-        return true;
+        return None;
     }
     let qubit_count = segment.qubit_count as usize;
     if qubit_count == 0 || qubit_count > TRAJ_MARGINAL_ZK_MAX_QUBITS {
-        return false;
+        return Some("qubit_count out of range");
     }
 
     for witness in &segment.marginal_witnesses {
@@ -116,24 +116,24 @@ pub fn evaluate_trajectory_marginal_constraints(segment: &TrajectorySegment) -> 
             &witness.pre_measure_statevector,
         );
         if recomputed != witness.pre_measure_statevector_digest {
-            return false;
+            return Some("witness digest mismatch");
         }
         if !witness_matches_claimed_probs(witness, qubit_count) {
-            return false;
+            return Some("witness probabilities do not match pre-measure statevector");
         }
     }
 
     for shot in &segment.traces {
         for m in &shot.measures {
             if m.pre_measure_statevector_digest.is_empty() {
-                return false;
+                return Some("shot pre-measure digest missing");
             }
             let witness = segment.marginal_witnesses.iter().find(|w| {
                 w.pre_measure_statevector_digest == m.pre_measure_statevector_digest
                     && w.qubit == m.qubit
             });
             let Some(witness) = witness else {
-                return false;
+                return Some("shot has no matching witness");
             };
             if (m.p0 - witness.reference_p0).abs() > TRAJ_MARGINAL_EPSILON
                 || (m.p1 - witness.reference_p1).abs() > TRAJ_MARGINAL_EPSILON
@@ -144,18 +144,23 @@ pub fn evaluate_trajectory_marginal_constraints(segment: &TrajectorySegment) -> 
                     m.qubit as usize,
                     qubit_count,
                 ) else {
-                    return false;
+                    return Some("witness statevector shape invalid");
                 };
                 if (m.p0 - oracle_p0).abs() > TRAJ_MARGINAL_EPSILON
                     || (m.p1 - oracle_p1).abs() > TRAJ_MARGINAL_EPSILON
                 {
-                    return false;
+                    return Some("shot probabilities do not match witness");
                 }
             }
         }
     }
 
-    true
+    None
+}
+
+/// Algebraic verify: witnesses + per-shot claimed `p0/p1` vs pre-measure statevectors.
+pub fn evaluate_trajectory_marginal_constraints(segment: &TrajectorySegment) -> bool {
+    marginal_constraint_error(segment).is_none()
 }
 
 #[cfg(test)]

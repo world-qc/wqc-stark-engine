@@ -114,8 +114,8 @@ pub fn verify_born_leaf(
     let (_, tail) = split_distribution_tail(tail_body)
         .ok_or_else(|| "missing distribution segment tail".to_string())?;
     let (payload, marker) = tail.ok_or_else(|| "missing distribution segment tail".to_string())?;
-    let segment = decode_and_verify_distribution_tail(payload, marker)
-        .ok_or_else(|| "invalid distribution segment".to_string())?;
+    let segment = crate::distribution::try_decode_and_verify_distribution_tail(payload, marker)
+        .map_err(|reason| format!("invalid distribution segment: {reason}"))?;
 
     #[cfg(feature = "plonky3-stark")]
     if has_born_stark_tail(tail_body) {
@@ -411,6 +411,24 @@ mod tests {
         let leaf = encode_born_leaf("sub-born", &segment, None);
         assert!(is_born_leaf_proof(&leaf));
         verify_born_leaf("sub-born", &leaf, "").expect("verify leaf");
+    }
+
+    #[test]
+    fn born_leaf_error_includes_constraint_reason() {
+        let mut segment = bell_segment();
+        segment.probabilities = vec![("00".into(), 0.9), ("11".into(), 0.1)];
+        segment.probability_digest =
+            crate::distribution::calculate_probability_digest(&segment.probabilities);
+        let leaf = encode_born_leaf("sub-born", &segment, None);
+        let err = verify_born_leaf("sub-born", &leaf, "").expect_err("born mismatch");
+        assert!(
+            err.contains("invalid distribution segment"),
+            "missing segment label: {err}"
+        );
+        assert!(
+            err.contains("claimed probabilities do not match statevector Born rule"),
+            "missing Born reason: {err}"
+        );
     }
 
     #[cfg(feature = "plonky3-stark")]
