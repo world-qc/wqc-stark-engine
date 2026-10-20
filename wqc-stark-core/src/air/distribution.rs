@@ -92,15 +92,14 @@ fn probabilities_match(claimed: &[(String, f64)], recomputed: &BTreeMap<String, 
     true
 }
 
-/// Returns `0` when Born binding data is present and consistent; nonzero error code otherwise.
-pub fn evaluate_born_constraint_sum(segment: &DistributionSegment) -> u32 {
+/// Reason the Born binding fails, without printing. `None` when the binding holds.
+pub fn born_constraint_failure(segment: &DistributionSegment) -> Option<(u32, String)> {
     let Some(binding) = &segment.born_binding else {
-        return 0;
+        return None;
     };
 
     if binding.qubit_count as usize > BORN_AIR_MAX_QUBITS {
-        eprintln!("[STARK Core][Born] qubit_count exceeds C2b limit");
-        return 1;
+        return Some((1, "qubit_count exceeds C2b limit".to_string()));
     }
 
     let measures: Vec<BornMeasureSpec> = binding
@@ -119,24 +118,36 @@ pub fn evaluate_born_constraint_sum(segment: &DistributionSegment) -> u32 {
         binding.classical_bit_count as usize,
     ) {
         Some(probs) => probs,
-        None => {
-            eprintln!("[STARK Core][Born] invalid terminal statevector shape");
-            return 2;
-        }
+        None => return Some((2, "invalid terminal statevector shape".to_string())),
     };
 
     if !probabilities_match(&segment.probabilities, &recomputed) {
-        eprintln!("[STARK Core][Born] claimed probabilities do not match statevector Born rule");
-        return 3;
+        return Some((
+            3,
+            "claimed probabilities do not match statevector Born rule".to_string(),
+        ));
     }
 
     let total: f64 = recomputed.values().sum();
     if (total - 1.0).abs() > BORN_PROB_EPSILON && total > 0.0 {
-        eprintln!("[STARK Core][Born] probability mass deviates from 1.0 (sum={total})");
-        return 4;
+        return Some((
+            4,
+            format!("probability mass deviates from 1.0 (sum={total})"),
+        ));
     }
 
-    0
+    None
+}
+
+/// Returns `0` when Born binding data is present and consistent; nonzero error code otherwise.
+pub fn evaluate_born_constraint_sum(segment: &DistributionSegment) -> u32 {
+    match born_constraint_failure(segment) {
+        None => 0,
+        Some((code, message)) => {
+            eprintln!("[STARK Core][Born] {message}");
+            code
+        }
+    }
 }
 
 /// Mersenne31-style accumulator for Born constraints (`ZERO` iff satisfied or not applicable).

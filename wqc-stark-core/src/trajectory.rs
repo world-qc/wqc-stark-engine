@@ -484,68 +484,88 @@ pub fn base_proof_without_aux_tails(proof: &[u8]) -> &[u8] {
     }
 }
 
-pub fn verify_trajectory_segment(segment: &TrajectorySegment) -> bool {
+/// Trajectory-segment failure, without printing.
+pub fn trajectory_segment_error(segment: &TrajectorySegment) -> Option<String> {
     if segment.trajectory_digest.is_empty() {
-        eprintln!("[STARK Core] Failed: trajectory_digest is empty");
-        return false;
+        return Some("trajectory_digest is empty".to_string());
     }
     if segment.traces.len() as u64 != segment.shots {
-        eprintln!("[STARK Core] Failed: trajectory shot count mismatch");
-        return false;
+        return Some("trajectory shot count mismatch".to_string());
     }
     for window in segment.traces.windows(2) {
         if window[0].shot_index >= window[1].shot_index {
-            eprintln!("[STARK Core] Failed: trajectory shot_index not strictly increasing");
-            return false;
+            return Some("trajectory shot_index not strictly increasing".to_string());
         }
     }
     for (i, shot) in segment.traces.iter().enumerate() {
         if shot.shot_index != i as u64 {
-            eprintln!("[STARK Core] Failed: trajectory shot_index not contiguous");
-            return false;
+            return Some("trajectory shot_index not contiguous".to_string());
         }
         let expected_seed = segment.sample_seed.wrapping_add(shot.shot_index);
         if shot.shot_seed != expected_seed {
-            eprintln!("[STARK Core] Failed: trajectory shot_seed mismatch");
-            return false;
+            return Some("trajectory shot_seed mismatch".to_string());
         }
     }
     let recomputed = calculate_trajectory_digest(&segment.traces);
     if recomputed != segment.trajectory_digest {
-        eprintln!(
-            "[STARK Core] Failed: trajectory_digest mismatch (claimed {}, recomputed {})",
+        return Some(format!(
+            "trajectory_digest mismatch (claimed {}, recomputed {})",
             segment.trajectory_digest, recomputed
-        );
-        return false;
+        ));
     }
-    if !segment.marginal_witnesses.is_empty()
-        && !crate::air::trajectory::evaluate_trajectory_marginal_constraints(segment)
-    {
-        eprintln!("[STARK Core] Failed: trajectory marginal constraints not satisfied");
-        return false;
+    if let Some(detail) = crate::air::trajectory::marginal_constraint_error(segment) {
+        return Some(format!(
+            "trajectory marginal constraints not satisfied: {detail}"
+        ));
     }
     if !crate::air::shot_sampling::evaluate_trajectory_shot_sampling_constraints(segment) {
-        eprintln!("[STARK Core] Failed: trajectory shot sampling constraints not satisfied");
-        return false;
+        return Some("trajectory shot sampling constraints not satisfied".to_string());
     }
-    true
+    None
+}
+
+pub fn verify_trajectory_segment(segment: &TrajectorySegment) -> bool {
+    match trajectory_segment_error(segment) {
+        None => true,
+        Some(reason) => {
+            eprintln!("[STARK Core] Failed: {reason}");
+            false
+        }
+    }
+}
+
+/// Decodes a trajectory tail and returns the check that rejected it.
+pub fn try_decode_and_verify_trajectory_tail(
+    payload: &[u8],
+    marker: &[u8],
+) -> Result<TrajectorySegment, String> {
+    if marker != TRAJ_V1_MARKER && marker != TRAJ_V2_MARKER {
+        let reason = "unknown trajectory marker".to_string();
+        eprintln!("[STARK Core] Failed: {reason}");
+        return Err(reason);
+    }
+    let Some((segment, end)) = decode_trajectory_segment(payload, marker) else {
+        let reason = "malformed trajectory segment".to_string();
+        eprintln!("[STARK Core] Failed: {reason}");
+        return Err(reason);
+    };
+    if end != payload.len() {
+        let reason = "trajectory segment length mismatch".to_string();
+        eprintln!("[STARK Core] Failed: {reason}");
+        return Err(reason);
+    }
+    if let Some(reason) = trajectory_segment_error(&segment) {
+        eprintln!("[STARK Core] Failed: {reason}");
+        return Err(reason);
+    }
+    Ok(segment)
 }
 
 pub fn decode_and_verify_trajectory_tail(
     payload: &[u8],
     marker: &[u8],
 ) -> Option<TrajectorySegment> {
-    if marker != TRAJ_V1_MARKER && marker != TRAJ_V2_MARKER {
-        return None;
-    }
-    let (segment, end) = decode_trajectory_segment(payload, marker)?;
-    if end != payload.len() {
-        return None;
-    }
-    if !verify_trajectory_segment(&segment) {
-        return None;
-    }
-    Some(segment)
+    try_decode_and_verify_trajectory_tail(payload, marker).ok()
 }
 
 /// Aggregates per-shot final outcomes into a counts histogram.
@@ -719,5 +739,43 @@ mod tests {
         let mut segment = demo_segment();
         segment.trajectory_digest = "deadbeef".into();
         assert!(!verify_trajectory_segment(&segment));
+    }
+
+    #[test]
+    fn marginal_mismatch_error_names_the_check() {
+        let traces = Vec::new();
+        let sv = vec![(1.0, 0.0), (0.0, 0.0)];
+        let digest = crate::distribution::calculate_terminal_statevector_digest(&sv);
+        let segment = TrajectorySegment {
+            sample_seed: 1,
+            shots: 0,
+            measurement_spec_hash: "spec".into(),
+            trajectory_digest: calculate_trajectory_digest(&traces),
+            qubit_count: 1,
+            unitary_link_digest: String::new(),
+            traces,
+            marginal_witnesses: vec![TrajectoryMarginalWitness {
+                qubit: 0,
+                reference_p0: 0.0,
+                reference_p1: 1.0,
+                pre_measure_statevector: sv,
+                pre_measure_statevector_digest: digest,
+            }],
+        };
+        let leaf = crate::aggregation::encode_trajectory_leaf("sub-traj", &segment, None);
+        let err = crate::aggregation::verify_trajectory_leaf("sub-traj", &leaf, "")
+            .expect_err("marginal mismatch");
+        assert!(
+            err.contains("invalid trajectory segment"),
+            "missing segment label: {err}"
+        );
+        assert!(
+            err.contains("trajectory marginal constraints not satisfied"),
+            "missing marginal label: {err}"
+        );
+        assert!(
+            err.contains("witness probabilities do not match pre-measure statevector"),
+            "missing marginal detail: {err}"
+        );
     }
 }
