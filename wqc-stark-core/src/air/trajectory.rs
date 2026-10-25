@@ -13,12 +13,16 @@ pub const TRAJ_MARGINAL_EPSILON: f64 = 1e-5;
 /// Maximum qubit width for in-segment trajectory marginal zk (streaming Born AIR).
 pub const TRAJ_MARGINAL_ZK_MAX_QUBITS: usize = 16;
 
+/// Dense host marginal check. Matches `wqc-core` mid-circuit sampling (`qubit_count <= 20`).
+/// Wider than the zk cap: algebraic verify still runs when a zk tail is not emitted.
+pub const TRAJ_MARGINAL_HOST_MAX_QUBITS: usize = 20;
+
 /// Computational-basis indices where `qubit` reads 0 / 1.
 pub fn z_marginal_basis_groups(
     qubit: usize,
     qubit_count: usize,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
-    if qubit_count > TRAJ_MARGINAL_ZK_MAX_QUBITS || qubit >= qubit_count {
+    if qubit_count == 0 || qubit_count > TRAJ_MARGINAL_HOST_MAX_QUBITS || qubit >= qubit_count {
         return None;
     }
     let dim = 1usize << qubit_count;
@@ -89,6 +93,10 @@ pub fn evaluate_marginal_witness_sum<FR: PrimeCharacteristicRing + Copy>(
     acc
 }
 
+fn within_marginal_epsilon(claimed: f64, actual: f64) -> bool {
+    claimed.is_finite() && actual.is_finite() && (claimed - actual).abs() <= TRAJ_MARGINAL_EPSILON
+}
+
 fn witness_matches_claimed_probs(witness: &TrajectoryMarginalWitness, qubit_count: usize) -> bool {
     let Some((p0, p1)) = z_marginal_from_statevector(
         &witness.pre_measure_statevector,
@@ -97,8 +105,8 @@ fn witness_matches_claimed_probs(witness: &TrajectoryMarginalWitness, qubit_coun
     ) else {
         return false;
     };
-    (witness.reference_p0 - p0).abs() <= TRAJ_MARGINAL_EPSILON
-        && (witness.reference_p1 - p1).abs() <= TRAJ_MARGINAL_EPSILON
+    within_marginal_epsilon(witness.reference_p0, p0)
+        && within_marginal_epsilon(witness.reference_p1, p1)
 }
 
 /// Why a marginal witness fails, without printing. `None` when the constraints hold.
@@ -107,7 +115,7 @@ pub fn marginal_constraint_error(segment: &TrajectorySegment) -> Option<&'static
         return None;
     }
     let qubit_count = segment.qubit_count as usize;
-    if qubit_count == 0 || qubit_count > TRAJ_MARGINAL_ZK_MAX_QUBITS {
+    if qubit_count == 0 || qubit_count > TRAJ_MARGINAL_HOST_MAX_QUBITS {
         return Some("qubit_count out of range");
     }
 
@@ -135,8 +143,8 @@ pub fn marginal_constraint_error(segment: &TrajectorySegment) -> Option<&'static
             let Some(witness) = witness else {
                 return Some("shot has no matching witness");
             };
-            if (m.p0 - witness.reference_p0).abs() > TRAJ_MARGINAL_EPSILON
-                || (m.p1 - witness.reference_p1).abs() > TRAJ_MARGINAL_EPSILON
+            if !within_marginal_epsilon(m.p0, witness.reference_p0)
+                || !within_marginal_epsilon(m.p1, witness.reference_p1)
             {
                 // Branch-dependent states share digest; recompute from witness statevector.
                 let Some((oracle_p0, oracle_p1)) = z_marginal_from_statevector(
@@ -146,8 +154,8 @@ pub fn marginal_constraint_error(segment: &TrajectorySegment) -> Option<&'static
                 ) else {
                     return Some("witness statevector shape invalid");
                 };
-                if (m.p0 - oracle_p0).abs() > TRAJ_MARGINAL_EPSILON
-                    || (m.p1 - oracle_p1).abs() > TRAJ_MARGINAL_EPSILON
+                if !within_marginal_epsilon(m.p0, oracle_p0)
+                    || !within_marginal_epsilon(m.p1, oracle_p1)
                 {
                     return Some("shot probabilities do not match witness");
                 }
@@ -166,13 +174,116 @@ pub fn evaluate_trajectory_marginal_constraints(segment: &TrajectorySegment) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::distribution::calculate_terminal_statevector_digest;
+    use crate::trajectory::{TrajectoryMeasureEvent, TrajectoryShotTrace};
 
-    #[test]
-    fn plus_state_z_marginal_on_qubit0() {
+    fn plus_state() -> (Vec<(f64, f64)>, f64, f64) {
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
         let sv = vec![(inv_sqrt2, 0.0), (inv_sqrt2, 0.0)];
         let (p0, p1) = z_marginal_from_statevector(&sv, 0, 1).unwrap();
+        (sv, p0, p1)
+    }
+
+    fn segment_from(
+        sv: Vec<(f64, f64)>,
+        qubit_count: u32,
+        reference_p0: f64,
+        reference_p1: f64,
+        shot_p0: f64,
+        shot_p1: f64,
+    ) -> TrajectorySegment {
+        let digest = calculate_terminal_statevector_digest(&sv);
+        TrajectorySegment {
+            sample_seed: 1,
+            shots: 1,
+            measurement_spec_hash: "spec".into(),
+            trajectory_digest: "ignored".into(),
+            qubit_count,
+            unitary_link_digest: String::new(),
+            traces: vec![TrajectoryShotTrace {
+                shot_index: 0,
+                shot_seed: 1,
+                final_outcome: "0".into(),
+                classical_bits: vec![0],
+                measures: vec![TrajectoryMeasureEvent {
+                    gate_index: 0,
+                    qubit: 0,
+                    cbit: 0,
+                    p0: shot_p0,
+                    p1: shot_p1,
+                    outcome: 0,
+                    pre_measure_statevector_digest: digest.clone(),
+                }],
+            }],
+            marginal_witnesses: vec![TrajectoryMarginalWitness {
+                qubit: 0,
+                reference_p0,
+                reference_p1,
+                pre_measure_statevector: sv,
+                pre_measure_statevector_digest: digest,
+            }],
+        }
+    }
+
+    #[test]
+    fn plus_state_z_marginal_on_qubit0() {
+        let (_sv, p0, p1) = plus_state();
         assert!((p0 - 0.5).abs() < 1e-9);
         assert!((p1 - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn marginal_accepts_shot_inside_epsilon_of_oracle() {
+        let (sv, p0, p1) = plus_state();
+        let segment = segment_from(sv, 1, p0 + 6e-6, p1 - 6e-6, p0 - 6e-6, p1 + 6e-6);
+        assert_eq!(marginal_constraint_error(&segment), None);
+    }
+
+    #[test]
+    fn marginal_rejects_shot_outside_epsilon_nan_and_bad_links() {
+        let (sv, p0, p1) = plus_state();
+        let drifted = segment_from(sv.clone(), 1, p0, p1, p0 + 2e-5, p1);
+        assert_eq!(
+            marginal_constraint_error(&drifted),
+            Some("shot probabilities do not match witness")
+        );
+
+        let nan = segment_from(sv.clone(), 1, p0, p1, f64::NAN, p1);
+        assert_eq!(
+            marginal_constraint_error(&nan),
+            Some("shot probabilities do not match witness")
+        );
+
+        let mut digest = segment_from(sv.clone(), 1, p0, p1, p0, p1);
+        digest.marginal_witnesses[0].pre_measure_statevector_digest = "other".into();
+        assert_eq!(
+            marginal_constraint_error(&digest),
+            Some("witness digest mismatch")
+        );
+
+        let mut missing = segment_from(sv, 1, p0, p1, p0, p1);
+        missing.traces[0].measures[0].pre_measure_statevector_digest = "missing".into();
+        assert_eq!(
+            marginal_constraint_error(&missing),
+            Some("shot has no matching witness")
+        );
+    }
+
+    #[test]
+    fn host_marginal_allows_seventeen_qubits_and_rejects_past_twenty() {
+        let mut sv = vec![(0.0, 0.0); 1 << 17];
+        sv[0] = (1.0, 0.0);
+        let (p0, p1) = z_marginal_from_statevector(&sv, 0, 17).expect("host marginal");
+        assert!((p0 - 1.0).abs() < 1e-12);
+        assert!(p1.abs() < 1e-12);
+        let segment = segment_from(sv, 17, p0, p1, p0, p1);
+        assert_eq!(marginal_constraint_error(&segment), None);
+
+        let (plus, pp0, pp1) = plus_state();
+        let wide = segment_from(plus, 21, pp0, pp1, pp0, pp1);
+        assert_eq!(
+            marginal_constraint_error(&wide),
+            Some("qubit_count out of range")
+        );
     }
 }

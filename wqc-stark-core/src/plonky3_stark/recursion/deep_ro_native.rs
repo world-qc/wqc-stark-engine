@@ -10,10 +10,16 @@ use crate::plonky3_stark::config::{Challenge, Val};
 use super::fri_fold_native::point_v_n;
 
 /// Projective-line → circle point over Challenge (mirrors `Point::from_projective_line`).
-pub fn ef_from_projective_line(t: Challenge) -> (Challenge, Challenge) {
+/// `None` when `t² = -1`, which has no inverse.
+pub fn try_ef_from_projective_line(t: Challenge) -> Option<(Challenge, Challenge)> {
     let t2 = t.square();
-    let inv_denom = (Challenge::ONE + t2).try_inverse().expect("t^2 = -1");
-    ((Challenge::ONE - t2) * inv_denom, t.double() * inv_denom)
+    let inv_denom = (Challenge::ONE + t2).try_inverse()?;
+    Some(((Challenge::ONE - t2) * inv_denom, t.double() * inv_denom))
+}
+
+/// Projective-line → circle point. Panics only for a degenerate challenge on a prover-side witness.
+pub fn ef_from_projective_line(t: Challenge) -> (Challenge, Challenge) {
+    try_ef_from_projective_line(t).expect("t^2 = -1")
 }
 
 /// `Point::v_p` for base point `(sx,sy)` at extension point `at`.
@@ -27,15 +33,17 @@ pub fn v_p(sx: Val, sy: Val, at_x: Challenge, at_y: Challenge) -> (Challenge, Ch
 }
 
 /// Circle PCS DEEP row reduction at one evaluation point.
-pub fn deep_quotient_reduce_row(
+/// Errors instead of panicking when the challenge or the denominator is not invertible.
+pub fn try_deep_quotient_reduce_row(
     alpha: Challenge,
     sx: Val,
     sy: Val,
     zeta: Challenge,
     ps_at_x: &[Val],
     ps_at_zeta: &[Challenge],
-) -> Challenge {
-    let (at_x, at_y) = ef_from_projective_line(zeta);
+) -> Result<Challenge, String> {
+    let (at_x, at_y) = try_ef_from_projective_line(zeta)
+        .ok_or_else(|| "DEEP reduction undefined (t^2 = -1)".to_string())?;
     let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
     let (re_v_zeta, im_v_zeta) = v_p(sx, sy, at_x, at_y);
     let numerator = re_v_zeta - alpha_pow_width * im_v_zeta;
@@ -46,7 +54,23 @@ pub fn deep_quotient_reduce_row(
         constraint += a * (Challenge::from(px) - pz);
         a *= alpha;
     }
-    (numerator / denominator) * constraint
+    let inv = denominator
+        .try_inverse()
+        .ok_or_else(|| "DEEP denominator is zero".to_string())?;
+    Ok(numerator * inv * constraint)
+}
+
+/// Circle PCS DEEP row reduction. Panics only for a degenerate challenge on a prover-side witness.
+#[cfg(test)]
+pub fn deep_quotient_reduce_row(
+    alpha: Challenge,
+    sx: Val,
+    sy: Val,
+    zeta: Challenge,
+    ps_at_x: &[Val],
+    ps_at_zeta: &[Challenge],
+) -> Challenge {
+    try_deep_quotient_reduce_row(alpha, sx, sy, zeta, ps_at_x, ps_at_zeta).expect("DEEP reduction")
 }
 
 /// λ correction: `ro - λ · v_n(x)`.

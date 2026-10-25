@@ -77,6 +77,10 @@ pub fn born_probabilities_from_statevector(
     Some(probs)
 }
 
+fn probabilities_close(claimed: f64, actual: f64) -> bool {
+    claimed.is_finite() && actual.is_finite() && (claimed - actual).abs() <= BORN_PROB_EPSILON
+}
+
 fn probabilities_match(claimed: &[(String, f64)], recomputed: &BTreeMap<String, f64>) -> bool {
     if claimed.len() != recomputed.len() {
         return false;
@@ -85,7 +89,7 @@ fn probabilities_match(claimed: &[(String, f64)], recomputed: &BTreeMap<String, 
         let Some(actual) = recomputed.get(key) else {
             return false;
         };
-        if (claimed_p - actual).abs() > BORN_PROB_EPSILON {
+        if !probabilities_close(*claimed_p, *actual) {
             return false;
         }
     }
@@ -129,7 +133,9 @@ pub fn born_constraint_failure(segment: &DistributionSegment) -> Option<(u32, St
     }
 
     let total: f64 = recomputed.values().sum();
-    if (total - 1.0).abs() > BORN_PROB_EPSILON && total > 0.0 {
+    // `total > 0` used to skip this check. A zero or non-finite state then
+    // matched an empty table and was accepted.
+    if !total.is_finite() || (total - 1.0).abs() > BORN_PROB_EPSILON {
         return Some((
             4,
             format!("probability mass deviates from 1.0 (sum={total})"),
@@ -215,5 +221,55 @@ mod tests {
         let probs = born_probabilities_from_statevector(&sv, 1, &measures, 1).expect("born");
         assert!((probs.get("0").copied().unwrap_or(0.0) - 0.5).abs() < 1e-9);
         assert!((probs.get("1").copied().unwrap_or(0.0) - 0.5).abs() < 1e-9);
+    }
+
+    fn computational_zero(claimed: Vec<(String, f64)>) -> DistributionSegment {
+        let binding =
+            BornBinding::from_specs(1, 1, &[(0, 0)], vec![(1.0, 0.0), (0.0, 0.0)]).expect("bind");
+        DistributionSegment {
+            sample_seed: 1,
+            shots: 1,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: "ignored".into(),
+            probabilities: claimed,
+            born_binding: Some(binding),
+        }
+    }
+
+    #[test]
+    fn born_match_accepts_error_inside_epsilon_and_rejects_outside() {
+        let inside = computational_zero(vec![("0".into(), 1.0 + 5e-6)]);
+        assert_eq!(born_constraint_failure(&inside), None);
+
+        let outside = computational_zero(vec![("0".into(), 1.0 + 2e-5)]);
+        let (code, message) = born_constraint_failure(&outside).expect("reject");
+        assert_eq!(code, 3);
+        assert!(message.contains("Born rule"));
+    }
+
+    #[test]
+    fn born_match_rejects_non_finite_and_zero_mass() {
+        let nan = computational_zero(vec![("0".into(), f64::NAN)]);
+        assert_eq!(born_constraint_failure(&nan).map(|e| e.0), Some(3));
+
+        let binding =
+            BornBinding::from_specs(1, 1, &[(0, 0)], vec![(0.0, 0.0), (0.0, 0.0)]).expect("bind");
+        let zero = DistributionSegment {
+            sample_seed: 1,
+            shots: 1,
+            measurement_spec_hash: "spec".into(),
+            probability_digest: calculate_probability_digest(&[]),
+            probabilities: vec![],
+            born_binding: Some(binding),
+        };
+        let (code, message) = born_constraint_failure(&zero).expect("reject zero mass");
+        assert_eq!(code, 4);
+        assert!(message.contains("mass"));
+    }
+
+    #[test]
+    fn born_match_rejects_extra_key_even_when_its_mass_is_tiny() {
+        let extra = computational_zero(vec![("0".into(), 1.0), ("1".into(), 1e-6)]);
+        assert_eq!(born_constraint_failure(&extra).map(|e| e.0), Some(3));
     }
 }

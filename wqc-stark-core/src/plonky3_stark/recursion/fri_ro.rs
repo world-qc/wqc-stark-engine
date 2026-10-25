@@ -18,7 +18,7 @@ use crate::plonky3_stark::config::{
     devnet_circle_config, Challenge, ChallengeMmcs, Val, ValMmcs, WqcStarkConfig,
 };
 
-use super::deep_ro_native::deep_quotient_reduce_row;
+use super::deep_ro_native::try_deep_quotient_reduce_row;
 use super::fri_fold_native::{cfft_permute_index, fold_y_row, point_v_n, standard_nth_point};
 use super::fri_fs_replay::{AggFriChallenges, CirclePcsProofView};
 
@@ -164,23 +164,18 @@ pub fn reconstruct_query_ro(
         let bits_reduced = log_global_max_height - log_height;
         let orig_idx = cfft_permute_index(query_index >> bits_reduced, log_height);
         let p = standard_nth_point(log_height, orig_idx);
-        accumulate(
-            log_height,
-            opened.len(),
-            deep_quotient_reduce_row(
-                alpha,
-                p.x,
-                p.y,
-                zeta,
-                opened,
-                &proof.opened_values.trace_local,
-            ),
-        );
-        accumulate(
-            log_height,
-            opened.len(),
-            deep_quotient_reduce_row(alpha, p.x, p.y, zeta_next, opened, trace_next),
-        );
+        let deep_local = try_deep_quotient_reduce_row(
+            alpha,
+            p.x,
+            p.y,
+            zeta,
+            opened,
+            &proof.opened_values.trace_local,
+        )?;
+        accumulate(log_height, opened.len(), deep_local);
+        let deep_next =
+            try_deep_quotient_reduce_row(alpha, p.x, p.y, zeta_next, opened, trace_next)?;
+        accumulate(log_height, opened.len(), deep_next);
     }
 
     // Batch 1: quotient chunks at zeta (possibly many matrices / heights).
@@ -195,11 +190,8 @@ pub fn reconstruct_query_ro(
             let bits_reduced = log_global_max_height - log_height;
             let orig_idx = cfft_permute_index(query_index >> bits_reduced, log_height);
             let p = standard_nth_point(log_height, orig_idx);
-            accumulate(
-                log_height,
-                opened.len(),
-                deep_quotient_reduce_row(alpha, p.x, p.y, zeta, opened, ps_at_zeta),
-            );
+            let deep = try_deep_quotient_reduce_row(alpha, p.x, p.y, zeta, opened, ps_at_zeta)?;
+            accumulate(log_height, opened.len(), deep);
         }
     }
 
