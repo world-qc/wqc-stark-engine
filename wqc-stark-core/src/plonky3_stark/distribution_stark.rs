@@ -4,7 +4,7 @@ pub use super::distribution_air::{DistributionAir, BORN_ZK_MAX_OUTCOMES, BORN_ZK
 
 use p3_uni_stark::{prove, verify};
 
-use crate::air::distribution::{born_probabilities_from_statevector, BornMeasureSpec};
+use crate::air::distribution::{born_constraint_failure, BornMeasureSpec};
 use crate::distribution::DistributionSegment;
 
 use super::config::{circle_config_for_security_level, WqcStarkConfig};
@@ -151,33 +151,15 @@ pub fn generate_born_stark_proof(
 
     let air = build_distribution_air(segment)
         .ok_or_else(|| "segment does not support Born zk (qubit width or shape)".to_string())?;
+    if segment.born_binding.is_none() {
+        return Err("born binding missing".to_string());
+    }
+    if let Some((code, message)) = born_constraint_failure(segment) {
+        return Err(format!("Born constraint {code}: {message}"));
+    }
 
     let matrix = build_distribution_matrix(&air, segment)
         .ok_or_else(|| "Born constraints not satisfied on streaming trace".to_string())?;
-
-    // Cross-check against host Born oracle.
-    let binding = segment.born_binding.as_ref().unwrap();
-    let measures: Vec<BornMeasureSpec> = binding
-        .measures
-        .iter()
-        .map(|(q, c)| BornMeasureSpec {
-            qubit: *q,
-            cbit: *c,
-        })
-        .collect();
-    let oracle = born_probabilities_from_statevector(
-        &binding.terminal_statevector,
-        binding.qubit_count as usize,
-        &measures,
-        binding.classical_bit_count as usize,
-    )
-    .ok_or_else(|| "invalid born binding".to_string())?;
-    for (key, claimed) in &segment.probabilities {
-        let actual = oracle.get(key).copied().unwrap_or(0.0);
-        if (claimed - actual).abs() > 1e-4 {
-            return Err(format!("oracle mismatch for outcome {key}"));
-        }
-    }
 
     let config = circle_config_for_security_level(context.security_level, 1);
     let proof = prove(&config, &air, matrix, &[]);
@@ -215,6 +197,11 @@ pub fn verify_born_stark_proof(
                 return false;
             }
         }
+    }
+
+    if let Some((code, message)) = born_constraint_failure(segment) {
+        eprintln!("[DistributionAir] Failed: Born constraint {code}: {message}");
+        return false;
     }
 
     let air = match build_distribution_air(segment) {

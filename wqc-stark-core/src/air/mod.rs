@@ -25,6 +25,9 @@ pub type QuantumAirRow = AirRow<Mersenne31>;
 
 /// Maps `f64` trace values into Mersenne31 with fixed-point scaling.
 pub fn f64_to_m31(val: f64) -> Mersenne31 {
+    if !val.is_finite() {
+        return Mersenne31::ZERO;
+    }
     let scaled = (val * FIXED_POINT_SCALE).round() as i64;
     if scaled >= 0 {
         Mersenne31::new((scaled as u64 % 2_147_483_647) as u32)
@@ -250,5 +253,14 @@ mod tests {
         let matrix = trace_to_air_matrix(&trace).expect("matrix");
         let sum = evaluate_air_sum(&matrix);
         assert_ne!(sum, Mersenne31::ZERO);
+    }
+
+    #[test]
+    fn non_finite_amplitudes_snap_to_zero() {
+        assert_eq!(f64_to_m31(f64::NAN), Mersenne31::ZERO);
+        assert_eq!(f64_to_m31(f64::INFINITY), Mersenne31::ZERO);
+        assert_eq!(f64_to_m31(f64::NEG_INFINITY), Mersenne31::ZERO);
+        assert_eq!(m31_to_f64(f64_to_m31(0.5)), 0.5);
+        assert_eq!(m31_to_f64(f64_to_m31(-0.25)), -0.25);
     }
 }

@@ -649,7 +649,9 @@ fn collect_val_quot_batch_stmts(
 
     let mut stmts = Vec::with_capacity(LEAF_FRI_PROVEN_QUERIES);
     for (q, qp) in bundle.iter().enumerate() {
-        let batch = qp.quot_batch.as_ref().unwrap();
+        let Some(batch) = qp.quot_batch.as_ref() else {
+            return Err("quotient batch missing".to_string());
+        };
         let query_index = chal.query_indices[q];
         let input = decode_input_proof(&view.fri_proof.query_proofs[q].input_proof)?;
         let mut max_log = 0usize;
@@ -1146,8 +1148,11 @@ fn bind_val_with_groups(
         }
     } else if val_merged {
         let mut all = Vec::with_capacity(trace_stmts.len() + batch_n);
+        let batch = batch_opt
+            .as_ref()
+            .ok_or_else(|| "val quot batch statements missing".to_string())?;
         all.extend_from_slice(&trace_stmts);
-        all.extend_from_slice(batch_opt.as_ref().unwrap());
+        all.extend_from_slice(batch);
         verify_group_chunks(&all, &groups.val_trace, "val trace+quot_batch")?;
         for (q, qp) in bundle.iter().enumerate() {
             let query_index = chal.query_indices[q];
