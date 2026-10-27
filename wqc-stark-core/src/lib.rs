@@ -1,6 +1,7 @@
 pub mod aggregation;
 pub mod air;
 pub mod distribution;
+pub mod overlap;
 pub mod shrink;
 pub mod trace_spec;
 pub mod trajectory;
@@ -31,6 +32,12 @@ pub use distribution::{
     decode_and_verify_distribution_tail, decode_distribution_segment,
     sample_counts_from_probabilities, split_distribution_tail, verify_distribution_binding,
     BornBinding, DistributionSegment, DIST_V1_MARKER, DIST_V2_MARKER,
+};
+pub use overlap::{
+    append_overlap_tail, calculate_amplitude_digest, decode_and_verify_overlap_tail,
+    decode_overlap_segment, has_overlap_tail, split_overlap_tail, verify_overlap_binding,
+    verify_overlap_segment, OverlapSegment, OverlapSiteTensor, OVERLAP_ENV_LIMIT, OVERLAP_MAX_BOND,
+    OVERLAP_MAX_QUBITS, OVERLAP_V1_MARKER,
 };
 pub use trace_spec::{
     AIR_WIDTH, FIXED_POINT_SCALE, GATE_CCNOT, GATE_CNOT, GATE_CZ, GATE_H, GATE_RX, GATE_RY,
@@ -224,6 +231,21 @@ pub fn verify_stark_proof_core(context: &StarkContext<'_>, proof: &[u8]) -> bool
         };
         if crate::trajectory::decode_and_verify_trajectory_tail(payload, marker).is_none() {
             eprintln!("[STARK Core] Failed: invalid trajectory tail");
+            return false;
+        }
+    }
+
+    if crate::overlap::has_overlap_tail(proof) {
+        let Some((_, Some((payload, marker)))) = crate::overlap::split_overlap_tail(proof) else {
+            eprintln!("[STARK Core] Failed: malformed overlap tail");
+            return false;
+        };
+        let Some(segment) = crate::overlap::decode_and_verify_overlap_tail(payload, marker) else {
+            eprintln!("[STARK Core] Failed: invalid overlap tail");
+            return false;
+        };
+        if segment.amplitude_digest != context.output_hash {
+            eprintln!("[STARK Core] Failed: overlap amplitude_digest != output_hash");
             return false;
         }
     }

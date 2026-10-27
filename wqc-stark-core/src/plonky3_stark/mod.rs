@@ -310,6 +310,21 @@ pub fn verify_plonky3_proof(context: &StarkContext<'_>, proof: &[u8]) -> bool {
         }
     }
 
+    if crate::overlap::has_overlap_tail(proof) {
+        let Some((_, Some((payload, marker)))) = crate::overlap::split_overlap_tail(proof) else {
+            eprintln!("[STARK Core] Failed: malformed overlap tail");
+            return false;
+        };
+        let Some(segment) = crate::overlap::decode_and_verify_overlap_tail(payload, marker) else {
+            eprintln!("[STARK Core] Failed: invalid overlap tail");
+            return false;
+        };
+        if segment.amplitude_digest != context.output_hash {
+            eprintln!("[STARK Core] Failed: overlap amplitude_digest != output_hash");
+            return false;
+        }
+    }
+
     true
 }
 

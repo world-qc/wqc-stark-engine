@@ -440,16 +440,18 @@ pub fn has_trajectory_tail(proof: &[u8]) -> bool {
     find_trajectory_tail_marker(proof).is_some()
 }
 
-/// Strips the rightmost auxiliary tail marker suffix (Born, trajectory, or distribution).
+/// Strips the rightmost auxiliary tail marker suffix (Born, trajectory, distribution, overlap).
 pub fn strip_one_aux_tail(proof: &[u8]) -> &[u8] {
     let mut best: Option<usize> = None;
     const DIST_V2_MARKER: &[u8] = b"_M31_DIST_V2_";
     const DIST_V1_MARKER: &[u8] = b"_M31_DIST_V1_";
+    const OVERLAP_V1_MARKER: &[u8] = b"_M31_OVERLAP_V1_";
     for marker in [
         TRAJ_V2_MARKER,
         TRAJ_V1_MARKER,
         DIST_V2_MARKER,
         DIST_V1_MARKER,
+        OVERLAP_V1_MARKER,
     ] {
         if let Some(pos) = proof.windows(marker.len()).rposition(|w| w == marker) {
             best = Some(best.map_or(pos, |b| b.max(pos)));

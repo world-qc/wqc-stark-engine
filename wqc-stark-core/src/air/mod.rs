@@ -5,6 +5,7 @@
 
 mod constraints;
 pub mod distribution;
+pub mod overlap;
 pub mod shot_sampling;
 pub mod trajectory;
 
