@@ -4,11 +4,12 @@ use std::panic::catch_unwind;
 use std::slice;
 use wqc_stark_core::{
     build_encoded_leaf_pcs_bundle_from_child, compose_stark_proofs_with_pcs,
-    decode_leaf_pcs_bundle_bytes, generate_stark_proof, is_unitary_born_leaf_compose,
-    is_unitary_trajectory_leaf_compose, proof_has_trajectory_unitary_link,
-    proof_has_unitary_statevector_link, trajectory_proof_view, verify_distribution_binding,
-    verify_leaf_pcs_bundle, verify_root_proof, verify_stark_proof_core, verify_trajectory_binding,
-    ComposeContext, RootVerifyContext, StarkContext,
+    decode_leaf_pcs_bundle_bytes, generate_stark_proof, has_overlap_tail,
+    is_unitary_born_leaf_compose, is_unitary_trajectory_leaf_compose,
+    proof_has_trajectory_unitary_link, proof_has_unitary_statevector_link, trajectory_proof_view,
+    verify_distribution_binding, verify_leaf_pcs_bundle, verify_overlap_binding, verify_root_proof,
+    verify_stark_proof_core, verify_trajectory_binding, ComposeContext, RootVerifyContext,
+    StarkContext,
 };
 
 fn unwind_to_ffi_code(result: Result<i32, Box<dyn std::any::Any + Send>>) -> i32 {
@@ -669,4 +670,57 @@ fn parse_sample_counts_json(json: &str) -> Option<(std::collections::BTreeMap<St
     }
     let payload: Payload = serde_json::from_str(json).ok()?;
     Some((payload.counts, payload.shots))
+}
+
+/// Returns 1 when the proof transcript includes an overlap tail.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_has_overlap_tail(proof_bytes: *const u8, proof_len: u32) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() {
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if has_overlap_tail(proof_slice) {
+            1
+        } else {
+            0
+        }
+    });
+    unwind_to_ffi_code(result)
+}
+
+/// Verifies overlap tail binding to `output_result_hash`.
+///
+/// # Safety
+///
+/// `proof_bytes` must reference at least `proof_len` bytes.
+/// `output_hash` must be null-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_verify_overlap_binding(
+    proof_bytes: *const u8,
+    proof_len: u32,
+    output_hash: *const c_char,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if proof_bytes.is_null() || output_hash.is_null() {
+            eprintln!("[Rust FFI] overlap binding: null pointer");
+            return 0;
+        }
+        let expected = cstr_or_empty(output_hash);
+        if expected.is_empty() {
+            eprintln!("[Rust FFI] overlap binding: output_hash required");
+            return 0;
+        }
+        let proof_slice = slice::from_raw_parts(proof_bytes, proof_len as usize);
+        if verify_overlap_binding(proof_slice, expected) {
+            1
+        } else {
+            0
+        }
+    });
+    unwind_to_ffi_code(result)
 }
