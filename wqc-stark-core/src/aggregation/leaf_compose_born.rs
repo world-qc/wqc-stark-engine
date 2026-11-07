@@ -389,6 +389,9 @@ pub fn verify_unitary_born_leaf_compose(context: &StarkContext<'_>, proof: &[u8]
 mod tests {
     use super::*;
 
+    /// Measurement spec hashes are 64 hex chars on the wire; leaf binding parse drops others.
+    const SPEC_HASH: &str = "abababababababababababababababababababababababababababababababab";
+
     fn bell_segment() -> DistributionSegment {
         let inv_sqrt2 = 1.0f64 / 2.0f64.sqrt();
         let sv = vec![(inv_sqrt2, 0.0), (0.0, 0.0), (0.0, 0.0), (inv_sqrt2, 0.0)];
@@ -398,7 +401,7 @@ mod tests {
         DistributionSegment {
             sample_seed: 42,
             shots: 128,
-            measurement_spec_hash: "spec".into(),
+            measurement_spec_hash: SPEC_HASH.into(),
             probability_digest: crate::distribution::calculate_probability_digest(&probs),
             probabilities: probs,
             born_binding: Some(binding),
@@ -433,6 +436,11 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     fn born_compose_fixture() -> (StarkContext<'static>, Vec<u8>) {
+        born_compose_fixture_at("")
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    fn born_compose_fixture_at(security_level: &'static str) -> (StarkContext<'static>, Vec<u8>) {
         use crate::generate_plonky3_stark_proof;
         use crate::plonky3_stark::generate_born_stark_proof;
 
@@ -453,8 +461,8 @@ mod tests {
             slice_id: "0",
             output_hash: "counts-hash",
             terminal_statevector_digest: link,
-            measurement_spec_hash: "spec",
-            security_level: "",
+            measurement_spec_hash: SPEC_HASH,
+            security_level,
         };
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
@@ -462,12 +470,81 @@ mod tests {
             sub_task_id: "sub-born",
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: link,
-            security_level: "",
+            security_level,
         };
         let born_inner = generate_born_stark_proof(&born_ctx, &segment).expect("born zk");
         let composed =
             compose_unitary_born_leaf(&ctx, &unitary, &segment, &born_inner).expect("compose");
         (ctx, composed)
+    }
+
+    /// Composes the single-leaf root the composer builds for a one-slice task (the leaf paired
+    /// with itself) and checks it on the RecAgg path, not the audit walk.
+    #[cfg(feature = "plonky3-stark")]
+    fn single_leaf_born_root(security_level: &'static str) -> Vec<u8> {
+        use crate::aggregation::compose_stark_proofs_with_pcs;
+        use crate::plonky3_stark::split_agg_tail;
+
+        let (_, leaf) = born_compose_fixture_at(security_level);
+        let root = compose_stark_proofs_with_pcs(
+            &ComposeContext {
+                parent_task_id: "task-born",
+                compose_label: "root",
+                manifest_root_hash: "manifest",
+                security_level,
+            },
+            &leaf,
+            &leaf,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("compose root");
+        let (body, rec_bytes) = split_rec_tail(&root).expect("rec tail");
+        let v3 = split_agg_tail(body).map(|(v3, _)| v3).unwrap_or(body);
+        let (header, left_child, right_child) = decode_compose_v3_slices(v3).expect("v3 slices");
+        let rec_ctx = recursive_context_for_children_with_proof(
+            "task-born",
+            "root",
+            "manifest",
+            header.left_child_hash,
+            header.right_child_hash,
+            left_child,
+            right_child,
+            rec_bytes,
+            security_level,
+        )
+        .expect("rec ctx");
+        for cert in [&rec_ctx.left_agg_cert, &rec_ctx.right_agg_cert] {
+            let cert = cert.as_ref().expect("Born leaf is an aggregation child");
+            assert!(cert.deep_ros.iter().all(|d| d.deep_stark.is_empty()));
+            assert!(cert.deep_ro_traces.iter().all(|d| d.deep_stark.is_empty()));
+        }
+        assert!(verify_recursive_aggregation_proof(&rec_ctx, rec_bytes));
+        root
+    }
+
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn single_leaf_born_root_ships_host_only_deep_ro() {
+        let root = single_leaf_born_root("low");
+        // 264 KB while DeepRo steps carried STARKs; 143 KB host-only.
+        assert!(root.len() < 160_000, "root {} bytes", root.len());
+    }
+
+    /// Prints the single-leaf Born root size per `security_level` (spec zk-STARK §5.1 table).
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    #[ignore = "measurement; run with --nocapture"]
+    fn single_leaf_born_root_sizes() {
+        for level in ["low", "normal", "high", "ultra"] {
+            let root = single_leaf_born_root(level);
+            println!(
+                "single-leaf Born root security_level={level}: {} bytes",
+                root.len()
+            );
+        }
     }
 
     #[cfg(feature = "plonky3-stark")]

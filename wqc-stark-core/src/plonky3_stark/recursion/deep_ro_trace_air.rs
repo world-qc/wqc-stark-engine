@@ -16,6 +16,7 @@ use crate::plonky3_stark::config::{
     DEVNET_FRI_NUM_QUERIES,
 };
 
+use super::deep_ro_air::DEEP_RO_MAX_LOG_N;
 use super::deep_ro_native::deep_ro_trace_witness;
 use super::ef_limbs::{
     ef_add_limbs, ef_assert_eq, ef_mul_limbs, ef_scale_by_base, ef_square_limbs, ef_sub_limbs,
@@ -495,17 +496,14 @@ pub fn generate_deep_ro_trace_proof_with_queries(
     zeta_next: Challenge,
     num_queries: usize,
 ) -> Result<DeepRoTraceStepProof, String> {
-    if log_n == 0 || log_n > 16 {
-        return Err("log_n out of range".into());
-    }
     if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
         return Err(format!(
             "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
         ));
     }
-    let (pv, out) = build_public_values(
+    let (mut step, pv) = step_and_publics(
         sx, sy, alpha, px, pz_local, pz_next, lambda, log_n, zeta, zeta_next,
-    );
+    )?;
     let matrix = pad_air_matrix_for_uni_stark(build_matrix());
     p3_air::check_constraints(&DeepRoTraceAir, &matrix, &pv);
     let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
@@ -514,14 +512,57 @@ pub fn generate_deep_ro_trace_proof_with_queries(
         devnet_circle_config_with_queries(num_queries)
     };
     let proof = prove(&config, &DeepRoTraceAir, matrix, &pv);
-    let deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro_trace")?;
+    step.deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro_trace")?;
+    Ok(step)
+}
+
+/// Host-only DeepRoTrace step (empty `deep_stark`) for aggregation certificates; see
+/// [`super::deep_ro_air::deep_ro_step_host_only`].
+#[allow(clippy::too_many_arguments)]
+pub fn deep_ro_trace_step_host_only(
+    sx: Val,
+    sy: Val,
+    alpha: Challenge,
+    px: &[Val; W],
+    pz_local: &[Challenge; W],
+    pz_next: &[Challenge; W],
+    lambda: Challenge,
+    log_n: usize,
+    zeta: Challenge,
+    zeta_next: Challenge,
+) -> Result<DeepRoTraceStepProof, String> {
+    step_and_publics(
+        sx, sy, alpha, px, pz_local, pz_next, lambda, log_n, zeta, zeta_next,
+    )
+    .map(|(step, _)| step)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn step_and_publics(
+    sx: Val,
+    sy: Val,
+    alpha: Challenge,
+    px: &[Val; W],
+    pz_local: &[Challenge; W],
+    pz_next: &[Challenge; W],
+    lambda: Challenge,
+    log_n: usize,
+    zeta: Challenge,
+    zeta_next: Challenge,
+) -> Result<(DeepRoTraceStepProof, Vec<Mersenne31>), String> {
+    if !(1..=DEEP_RO_MAX_LOG_N).contains(&log_n) {
+        return Err("log_n out of range".into());
+    }
+    let (pv, out) = build_public_values(
+        sx, sy, alpha, px, pz_local, pz_next, lambda, log_n, zeta, zeta_next,
+    );
     let mut pz_local_limbs = [[Mersenne31::ZERO; 3]; W];
     let mut pz_next_limbs = [[Mersenne31::ZERO; 3]; W];
     for i in 0..W {
         pz_local_limbs[i] = challenge_to_limbs(pz_local[i]);
         pz_next_limbs[i] = challenge_to_limbs(pz_next[i]);
     }
-    Ok(DeepRoTraceStepProof {
+    let step = DeepRoTraceStepProof {
         sx,
         sy,
         alpha_limbs: challenge_to_limbs(alpha),
@@ -534,11 +575,35 @@ pub fn generate_deep_ro_trace_proof_with_queries(
         log_n: log_n as u32,
         zeta_limbs: challenge_to_limbs(zeta),
         zeta_next_limbs: challenge_to_limbs(zeta_next),
-        deep_stark,
-    })
+        deep_stark: Vec::new(),
+    };
+    Ok((step, pv))
 }
 
+/// Verifies a DeepRoTrace step and its nested STARK.
 pub fn verify_deep_ro_trace_proof(proof: &DeepRoTraceStepProof) -> bool {
+    match native_publics(proof) {
+        Some(pv) => verify_nested_stark(proof, &pv),
+        None => false,
+    }
+}
+
+/// Verifies a DeepRoTrace step of an aggregation certificate: native checks, plus the
+/// nested STARK when one is attached (certificates from composers before host-only DeepRo).
+pub fn verify_agg_deep_ro_trace_step(proof: &DeepRoTraceStepProof) -> bool {
+    match native_publics(proof) {
+        Some(_) if proof.deep_stark.is_empty() => true,
+        Some(pv) => verify_nested_stark(proof, &pv),
+        None => false,
+    }
+}
+
+/// Rebuilds the public values from the step's inputs and checks the claimed `out` and `v_n`.
+fn native_publics(proof: &DeepRoTraceStepProof) -> Option<Vec<Mersenne31>> {
+    if !(1..=DEEP_RO_MAX_LOG_N as u32).contains(&proof.log_n) {
+        eprintln!("[DeepRoTrace] Failed: log_n {} out of range", proof.log_n);
+        return None;
+    }
     let alpha = limbs_to_challenge(proof.alpha_limbs);
     let mut pz_local = [Challenge::ZERO; W];
     let mut pz_next = [Challenge::ZERO; W];
@@ -564,12 +629,16 @@ pub fn verify_deep_ro_trace_proof(proof: &DeepRoTraceStepProof) -> bool {
     );
     if out != expect_out {
         eprintln!("[DeepRoTrace] Failed: native out mismatch");
-        return false;
+        return None;
     }
     if proof.v_n != pv[DEEP_RO_TRACE_NUM_PUBLIC - 4] {
         eprintln!("[DeepRoTrace] Failed: v_n mismatch");
-        return false;
+        return None;
     }
+    Some(pv)
+}
+
+fn verify_nested_stark(proof: &DeepRoTraceStepProof, pv: &[Mersenne31]) -> bool {
     let stark: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&proof.deep_stark) {
         Ok(p) => p,
         Err(e) => {
@@ -584,7 +653,7 @@ pub fn verify_deep_ro_trace_proof(proof: &DeepRoTraceStepProof) -> bool {
             return false;
         }
     };
-    match verify(&config, &DeepRoTraceAir, &stark, &pv) {
+    match verify(&config, &DeepRoTraceAir, &stark, pv) {
         Ok(()) => true,
         Err(e) => {
             eprintln!("[DeepRoTrace] STARK: {e:?}");
@@ -632,5 +701,51 @@ mod tests {
         )
         .expect("prove");
         assert!(verify_deep_ro_trace_proof(&proof));
+        assert!(verify_agg_deep_ro_trace_step(&proof));
+    }
+
+    #[test]
+    fn host_only_step_checks_its_publics_natively() {
+        let alpha = Challenge::new([Val::from_u32(11), Val::from_u32(12), Val::from_u32(13)]);
+        let zeta = Challenge::new([Val::from_u32(17), Val::from_u32(19), Val::from_u32(23)]);
+        let zeta_next = Challenge::new([Val::from_u32(29), Val::from_u32(31), Val::from_u32(37)]);
+        let mut px = [Val::ZERO; W];
+        let mut pz_local = [Challenge::ZERO; W];
+        let mut pz_next = [Challenge::ZERO; W];
+        for i in 0..W {
+            px[i] = Val::from_u32(i as u32 + 1);
+            pz_local[i] = Challenge::from(Val::from_u32(2 * i as u32 + 3));
+            pz_next[i] = Challenge::from(Val::from_u32(3 * i as u32 + 5));
+        }
+        let lambda = Challenge::new([Val::from_u32(1), Val::from_u32(2), Val::from_u32(3)]);
+        let step = deep_ro_trace_step_host_only(
+            Val::from_u32(3),
+            Val::from_u32(5),
+            alpha,
+            &px,
+            &pz_local,
+            &pz_next,
+            lambda,
+            3,
+            zeta,
+            zeta_next,
+        )
+        .expect("host-only step");
+        assert!(step.deep_stark.is_empty());
+        assert!(verify_agg_deep_ro_trace_step(&step));
+        assert!(!verify_deep_ro_trace_proof(&step));
+
+        let mut bad = step.clone();
+        bad.out_limbs[0] += Val::ONE;
+        assert!(!verify_agg_deep_ro_trace_step(&bad));
+        let mut bad = step.clone();
+        bad.px[W - 1] += Val::ONE;
+        assert!(!verify_agg_deep_ro_trace_step(&bad));
+        let mut bad = step.clone();
+        bad.pz_next_limbs[0][0] += Val::ONE;
+        assert!(!verify_agg_deep_ro_trace_step(&bad));
+        let mut bad = step;
+        bad.log_n = u32::MAX;
+        assert!(!verify_agg_deep_ro_trace_step(&bad));
     }
 }

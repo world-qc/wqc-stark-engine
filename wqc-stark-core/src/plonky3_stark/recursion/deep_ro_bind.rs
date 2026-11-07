@@ -10,14 +10,15 @@ use crate::plonky3_stark::config::{
 };
 
 use super::deep_ro_air::{
-    generate_deep_ro_proof_with_queries, verify_deep_ro_proof, DeepRoStepProof,
+    deep_ro_step_host_only, generate_deep_ro_proof_with_queries, verify_agg_deep_ro_step,
+    verify_deep_ro_proof, DeepRoStepProof,
 };
 use super::deep_ro_leaf_trace_air::{
     generate_deep_ro_leaf_trace_proof_with_queries, verify_deep_ro_leaf_trace_proof,
     DeepRoLeafTraceStepProof,
 };
 use super::deep_ro_trace_air::{
-    generate_deep_ro_trace_proof_with_queries, verify_deep_ro_trace_proof, DeepRoTraceStepProof,
+    deep_ro_trace_step_host_only, verify_agg_deep_ro_trace_step, DeepRoTraceStepProof,
 };
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{AGG_FRI_PROVEN_QUERIES, LEAF_FRI_PROVEN_QUERIES};
@@ -68,18 +69,10 @@ fn fold_y_offset_for_query(
     Ok(off)
 }
 
-/// Prove DeepRo for AggregationAir FRI quotient batch at `query`.
+/// Host-only DeepRo for AggregationAir FRI quotient batch at `query`.
 pub fn deep_ro_quot_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
     query: usize,
-) -> Result<DeepRoStepProof, String> {
-    deep_ro_quot_from_agg_proof_with_queries(proof, query, DEVNET_FRI_NUM_QUERIES)
-}
-
-pub fn deep_ro_quot_from_agg_proof_with_queries(
-    proof: &Proof<WqcStarkConfig>,
-    query: usize,
-    num_queries: usize,
 ) -> Result<DeepRoStepProof, String> {
     let chal = replay_agg_fri_challenges(proof)?;
     let view = decode_pcs_view(proof)?;
@@ -142,20 +135,10 @@ pub fn deep_ro_quot_from_agg_proof_with_queries(
         .ok_or_else(|| "missing lambda for quot height".to_string())?;
 
     let log_n = quot_log_height - log_blowup;
-    generate_deep_ro_proof_with_queries(
-        p.x,
-        p.y,
-        chal.batch_alpha,
-        px,
-        pz,
-        lambda,
-        log_n,
-        chal.zeta,
-        num_queries,
-    )
+    deep_ro_step_host_only(p.x, p.y, chal.batch_alpha, px, pz, lambda, log_n, chal.zeta)
 }
 
-/// Prove DeepRo for AggregationAir FRI query 0 quotient batch.
+/// Host-only DeepRo for AggregationAir FRI query 0 quotient batch.
 pub fn deep_ro_quot_query0_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
 ) -> Result<DeepRoStepProof, String> {
@@ -169,8 +152,8 @@ pub fn bind_deep_ro_to_fold_y(
     fold_ys: &[FriFoldStepProof],
     query: usize,
 ) -> Result<(), String> {
-    if !verify_deep_ro_proof(deep_ro) {
-        return Err("DeepRo STARK verify failed".into());
+    if !verify_agg_deep_ro_step(deep_ro) {
+        return Err("DeepRo step verify failed".into());
     }
     let chal = replay_agg_fri_challenges(proof)?;
     let view = decode_pcs_view(proof)?;
@@ -275,18 +258,10 @@ pub fn bind_deep_ro_to_fold_y(
     Ok(())
 }
 
-/// Prove DeepRoTrace for AggregationAir FRI trace batch at `query`.
+/// Host-only DeepRoTrace for AggregationAir FRI trace batch at `query`.
 pub fn deep_ro_trace_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
     query: usize,
-) -> Result<DeepRoTraceStepProof, String> {
-    deep_ro_trace_from_agg_proof_with_queries(proof, query, DEVNET_FRI_NUM_QUERIES)
-}
-
-pub fn deep_ro_trace_from_agg_proof_with_queries(
-    proof: &Proof<WqcStarkConfig>,
-    query: usize,
-    num_queries: usize,
 ) -> Result<DeepRoTraceStepProof, String> {
     let chal = replay_agg_fri_challenges(proof)?;
     let view = decode_pcs_view(proof)?;
@@ -363,7 +338,7 @@ pub fn deep_ro_trace_from_agg_proof_with_queries(
         .ok_or_else(|| "missing lambda for trace height".to_string())?;
 
     let log_n = trace_log_height - log_blowup;
-    generate_deep_ro_trace_proof_with_queries(
+    deep_ro_trace_step_host_only(
         p.x,
         p.y,
         chal.batch_alpha,
@@ -374,11 +349,10 @@ pub fn deep_ro_trace_from_agg_proof_with_queries(
         log_n,
         zeta,
         zeta_next,
-        num_queries,
     )
 }
 
-/// Prove DeepRoTrace for AggregationAir FRI query 0 trace batch.
+/// Host-only DeepRoTrace for AggregationAir FRI query 0 trace batch.
 pub fn deep_ro_trace_query0_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
 ) -> Result<DeepRoTraceStepProof, String> {
@@ -392,8 +366,8 @@ pub fn bind_deep_ro_trace_to_fold_y(
     fold_ys: &[FriFoldStepProof],
     query: usize,
 ) -> Result<(), String> {
-    if !verify_deep_ro_trace_proof(deep_ro) {
-        return Err("DeepRoTrace STARK verify failed".into());
+    if !verify_agg_deep_ro_trace_step(deep_ro) {
+        return Err("DeepRoTrace step verify failed".into());
     }
     let chal = replay_agg_fri_challenges(proof)?;
     let view = decode_pcs_view(proof)?;
@@ -512,16 +486,13 @@ pub fn bind_deep_ro_trace_to_fold_y(
     Ok(())
 }
 
-/// Prove DeepRo + DeepRoTrace for all proven FRI queries.
+/// Host-only DeepRo + DeepRoTrace for all proven FRI queries.
+///
+/// The nested STARKs grew with the square of the query count (one per query, each with that
+/// many queries of its own) and dominated agg PCS certificates; they are left empty like the
+/// leaf Mmcs / FriFold / OOD steps.
 pub fn deep_ro_bundle_from_agg_proof(
     proof: &Proof<WqcStarkConfig>,
-) -> Result<AggDeepRoBundle, String> {
-    deep_ro_bundle_from_agg_proof_with_queries(proof, DEVNET_FRI_NUM_QUERIES)
-}
-
-pub fn deep_ro_bundle_from_agg_proof_with_queries(
-    proof: &Proof<WqcStarkConfig>,
-    num_queries: usize,
 ) -> Result<AggDeepRoBundle, String> {
     let chal = replay_agg_fri_challenges(proof)?;
     let proven_queries = chal.query_indices.len();
@@ -533,15 +504,15 @@ pub fn deep_ro_bundle_from_agg_proof_with_queries(
     let mut deep_ros = Vec::with_capacity(proven_queries);
     let mut deep_ro_traces = Vec::with_capacity(proven_queries);
     for q in 0..proven_queries {
-        let deep = deep_ro_quot_from_agg_proof_with_queries(proof, q, num_queries)
+        let deep = deep_ro_quot_from_agg_proof(proof, q)
             .map_err(|e| format!("DeepRo quot query {q}: {e}"))?;
-        if !verify_deep_ro_proof(&deep) {
+        if !verify_agg_deep_ro_step(&deep) {
             return Err(format!("DeepRo self-check failed at query {q}"));
         }
         deep_ros.push(deep);
-        let deep_tr = deep_ro_trace_from_agg_proof_with_queries(proof, q, num_queries)
+        let deep_tr = deep_ro_trace_from_agg_proof(proof, q)
             .map_err(|e| format!("DeepRoTrace query {q}: {e}"))?;
-        if !verify_deep_ro_trace_proof(&deep_tr) {
+        if !verify_agg_deep_ro_trace_step(&deep_tr) {
             return Err(format!("DeepRoTrace self-check failed at query {q}"));
         }
         deep_ro_traces.push(deep_tr);
@@ -1137,7 +1108,7 @@ mod tests {
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let deep = deep_ro_quot_from_agg_proof(&proof, 0).expect("deep");
-        assert!(verify_deep_ro_proof(&deep));
+        assert!(verify_agg_deep_ro_step(&deep));
         let bundle = fri_fold_bundle_from_agg_proof(&proof).expect("bundle");
         bind_deep_ro_to_fold_y(&proof, &deep, &bundle.fold_ys, 0).expect("bind");
     }
@@ -1156,7 +1127,7 @@ mod tests {
         let plonky3 = decode_agg_proof_owned(&transcript, &ctx).expect("decode");
         let proof: Proof<WqcStarkConfig> = postcard::from_bytes(&plonky3).expect("postcard");
         let deep = deep_ro_trace_from_agg_proof(&proof, 0).expect("deep");
-        assert!(verify_deep_ro_trace_proof(&deep));
+        assert!(verify_agg_deep_ro_trace_step(&deep));
         let bundle = fri_fold_bundle_from_agg_proof(&proof).expect("bundle");
         bind_deep_ro_trace_to_fold_y(&proof, &deep, &bundle.fold_ys, 0).expect("bind");
     }
@@ -1177,6 +1148,11 @@ mod tests {
         let deep_bundle = deep_ro_bundle_from_agg_proof(&proof).expect("deep bundle");
         assert_eq!(deep_bundle.deep_ros.len(), AGG_DEEP_RO_MAX);
         assert_eq!(deep_bundle.deep_ro_traces.len(), AGG_DEEP_RO_TRACE_MAX);
+        assert!(deep_bundle.deep_ros.iter().all(|d| d.deep_stark.is_empty()));
+        assert!(deep_bundle
+            .deep_ro_traces
+            .iter()
+            .all(|d| d.deep_stark.is_empty()));
         let fri = fri_fold_bundle_from_agg_proof(&proof).expect("fri bundle");
         bind_deep_ro_bundle_to_proof(
             &proof,
