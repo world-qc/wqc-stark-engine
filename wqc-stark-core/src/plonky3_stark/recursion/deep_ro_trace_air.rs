@@ -601,7 +601,7 @@ pub fn verify_agg_deep_ro_trace_step(proof: &DeepRoTraceStepProof) -> bool {
 /// Rebuilds the public values from the step's inputs and checks the claimed `out` and `v_n`.
 fn native_publics(proof: &DeepRoTraceStepProof) -> Option<Vec<Mersenne31>> {
     if !(1..=DEEP_RO_MAX_LOG_N as u32).contains(&proof.log_n) {
-        eprintln!("[DeepRoTrace] Failed: log_n {} out of range", proof.log_n);
+        eprintln!("[DeepRoTrace] Failed: log_n out of range");
         return None;
     }
     let alpha = limbs_to_challenge(proof.alpha_limbs);
