@@ -16,11 +16,9 @@ use crate::plonky3_stark::config::{ValMmcs, WqcStarkConfig};
 use crate::plonky3_stark::transcript_v4::decode_agg_proof_owned;
 
 use super::agg_constraints::aggregation_air_constraints_hold;
-use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
-use super::deep_ro_bind::{
-    bind_deep_ro_bundle_to_proof, deep_ro_bundle_from_agg_proof_with_queries,
-};
-use super::deep_ro_trace_air::{verify_deep_ro_trace_proof, DeepRoTraceStepProof};
+use super::deep_ro_air::{verify_agg_deep_ro_step, DeepRoStepProof};
+use super::deep_ro_bind::{bind_deep_ro_bundle_to_proof, deep_ro_bundle_from_agg_proof};
+use super::deep_ro_trace_air::{verify_agg_deep_ro_trace_step, DeepRoTraceStepProof};
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::{
     covers_all_devnet_fri_queries, fri_fold_bundle_from_agg_proof, AGG_FRI_MAX_FOLD_YS,
@@ -73,8 +71,11 @@ pub struct AggPcsCertificate {
     /// R3-M3b3: commit-phase Circle FRI `fold_x` steps (all proven queries × rounds) with FS β + RO.
     pub fri_folds: Vec<FriFoldStepProof>,
     /// R3-M3c3: DeepRo (DEEP+λ) for all proven queries' quotient batches; bound into FriFoldY.
+    /// Host-only (empty `deep_stark`); verify recomputes the step natively. Older
+    /// certificates that still carry the STARK verify it too.
     pub deep_ros: Vec<DeepRoStepProof>,
     /// R3-M3c3: DeepRoTrace (DEEP+λ) for all proven queries' trace batches; bound into FriFoldY.
+    /// Host-only like `deep_ros`.
     pub deep_ro_traces: Vec<DeepRoTraceStepProof>,
     /// R3 OOD: in-circuit constraint fold + quotient check at ζ.
     pub ood: OodStepProof,
@@ -190,7 +191,7 @@ pub fn build_agg_pcs_certificate(
         ));
     }
 
-    let deep_bundle = deep_ro_bundle_from_agg_proof_with_queries(&proof, nested_queries)
+    let deep_bundle = deep_ro_bundle_from_agg_proof(&proof)
         .map_err(|e| format!("R3-M3c3 DeepRo bundle prove failed: {e}"))?;
     // DeepRo self-checks run per-query inside deep_ro_bundle_from_agg_proof.
     bind_deep_ro_bundle_to_proof(
@@ -335,14 +336,14 @@ pub fn verify_agg_pcs_certificate(
         return false;
     }
     for (i, deep) in cert.deep_ros.iter().enumerate() {
-        if !verify_deep_ro_proof(deep) {
-            eprintln!("[AggPcsCertificate] Failed: DeepRo STARK at {i}");
+        if !verify_agg_deep_ro_step(deep) {
+            eprintln!("[AggPcsCertificate] Failed: DeepRo step at {i}");
             return false;
         }
     }
     for (i, deep) in cert.deep_ro_traces.iter().enumerate() {
-        if !verify_deep_ro_trace_proof(deep) {
-            eprintln!("[AggPcsCertificate] Failed: DeepRoTrace STARK at {i}");
+        if !verify_agg_deep_ro_trace_step(deep) {
+            eprintln!("[AggPcsCertificate] Failed: DeepRoTrace step at {i}");
             return false;
         }
     }

@@ -253,15 +253,12 @@ pub fn generate_deep_ro_proof_with_queries(
     zeta: Challenge,
     num_queries: usize,
 ) -> Result<DeepRoStepProof, String> {
-    if log_n == 0 || log_n > 16 {
-        return Err("log_n out of range".into());
-    }
     if num_queries == 0 || num_queries > DEVNET_FRI_NUM_QUERIES {
         return Err(format!(
             "nested FRI query count {num_queries} out of range 1..={DEVNET_FRI_NUM_QUERIES}"
         ));
     }
-    let (pv, out) = build_public_values(sx, sy, alpha, px, pz, lambda, log_n, zeta);
+    let (mut step, pv) = step_and_publics(sx, sy, alpha, px, pz, lambda, log_n, zeta)?;
     let matrix = pad_air_matrix_for_uni_stark(build_matrix());
     p3_air::check_constraints(&DeepRoAir, &matrix, &pv);
     let config = if num_queries == DEVNET_FRI_NUM_QUERIES {
@@ -270,8 +267,44 @@ pub fn generate_deep_ro_proof_with_queries(
         devnet_circle_config_with_queries(num_queries)
     };
     let proof = prove(&config, &DeepRoAir, matrix, &pv);
-    let deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro")?;
-    Ok(DeepRoStepProof {
+    step.deep_stark = super::prove_workspace::encode_stark_and_drop(proof, "deep_ro")?;
+    Ok(step)
+}
+
+/// Host-only DeepRo step (empty `deep_stark`) for aggregation certificates. The AIR
+/// constrains only public values, and [`verify_agg_deep_ro_step`] rebuilds all of them from
+/// the step's inputs, so once those inputs are bound to the parent proof the nested STARK
+/// adds no check.
+#[allow(clippy::too_many_arguments)]
+pub fn deep_ro_step_host_only(
+    sx: Val,
+    sy: Val,
+    alpha: Challenge,
+    px: [Val; 3],
+    pz: [Challenge; 3],
+    lambda: Challenge,
+    log_n: usize,
+    zeta: Challenge,
+) -> Result<DeepRoStepProof, String> {
+    step_and_publics(sx, sy, alpha, px, pz, lambda, log_n, zeta).map(|(step, _)| step)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn step_and_publics(
+    sx: Val,
+    sy: Val,
+    alpha: Challenge,
+    px: [Val; 3],
+    pz: [Challenge; 3],
+    lambda: Challenge,
+    log_n: usize,
+    zeta: Challenge,
+) -> Result<(DeepRoStepProof, Vec<Mersenne31>), String> {
+    if !(1..=DEEP_RO_MAX_LOG_N).contains(&log_n) {
+        return Err("log_n out of range".into());
+    }
+    let (pv, out) = build_public_values(sx, sy, alpha, px, pz, lambda, log_n, zeta);
+    let step = DeepRoStepProof {
         sx,
         sy,
         alpha_limbs: challenge_to_limbs(alpha),
@@ -286,11 +319,38 @@ pub fn generate_deep_ro_proof_with_queries(
         out_limbs: challenge_to_limbs(out),
         log_n: log_n as u32,
         zeta_limbs: challenge_to_limbs(zeta),
-        deep_stark,
-    })
+        deep_stark: Vec::new(),
+    };
+    Ok((step, pv))
 }
 
+/// Largest `log_n` a step may claim; bounds the native `v_n` loop on untrusted input.
+pub const DEEP_RO_MAX_LOG_N: usize = 16;
+
+/// Verifies a DeepRo step and its nested STARK (leaf PCS bundles).
 pub fn verify_deep_ro_proof(proof: &DeepRoStepProof) -> bool {
+    match native_publics(proof) {
+        Some(pv) => verify_nested_stark(proof, &pv),
+        None => false,
+    }
+}
+
+/// Verifies a DeepRo step of an aggregation certificate: native checks, plus the nested
+/// STARK when one is attached (certificates from composers before host-only DeepRo).
+pub fn verify_agg_deep_ro_step(proof: &DeepRoStepProof) -> bool {
+    match native_publics(proof) {
+        Some(_) if proof.deep_stark.is_empty() => true,
+        Some(pv) => verify_nested_stark(proof, &pv),
+        None => false,
+    }
+}
+
+/// Rebuilds the public values from the step's inputs and checks the claimed `out` and `v_n`.
+fn native_publics(proof: &DeepRoStepProof) -> Option<Vec<Mersenne31>> {
+    if !(1..=DEEP_RO_MAX_LOG_N as u32).contains(&proof.log_n) {
+        eprintln!("[DeepRo] Failed: log_n out of range");
+        return None;
+    }
     let alpha = limbs_to_challenge(proof.alpha_limbs);
     let pz = [
         limbs_to_challenge(proof.pz_limbs[0]),
@@ -312,12 +372,16 @@ pub fn verify_deep_ro_proof(proof: &DeepRoStepProof) -> bool {
     );
     if out != expect_out {
         eprintln!("[DeepRo] Failed: native out mismatch");
-        return false;
+        return None;
     }
     if proof.v_n != pv[50] {
         eprintln!("[DeepRo] Failed: v_n mismatch");
-        return false;
+        return None;
     }
+    Some(pv)
+}
+
+fn verify_nested_stark(proof: &DeepRoStepProof, pv: &[Mersenne31]) -> bool {
     let stark: p3_uni_stark::Proof<WqcStarkConfig> = match postcard::from_bytes(&proof.deep_stark) {
         Ok(p) => p,
         Err(e) => {
@@ -332,7 +396,7 @@ pub fn verify_deep_ro_proof(proof: &DeepRoStepProof) -> bool {
             return false;
         }
     };
-    match verify(&config, &DeepRoAir, &stark, &pv) {
+    match verify(&config, &DeepRoAir, &stark, pv) {
         Ok(()) => true,
         Err(e) => {
             eprintln!("[DeepRo] STARK: {e:?}");
@@ -370,5 +434,47 @@ mod tests {
         let lambda = Challenge::new([Val::from_u32(7), Val::from_u32(8), Val::from_u32(9)]);
         let proof = generate_deep_ro_proof(sx, sy, alpha, px, pz, lambda, 2, zeta).expect("prove");
         assert!(verify_deep_ro_proof(&proof));
+        assert!(verify_agg_deep_ro_step(&proof));
+    }
+
+    #[test]
+    fn host_only_step_checks_its_publics_natively() {
+        let alpha = Challenge::new([Val::from_u32(11), Val::from_u32(12), Val::from_u32(13)]);
+        let zeta = Challenge::new([Val::from_u32(17), Val::from_u32(19), Val::from_u32(23)]);
+        let px = [Val::from_u32(1), Val::from_u32(2), Val::from_u32(4)];
+        let pz = [
+            Challenge::new([Val::ONE, Val::ZERO, Val::ZERO]),
+            Challenge::new([Val::ZERO, Val::ONE, Val::ZERO]),
+            Challenge::new([Val::ZERO, Val::ZERO, Val::ONE]),
+        ];
+        let lambda = Challenge::new([Val::from_u32(7), Val::from_u32(8), Val::from_u32(9)]);
+        let step = deep_ro_step_host_only(
+            Val::from_u32(3),
+            Val::from_u32(5),
+            alpha,
+            px,
+            pz,
+            lambda,
+            2,
+            zeta,
+        )
+        .expect("host-only step");
+        assert!(step.deep_stark.is_empty());
+        assert!(verify_agg_deep_ro_step(&step));
+        // Leaf bundles keep the nested STARK; an empty one is not a second valid encoding.
+        assert!(!verify_deep_ro_proof(&step));
+
+        let mut bad = step.clone();
+        bad.out_limbs[0] += Val::ONE;
+        assert!(!verify_agg_deep_ro_step(&bad));
+        let mut bad = step.clone();
+        bad.px[1] += Val::ONE;
+        assert!(!verify_agg_deep_ro_step(&bad));
+        let mut bad = step.clone();
+        bad.v_n += Val::ONE;
+        assert!(!verify_agg_deep_ro_step(&bad));
+        let mut bad = step;
+        bad.log_n = u32::MAX;
+        assert!(!verify_agg_deep_ro_step(&bad));
     }
 }
