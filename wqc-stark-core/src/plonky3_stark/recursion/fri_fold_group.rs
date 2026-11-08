@@ -286,18 +286,14 @@ pub fn generate_fri_fold_group_proof_with_queries(
 /// Verify group STARK + host twiddle/algebra for residual step limbs.
 pub fn verify_fri_fold_group_proof(steps: &[FriFoldStepProof], proof: &FriFoldGroupProof) -> bool {
     if steps.len() as u32 != proof.step_count {
-        eprintln!(
-            "[FriFoldGroup] step_count mismatch: limbs {} vs proof {}",
-            steps.len(),
-            proof.step_count
-        );
+        eprintln!("[FriFoldGroup] step_count mismatch");
         return false;
     }
     if proof.kind != FRI_FOLD_KIND_Y
         && proof.kind != FRI_FOLD_KIND_X
         && proof.kind != FRI_FOLD_KIND_YX
     {
-        eprintln!("[FriFoldGroup] invalid kind {}", proof.kind);
+        eprintln!("[FriFoldGroup] invalid kind");
         return false;
     }
     if proof.log_folded_height != u32::MAX
