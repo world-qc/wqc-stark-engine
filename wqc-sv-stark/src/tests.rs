@@ -51,18 +51,18 @@ fn honest_leaf_exports_the_native_digest() {
     );
 }
 
-/// Pins the digest's Poseidon2 constants (seeded with 7) and sponge layout: a change to either
-/// changes what every published digest means.
+/// Pins the digest's Poseidon2 constants (seeded with 7), sponge layout and the fixed-point
+/// arithmetic (scale, rounding): a change to any changes what every published digest means.
 #[test]
 fn bell_state_digest_known_answer() {
     let fin = execute(2, &[Gate::h(0), Gate::cnot(0, 1)]).1;
     assert_eq!(
         terminal_digest(&fin),
         [
-            4868592264552318960,
-            4278567621881643886,
-            15621577778702288575,
-            7488096975589155297
+            14306323836031323521,
+            6475076262719947663,
+            3943220118981982523,
+            6299049981826024799
         ]
     );
 }
@@ -443,4 +443,95 @@ fn every_gate_proves_and_verifies() {
         statement(CTX, terminal_digest(&execute(3, &gates).1)).unwrap()
     );
     l.verify(&p.proof, &p.statement).unwrap();
+}
+
+/// The L2 distance from the ideal state grows by at most `ρ + ‖M̃ − U‖·‖ψ̃‖` per gate, where
+/// `ρ = √(2^(n+1))·2^-(LOG_S+1)` is the output rounding and `‖M̃ − U‖ ≤ √8·2^-(LOG_S+1)` the
+/// matrix quantization; `‖ψ̃‖ ≤ 2` is generous.
+#[test]
+fn rounding_error_stays_within_the_bound() {
+    use CoreGate::*;
+    let (n, count) = (10usize, 400usize);
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let circuit: Vec<CoreGate> = (0..count)
+        .map(|_| {
+            let t = (next() % n as u64) as usize;
+            let c = (t + 1 + (next() % (n as u64 - 1)) as usize) % n;
+            let th = ((next() % 10_000) as f64 / 10_000.0 - 0.5) * std::f64::consts::TAU;
+            match next() % 12 {
+                0 => H(t),
+                1 => X(t),
+                2 => Y(t),
+                3 => Z(t),
+                4 => S(t),
+                5 => T(t),
+                6 => Cnot(c, t),
+                7 => Cz(c, t),
+                8 => Ccnot(c, (c + 1 + (c + 1 == t) as usize) % n, t),
+                9 => Rx(t, th),
+                10 => Ry(t, th),
+                _ => Rz(t, th),
+            }
+        })
+        .filter(|g| !matches!(*g, Ccnot(c1, c2, t) if c1 == t || c2 == t || c1 == c2))
+        .collect();
+    let mut reference = vec![(0.0, 0.0); 1 << n];
+    reference[0] = (1.0, 0.0);
+    for &g in &circuit {
+        core_apply(&mut reference, g);
+    }
+    let fixed = execute(n, &circuit.iter().map(|&g| to_leaf(g)).collect::<Vec<_>>()).1;
+    let scale = crate::exec::S as f64;
+    let err = fixed
+        .iter()
+        .zip(&reference)
+        .map(|(a, b)| (a.0 as f64 / scale - b.0).powi(2) + (a.1 as f64 / scale - b.1).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let ulp = 0.5 / scale;
+    let bound = circuit.len() as f64 * ((2f64.powi(n as i32 + 1)).sqrt() + 2.0 * 8f64.sqrt()) * ulp;
+    assert!(circuit.len() > count * 9 / 10);
+    eprintln!("L2 error {err:.2e}, bound {bound:.2e}");
+    assert!(err <= bound, "L2 error {err} above the bound {bound}");
+    // Nearest rounding is unbiased: the error walks rather than drifts, far inside the bound.
+    assert!(err <= bound / 20.0, "L2 error {err} vs bound {bound}");
+}
+
+/// Pins the rotation quantization: entries come from the pinned `libm`, and a change there
+/// would change the circuit every party derives.
+#[test]
+fn rotation_matrices_known_answer() {
+    let ms: Vec<_> = [Gate::rx(0, 0.37), Gate::ry(0, -1.1), Gate::rz(0, 2.3)]
+        .into_iter()
+        .map(|g| g.m)
+        .collect();
+    assert_eq!(
+        ms,
+        vec![
+            [
+                (263854941, 0),
+                (0, -49377772),
+                (0, -49377772),
+                (263854941, 0)
+            ],
+            [
+                (228847809, 0),
+                (140307785, 0),
+                (-140307785, 0),
+                (228847809, 0)
+            ],
+            [
+                (109652512, -245018205),
+                (0, 0),
+                (0, 0),
+                (109652512, 245018205)
+            ],
+        ]
+    );
 }

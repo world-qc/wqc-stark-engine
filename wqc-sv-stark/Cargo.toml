@@ -18,6 +18,9 @@ p3-matrix = "=0.9.0-rc.2"
 p3-maybe-rayon = { version = "=0.9.0-rc.2", features = ["parallel"] }
 p3-poseidon2-air = "=0.9.0-rc.2"
 p3-uni-stark = "=0.9.0-rc.2"
+# Rotation matrices are quantized with this pure-Rust libm, not the platform's, so every
+# party derives the same circuit; pin it exactly.
+libm = "=0.2.16"
 # The digest's Poseidon2 constants come from a seeded SmallRng; pin rand exactly (see the
 # digest known-answer test).
 rand = { version = "=0.10.3", default-features = false }
