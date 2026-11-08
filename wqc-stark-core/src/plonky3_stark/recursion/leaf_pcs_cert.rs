@@ -1,10 +1,11 @@
 //! Leaf uni-STARK PCS opening certificates (R3-M3e / M4c / FriFold B5).
 //!
-//! Mirrors AggregationAir M3d flow on a leaf `Proof`: OOD, FriFold, DeepRo (quot +
-//! leaf-trace when single-chunk), and Val/Challenge Mmcs. Skips natural-row LDE
+//! Mirrors AggregationAir M3d flow on a leaf `Proof`: OOD, FriFold, and Val/Challenge
+//! Mmcs. DeepRo is host-only (no steps): the FriFold bind rebuilds the DEEP quotient
+//! for every quotient chunk. Certificates with DeepRo steps still verify. Skips natural-row LDE
 //! rebuild (no prover_data); `merkle_fold` reuses query-0 ValMmcs trace path.
 //!
-//! **Production (E5b shrink):** Mmcs / FriFold / OOD ship **host-only** — nested Circle
+//! **Production (E5b shrink):** Mmcs / FriFold / OOD / DeepRo ship **host-only** — nested Circle
 //! STARKs are stripped/empty; bind verifies Merkle digests from retained siblings and
 //! native fold/OOD algebra. Optional M4c group STARKs and FriFold group STARKs remain
 //! on the verify path when present (benchmarks / legacy wires).
@@ -32,9 +33,7 @@ use crate::plonky3_stark::{split_born_stark_tail, split_trajectory_stark_tail};
 use crate::trajectory::base_proof_without_aux_tails;
 
 use super::deep_ro_air::{verify_deep_ro_proof, DeepRoStepProof};
-use super::deep_ro_bind::{
-    bind_deep_ro_leaf_bundle_to_proof, deep_ro_bundle_from_leaf_proof_with_queries,
-};
+use super::deep_ro_bind::bind_deep_ro_leaf_bundle_to_proof;
 use super::deep_ro_leaf_trace_air::{verify_deep_ro_leaf_trace_proof, DeepRoLeafTraceStepProof};
 use super::fri_fold_air::FriFoldStepProof;
 use super::fri_fold_bind::fri_fold_bundle_from_proof;
@@ -313,29 +312,11 @@ pub fn build_leaf_pcs_certificate(
         .map_err(|e| format!("R3-M3e FRI fold witness collect failed: {e}"))?;
     // DeepRo binds against fold_y limbs before group-fold strips (limbs retained).
 
-    let deep_ros;
-    let deep_ro_traces;
-    if proof.opened_values.quotient_chunks.len() == 1 {
-        let deep_bundle =
-            deep_ro_bundle_from_leaf_proof_with_queries(proof, trace_width, nested_queries)
-                .map_err(|e| format!("R3-M3e DeepRo bundle prove failed: {e}"))?;
-        // DeepRo self-checks run per-query inside deep_ro_bundle_from_leaf_proof.
-        bind_deep_ro_leaf_bundle_to_proof(
-            proof,
-            &deep_bundle.deep_ros,
-            &deep_bundle.deep_ro_traces,
-            &fri_bundle.fold_ys,
-            trace_width,
-        )
-        .map_err(|e| format!("R3-M3e DeepRo bind failed: {e}"))?;
-        deep_ros = deep_bundle.deep_ros;
-        deep_ro_traces = deep_bundle.deep_ro_traces;
-    } else {
-        // Multi-chunk / same-height merge: FriFold RO reconstruct covers DEEP+λ;
-        // per-matrix DeepRo STARKs are a follow-up (combined bind).
-        deep_ros = Vec::new();
-        deep_ro_traces = Vec::new();
-    }
+    // DeepRo steps are host-only: the FriFold bind rebuilds every query's DEEP quotient
+    // (trace at ζ and ζ·g, each quotient chunk at ζ) and folds it to `final_poly`, which
+    // is all a DeepRo step's AIR constrains.
+    let deep_ros = Vec::new();
+    let deep_ro_traces = Vec::new();
 
     let fri_fold_groups =
         apply_leaf_fri_fold_m4c_folds_with_queries(&mut fri_bundle, nested_queries)
@@ -489,15 +470,11 @@ pub fn verify_leaf_pcs_certificate(
             return false;
         }
     };
-    if cert.deep_ros.len() != proven_queries || cert.deep_ro_traces.len() != proven_queries {
-        // Allowed empty when multi-chunk leaf (DeepRo deferred).
-        if !(cert.deep_ros.is_empty()
-            && cert.deep_ro_traces.is_empty()
-            && proof.opened_values.quotient_chunks.len() > 1)
-        {
-            eprintln!("[LeafPcsCertificate] Failed: deep_ro count");
-            return false;
-        }
+    if cert.deep_ros.is_empty() && cert.deep_ro_traces.is_empty() {
+        // Host-only DeepRo: the FriFold bind above covers DEEP for every quotient chunk.
+    } else if cert.deep_ros.len() != proven_queries || cert.deep_ro_traces.len() != proven_queries {
+        eprintln!("[LeafPcsCertificate] Failed: deep_ro count");
+        return false;
     } else {
         for (i, deep) in cert.deep_ros.iter().enumerate() {
             if !verify_deep_ro_proof(deep) {
@@ -901,9 +878,8 @@ mod tests {
         let pcs = build_leaf_pcs_certificate(&proof, kind, stmt).expect("pcs opening");
         assert_eq!(pcs.fri_val_mmcs.len(), 8);
         assert_eq!(pcs.fri_chal_mmcs.len(), 8);
-        // Idle unitary may ship multi-chunk quotients → DeepRo deferred (empty).
-        // matches! → bool barrier; avoid formatting PCS values into assert! (log sink).
-        assert!(matches!(pcs.deep_ros.len(), 0 | 8));
+        // Host-only DeepRo; matches! → bool barrier, avoids formatting PCS values (log sink).
+        assert!(matches!(pcs.deep_ros.len(), 0));
         assert!(verify_leaf_pcs_certificate(&proof, &pcs));
         // Wire v6 / FriFold v2: digests + residual fold limbs omitted; decode must still verify.
         let wire = crate::plonky3_stark::recursion::transcript_v6::encode_leaf_pcs_bundle_bytes(
@@ -1064,5 +1040,65 @@ mod tests {
         );
         assert!(verify_leaf_pcs_certificate(&proof, &cert));
         std::env::remove_var(PCS_MMCS_HASH_ENV);
+    }
+
+    /// Leaf certificates carry no DeepRo steps; the FriFold bind alone must reject opened
+    /// values that do not match the committed polynomials. (A change to an opened value
+    /// also moves the Fiat–Shamir challenges, so this pins the rejection, not its cause.)
+    #[test]
+    fn host_only_deep_ro_leaf_rejects_tampered_openings() {
+        use crate::plonky3_stark::config::Challenge;
+        use p3_field::PrimeCharacteristicRing;
+
+        let ctx = StarkContext {
+            circuit_id: "c-leaf",
+            sub_task_id: "sub-leaf-deep",
+            node_id: "n1",
+            slice_id: "0",
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+            security_level: "low",
+        };
+        let transcript =
+            generate_plonky3_proof(&ctx, &crate::trace_spec::golden_h_q0_trace()).expect("prove");
+        let plonky3 = decode_proof_v2_plonky3_bytes(&transcript, &ctx).expect("decode");
+        let decode =
+            || -> Proof<WqcStarkConfig> { postcard::from_bytes(&plonky3).expect("postcard") };
+        let proof = decode();
+        let kind = LeafKind::Unitary;
+        let stmt = leaf_stmt_digest(kind, &proof).expect("stmt");
+        let pcs = build_leaf_pcs_certificate(&proof, kind, stmt).expect("pcs opening");
+        assert!(pcs.deep_ros.is_empty() && pcs.deep_ro_traces.is_empty());
+        assert!(verify_leaf_pcs_certificate(&proof, &pcs));
+
+        let width = proof.opened_values.trace_local.len();
+        let fri_fold_bind = |p: &Proof<WqcStarkConfig>| {
+            bind_fri_fold_with_groups(
+                p,
+                &pcs.fri_fold_ys,
+                &pcs.fri_folds,
+                &pcs.fri_fold_groups,
+                width,
+            )
+        };
+        assert!(fri_fold_bind(&proof).is_ok());
+
+        let mut trace_local = decode();
+        trace_local.opened_values.trace_local[0] += Challenge::ONE;
+        let mut trace_next = decode();
+        trace_next
+            .opened_values
+            .trace_next
+            .as_mut()
+            .expect("trace_next")[0] += Challenge::ONE;
+        let mut quotient = decode();
+        let last = quotient.opened_values.quotient_chunks.len() - 1;
+        assert!(last > 0, "fixture should have a multi-chunk quotient");
+        quotient.opened_values.quotient_chunks[last][0] += Challenge::ONE;
+        for bad in [trace_local, trace_next, quotient] {
+            assert!(fri_fold_bind(&bad).is_err());
+            assert!(!verify_leaf_pcs_certificate(&bad, &pcs));
+        }
     }
 }
