@@ -248,16 +248,6 @@ pub struct SvGatePlugin {
     pub(crate) tamper: Tamper,
 }
 
-impl SvGatePlugin {
-    pub fn new(n: usize, gates: Vec<Gate>) -> Self {
-        Self {
-            n,
-            gates,
-            tamper: Tamper::None,
-        }
-    }
-}
-
 impl NpoCircuitPlugin<EF> for SvGatePlugin {
     fn type_id(&self) -> NpoTypeId {
         gate_type()

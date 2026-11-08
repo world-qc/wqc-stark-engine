@@ -11,9 +11,9 @@
 pub mod digest;
 pub mod exec;
 pub mod leaf;
-pub mod npo;
+mod npo;
 pub mod recursion;
-pub mod tables;
+mod tables;
 
 #[cfg(test)]
 mod tests;
@@ -22,6 +22,35 @@ use p3_field::extension::BinomialExtensionField;
 use p3_goldilocks::Goldilocks;
 
 pub type F = Goldilocks;
+
+/// Largest supported qubit count. The gate table has `gates · 2^(n−1)` rows; at n = 16 and
+/// 64 gates a leaf takes about 70 s and 14 GB to prove with [`FriParams::PRODUCTION`].
+pub const MAX_QUBITS: usize = 16;
+
+#[derive(Debug)]
+pub enum Error {
+    /// The circuit is outside what the leaf can prove (qubit count, gate wiring, matrix range).
+    InvalidCircuit(String),
+    /// A statement value is not a canonical field element.
+    InvalidStatement(String),
+    Prove(String),
+    Verify(String),
+    Recursion(String),
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidCircuit(m) => write!(f, "invalid circuit: {m}"),
+            Self::InvalidStatement(m) => write!(f, "invalid statement: {m}"),
+            Self::Prove(m) => write!(f, "prove: {m}"),
+            Self::Verify(m) => write!(f, "verify: {m}"),
+            Self::Recursion(m) => write!(f, "recursion: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 /// Circuit field of the leaf: the base field.
 pub type EF = F;
 /// Recursion-capable built-in config (Goldilocks², Poseidon2 width 8, binary FRI).

@@ -9,11 +9,13 @@ pub const LOG_S: u32 = 24;
 pub const S: i64 = 1 << LOG_S;
 pub(crate) const B_OFFSET: i64 = 2 * S;
 
+/// A 2×2 complex matrix on `target`, applied where every `controls` bit is 1. Entries are
+/// fixed point (units of `1/S`), rounded from `f64`.
 #[derive(Clone, Debug)]
 pub struct Gate {
-    pub target: usize,
-    pub controls: Vec<usize>,
-    pub m: [(i64, i64); 4],
+    pub(crate) target: usize,
+    pub(crate) controls: Vec<usize>,
+    pub(crate) m: [(i64, i64); 4],
 }
 
 pub(crate) fn q(x: f64) -> i64 {
@@ -21,6 +23,39 @@ pub(crate) fn q(x: f64) -> i64 {
 }
 
 impl Gate {
+    /// A gate from its matrix `[m00, m01, m10, m11]` as `(re, im)` pairs.
+    pub fn new(target: usize, controls: Vec<usize>, m: [(f64, f64); 4]) -> Self {
+        Self::from_f64(target, controls, m)
+    }
+    pub fn target(&self) -> usize {
+        self.target
+    }
+    pub fn controls(&self) -> &[usize] {
+        &self.controls
+    }
+
+    /// Rejects wiring outside `n` qubits and matrix entries above 1 in magnitude, which also
+    /// keeps every product inside `i64` and far below the field modulus. A non-unitary matrix
+    /// that passes can still fail to prove when an amplitude leaves `[−2, 2)`.
+    pub(crate) fn validate(&self, n: usize) -> Result<(), crate::Error> {
+        let bad = |m: String| Err(crate::Error::InvalidCircuit(m));
+        if self.target >= n {
+            return bad(format!("target {} on {n} qubits", self.target));
+        }
+        for (k, &c) in self.controls.iter().enumerate() {
+            if c >= n || c == self.target || self.controls[..k].contains(&c) {
+                return bad(format!(
+                    "control {c} on target {} with {n} qubits",
+                    self.target
+                ));
+            }
+        }
+        if self.m.iter().any(|&(re, im)| re.abs() > S || im.abs() > S) {
+            return bad("matrix entry above 1 in magnitude".into());
+        }
+        Ok(())
+    }
+
     fn from_f64(target: usize, controls: Vec<usize>, m: [(f64, f64); 4]) -> Self {
         Self {
             target,
