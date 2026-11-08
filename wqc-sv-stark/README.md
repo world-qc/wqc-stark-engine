@@ -26,8 +26,14 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
 
 ## Limits
 
-- `1 ≤ n ≤ 16` qubits (`MAX_QUBITS`). Gates act on one target with distinct controls, all
-  below `n`, and matrix entries of magnitude at most 1. `build` rejects anything else.
+- `1 ≤ n ≤ 16` qubits (`MAX_QUBITS`).
+- Gates: wqc-core's set — H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY, RZ — with the same
+  matrices and phases as its dense engine (a test checks each gate against those formulas,
+  global phase included, since it changes the digest). Rotation angles become fixed-point
+  matrices. There is no public arbitrary-matrix gate; the protocol has none (the
+  `CUSTOM_UNITARY` capability bit names the rotations).
+- `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
+  not unitary up to rounding (which includes a NaN or infinite angle).
 - The gate table has `gates · 2^(n−1)` rows. With `FriParams::PRODUCTION` on an 8-core
   machine, 64 gates take about 1.5 s at n = 10 and 70 s / 14 GB at n = 16.
 

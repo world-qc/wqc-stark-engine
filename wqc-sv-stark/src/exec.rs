@@ -11,6 +11,11 @@ pub(crate) const B_OFFSET: i64 = 2 * S;
 
 /// A 2×2 complex matrix on `target`, applied where every `controls` bit is 1. Entries are
 /// fixed point (units of `1/S`), rounded from `f64`.
+///
+/// The constructors cover wqc-core's gate set (H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY,
+/// RZ) with the same matrices and phases as its dense engine; qubit `k` is bit `k` of the
+/// state index. There is no public arbitrary-matrix gate: the protocol has none (rotations
+/// are what the `CUSTOM_UNITARY` capability bit names).
 #[derive(Clone, Debug)]
 pub struct Gate {
     pub(crate) target: usize,
@@ -23,10 +28,6 @@ pub(crate) fn q(x: f64) -> i64 {
 }
 
 impl Gate {
-    /// A gate from its matrix `[m00, m01, m10, m11]` as `(re, im)` pairs.
-    pub fn new(target: usize, controls: Vec<usize>, m: [(f64, f64); 4]) -> Self {
-        Self::from_f64(target, controls, m)
-    }
     pub fn target(&self) -> usize {
         self.target
     }
@@ -34,9 +35,10 @@ impl Gate {
         &self.controls
     }
 
-    /// Rejects wiring outside `n` qubits and matrix entries above 1 in magnitude, which also
-    /// keeps every product inside `i64` and far below the field modulus. A non-unitary matrix
-    /// that passes can still fail to prove when an amplitude leaves `[−2, 2)`.
+    /// Rejects wiring outside `n` qubits and matrices that are not unitary up to rounding.
+    /// Entries of magnitude at most 1 keep every product inside `i64` and far below the field
+    /// modulus; unitarity keeps amplitudes inside `[−2, 2)` and catches a NaN angle, which
+    /// rounds to the zero matrix.
     pub(crate) fn validate(&self, n: usize) -> Result<(), crate::Error> {
         let bad = |m: String| Err(crate::Error::InvalidCircuit(m));
         if self.target >= n {
@@ -53,10 +55,33 @@ impl Gate {
         if self.m.iter().any(|&(re, im)| re.abs() > S || im.abs() > S) {
             return bad("matrix entry above 1 in magnitude".into());
         }
+        if !self.is_unitary() {
+            return bad("matrix is not unitary".into());
+        }
         Ok(())
     }
 
-    fn from_f64(target: usize, controls: Vec<usize>, m: [(f64, f64); 4]) -> Self {
+    /// Columns of norm S² and orthogonal, each within 4S (the rounding of four entries).
+    fn is_unitary(&self) -> bool {
+        let e = |k: usize| (self.m[k].0 as i128, self.m[k].1 as i128);
+        let norm2 = |a: (i128, i128)| a.0 * a.0 + a.1 * a.1;
+        let s2 = (S as i128) * (S as i128);
+        let tol = 4 * S as i128;
+        let (m00, m01, m10, m11) = (e(0), e(1), e(2), e(3));
+        let col0 = norm2(m00) + norm2(m10);
+        let col1 = norm2(m01) + norm2(m11);
+        // conj(m00)·m01 + conj(m10)·m11
+        let dot = (
+            m00.0 * m01.0 + m00.1 * m01.1 + m10.0 * m11.0 + m10.1 * m11.1,
+            m00.0 * m01.1 - m00.1 * m01.0 + m10.0 * m11.1 - m10.1 * m11.0,
+        );
+        (col0 - s2).abs() <= tol
+            && (col1 - s2).abs() <= tol
+            && dot.0.abs() <= tol
+            && dot.1.abs() <= tol
+    }
+
+    pub(crate) fn from_f64(target: usize, controls: Vec<usize>, m: [(f64, f64); 4]) -> Self {
         Self {
             target,
             controls,
@@ -66,6 +91,31 @@ impl Gate {
     pub fn h(t: usize) -> Self {
         let s = std::f64::consts::FRAC_1_SQRT_2;
         Self::from_f64(t, vec![], [(s, 0.0), (s, 0.0), (s, 0.0), (-s, 0.0)])
+    }
+    pub fn y(t: usize) -> Self {
+        Self::from_f64(t, vec![], [(0.0, 0.0), (0.0, -1.0), (0.0, 1.0), (0.0, 0.0)])
+    }
+    pub fn z(t: usize) -> Self {
+        Self::from_f64(t, vec![], [(1.0, 0.0), (0.0, 0.0), (0.0, 0.0), (-1.0, 0.0)])
+    }
+    pub fn s(t: usize) -> Self {
+        Self::from_f64(t, vec![], [(1.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 1.0)])
+    }
+    pub fn cz(c: usize, t: usize) -> Self {
+        Self {
+            controls: vec![c],
+            ..Self::z(t)
+        }
+    }
+    pub fn ccnot(c1: usize, c2: usize, t: usize) -> Self {
+        Self {
+            controls: vec![c1, c2],
+            ..Self::x(t)
+        }
+    }
+    pub fn rx(t: usize, theta: f64) -> Self {
+        let (c, s) = ((theta / 2.0).cos(), (theta / 2.0).sin());
+        Self::from_f64(t, vec![], [(c, 0.0), (0.0, -s), (0.0, -s), (c, 0.0)])
     }
     pub fn x(t: usize) -> Self {
         Self::from_f64(t, vec![], [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (0.0, 0.0)])
