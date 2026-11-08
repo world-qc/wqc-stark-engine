@@ -800,18 +800,16 @@ fn pcs_from_embedded_or_build(
 
 /// Checks the root's children before the RecAgg fast path may accept it.
 ///
-/// The RecAgg STARK binds child digests, and an aggregation child's certificate opens only
-/// that child's AggregationAir, which attests digests too. Neither checks what an
-/// aggregation child (an inner node, or a `leaf:unitary_born` / `leaf:unitary_traj` leaf)
-/// proves, so each one is verified in full here. Leaf children are covered by their PCS
-/// bundles in the RecAgg context.
+/// The RecAgg STARK binds child digests and PCS payloads, but neither is a full proof of
+/// the child: an aggregation child's certificate opens only its AggregationAir, which
+/// attests digests, and a leaf bundle may defer DeepRo (multi-chunk quotients). So every
+/// child is verified in full here, as the audit walk would.
 #[cfg(feature = "plonky3-stark")]
 fn verify_root_children_for_fast_path(
     context: &RootVerifyContext<'_>,
     header: &ComposeHeader,
     left_child: &[u8],
     right_child: &[u8],
-    rec_ctx: &RecursiveAggregationContext<'_>,
 ) -> Result<(), String> {
     if child_digest(left_child) != header.left_child_hash {
         return Err("left child digest mismatch".to_string());
@@ -819,17 +817,16 @@ fn verify_root_children_for_fast_path(
     if child_digest(right_child) != header.right_child_hash {
         return Err("right child digest mismatch".to_string());
     }
-    let mut agg_children = Vec::with_capacity(2);
-    if rec_ctx.left_kind == REC_KIND_AGG {
-        agg_children.push(left_child);
-    }
+    verify_child_proof_with_security(
+        left_child,
+        context.parent_task_id,
+        None,
+        context.security_level,
+    )?;
     // A lone child paired with itself is verified once.
-    if rec_ctx.right_kind == REC_KIND_AGG && right_child != left_child {
-        agg_children.push(right_child);
-    }
-    for child in agg_children {
+    if right_child != left_child {
         verify_child_proof_with_security(
-            child,
+            right_child,
             context.parent_task_id,
             None,
             context.security_level,
@@ -884,7 +881,6 @@ pub fn verify_root_proof(context: &RootVerifyContext<'_>, proof: &[u8]) -> bool 
                                 &header,
                                 &left_child,
                                 &right_child,
-                                &rec_ctx,
                             ) {
                                 eprintln!(
                                     "[Aggregation] Root R3-M2 child check failed ({e}); falling back to audit walk"
