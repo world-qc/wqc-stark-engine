@@ -499,7 +499,9 @@ fn rounding_error_stays_within_the_bound() {
     assert!(circuit.len() > count * 9 / 10);
     eprintln!("L2 error {err:.2e}, bound {bound:.2e}");
     assert!(err <= bound, "L2 error {err} above the bound {bound}");
-    // Nearest rounding is unbiased: the error walks rather than drifts, far inside the bound.
+    // Sanity check, not a theorem: nearest rounding is unbiased, so the error walks rather
+    // than drifts and lands far inside the bound. The margin is empirical for this fixed
+    // circuit; revisit it if the generator or gate mix changes.
     assert!(err <= bound / 20.0, "L2 error {err} vs bound {bound}");
 }
 

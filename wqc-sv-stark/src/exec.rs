@@ -4,13 +4,14 @@
 //! nearest integer, ties up: `b = floor((Σ m·a + S/2) / S)` with remainder `r ∈ [0, S)`. The
 //! gate table proves `b·S + r = Σ m·a + S/2` and range-checks `b`, `r`.
 //!
-//! Execution is integer-only and therefore bit-exact on any hardware. The one floating-point
-//! step is quantizing a rotation's matrix, done with the pure-Rust `libm` (pinned) rather
-//! than the platform's `sin`/`cos`, so every party derives the same preprocessed circuit.
+//! Execution is integer-only and therefore bit-exact on any hardware. Matrices are rounded from
+//! `f64` once, at build; the one platform-dependent step there would be a rotation's
+//! `sin`/`cos`, so those come from the pure-Rust `libm` (pinned) and every party derives the
+//! same preprocessed circuit.
 //!
 //! Field soundness: entries are at most `S` and inputs lie in `[−2S, 2S)`, so both sides of the
-//! row equation stay below `2^(2·LOG_S+3)` in magnitude, far below the Goldilocks modulus, and
-//! the field equation is the integer one.
+//! row equation stay below `2^(2·LOG_S+4)` in magnitude (`8S² + S/2` on the right), far
+//! below the Goldilocks modulus, and the field equation is the integer one.
 
 use p3_field::Field;
 
