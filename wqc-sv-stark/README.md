@@ -27,7 +27,7 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
 ## Limits
 
 - `1 ≤ n ≤ 16` qubits (`MAX_QUBITS`).
-- Gates: wqc-core's set — H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY, RZ — with the same
+- Gates: wqc-core's unitary gate set — H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY, RZ — with the same
   matrices and phases as its dense engine (a test checks each gate against those formulas,
   global phase included, since it changes the digest). Rotation angles become fixed-point
   matrices. There is no public arbitrary-matrix gate; the protocol has none (the

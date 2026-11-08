@@ -136,16 +136,32 @@ fn invalid_circuits_are_rejected_at_build() {
         1,
         vec![matrix([(2.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 0.0)])]
     ));
-    // Not unitary, though every entry is at most 1.
+    // Not unitary, though every entry is at most 1: a short column, then unit columns that
+    // are not orthogonal (real and imaginary inner product).
     assert!(invalid(
         1,
         vec![matrix([(1.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.5, 0.0)])]
     ));
     assert!(invalid(
         1,
-        vec![matrix([(1.0, 0.0), (1.0, 0.0), (0.0, 0.0), (1.0, 0.0)])]
+        vec![matrix([(1.0, 0.0), (1.0, 0.0), (0.0, 0.0), (0.0, 0.0)])]
     ));
-    // A NaN angle rounds to the zero matrix; an infinite one to oversized entries.
+    let r = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(invalid(
+        1,
+        vec![matrix([(r, 0.0), (0.0, r), (r, 0.0), (0.0, r)])]
+    ));
+    // A non-finite entry rounds to 0 instead of saturating, and is rejected without panic.
+    assert!(invalid(
+        1,
+        vec![matrix([
+            (f64::NEG_INFINITY, 0.0),
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (1.0, 0.0)
+        ])]
+    ));
+    // A NaN or infinite angle gives NaN entries, hence the zero matrix.
     assert!(invalid(1, vec![Gate::rx(0, f64::NAN)]));
     assert!(invalid(1, vec![Gate::rz(0, f64::INFINITY)]));
 }
@@ -250,7 +266,9 @@ fn eight_qubit_smoke() {
     l.verify(&p.proof, &p.statement).unwrap();
 }
 
-/// wqc-core's gate set, applied with the formulas of its dense engine (`tn/dense.rs`).
+/// wqc-core's gate set, applied with the formulas of its dense engine (`tn/dense.rs`). This is
+/// a copy (wqc-core is meant to depend on this crate, so it cannot be imported here), and it
+/// does not follow changes to the core by itself: a change there must be mirrored here.
 #[derive(Clone, Copy)]
 enum CoreGate {
     H(usize),
@@ -408,7 +426,7 @@ fn every_gate_matches_the_core_engine() {
             })
             .fold(0.0, f64::max);
         assert!(
-            err < 1e-5,
+            err < 1e-6,
             "gate {k} of all_gates() drifts from the core engine by {err}"
         );
     }

@@ -23,8 +23,14 @@ pub struct Gate {
     pub(crate) m: [(i64, i64); 4],
 }
 
+/// Rounds to fixed point. A non-finite value becomes 0 (a NaN angle yields NaN entries), so
+/// such a matrix fails the unitarity check instead of saturating to `i64::MIN`.
 pub(crate) fn q(x: f64) -> i64 {
-    (x * S as f64).round() as i64
+    if x.is_finite() {
+        (x * S as f64).round() as i64
+    } else {
+        0
+    }
 }
 
 impl Gate {
@@ -52,7 +58,12 @@ impl Gate {
                 ));
             }
         }
-        if self.m.iter().any(|&(re, im)| re.abs() > S || im.abs() > S) {
+        let bound = S.unsigned_abs();
+        if self
+            .m
+            .iter()
+            .any(|&(re, im)| re.unsigned_abs() > bound || im.unsigned_abs() > bound)
+        {
             return bad("matrix entry above 1 in magnitude".into());
         }
         if !self.is_unitary() {
