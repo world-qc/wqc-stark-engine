@@ -20,9 +20,20 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   amplitudes per block, from the zero state; the digest is the first four state elements.
   The round constants are not the standard Goldilocks Poseidon2 ones: they are drawn from
   `SmallRng::seed_from_u64(7)` (rand pinned to `=0.10.3`) and fixed by a known-answer test.
-- **Arithmetic.** Amplitudes are fixed point in units of 2^-24. Each gate output is floored,
-  and the remainder and output are range-checked, so the error grows by at most 2^-24 per
-  gate per component.
+- **Arithmetic.** Amplitudes are integers in units of 2^-28 (`S = 2^28`). Each gate output
+  is `Σ m·a / S` rounded to nearest, ties up: the gate table proves `b·S + r = Σ m·a + S/2`
+  with `r ∈ [0, S)` and `b ∈ [−2S, 2S)` range-checked. Both sides stay below 2^60 in
+  magnitude, so the field equation is the integer one.
+- **What the result is.** The final integer state vector is the result: execution is
+  integer-only and bit-exact on any hardware (CPU or GPU), and a float view is that vector
+  divided by `S`. Gate matrices are rounded from `f64` once, at build; the one
+  platform-dependent step there would be the `sin`/`cos` of RX/RY/RZ, so they come from the
+  pure-Rust `libm` (pinned to `=0.2.16`) and every party derives the same circuit. A
+  known-answer test pins a few quantized rotations; the pin is what guarantees the rest.
+- **Error.** Per gate, the L2 distance from the ideal state grows by at most
+  `(√(2^(n+1)) + 2√8) · 2^-29` (output rounding, plus matrix quantization). For n = 16 and
+  1000 gates that bound is 6.8e-4; random circuits measure about 7e-6, since nearest rounding
+  is unbiased and the error walks rather than drifts.
 
 ## Limits
 

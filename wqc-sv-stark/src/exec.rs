@@ -1,16 +1,27 @@
 //! Deterministic fixed-point execution of a circuit on a dense state vector.
 //!
-//! Amplitudes are integers in units of `1/S`. Each gate output is `floor(Σ m·a / S)` with
-//! remainder `r ∈ [0, S)`; the gate table proves `b·S + r = Σ m·a` and range-checks `b`, `r`.
+//! Amplitudes are integers in units of `1/S`. Each gate output is `Σ m·a / S` rounded to the
+//! nearest integer, ties up: `b = floor((Σ m·a + S/2) / S)` with remainder `r ∈ [0, S)`. The
+//! gate table proves `b·S + r = Σ m·a + S/2` and range-checks `b`, `r`.
+//!
+//! Execution is integer-only and therefore bit-exact on any hardware. Matrices are rounded from
+//! `f64` once, at build; the one platform-dependent step there would be a rotation's
+//! `sin`/`cos`, so those come from the pure-Rust `libm` (pinned) and every party derives the
+//! same preprocessed circuit.
+//!
+//! Field soundness: entries are at most `S` and inputs lie in `[−2S, 2S)`, so both sides of the
+//! row equation stay below `2^(2·LOG_S+4)` in magnitude (`8S² + S/2` on the right), far
+//! below the Goldilocks modulus, and the field equation is the integer one.
 
 use p3_field::Field;
 
-pub const LOG_S: u32 = 24;
+pub const LOG_S: u32 = 28;
 pub const S: i64 = 1 << LOG_S;
+pub(crate) const HALF_S: i64 = S / 2;
 pub(crate) const B_OFFSET: i64 = 2 * S;
 
 /// A 2×2 complex matrix on `target`, applied where every `controls` bit is 1. Entries are
-/// fixed point (units of `1/S`), rounded from `f64`.
+/// fixed point (units of `1/S`), rounded half away from zero from `f64`.
 ///
 /// The constructors cover wqc-core's gate set (H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY,
 /// RZ) with the same matrices and phases as its dense engine; qubit `k` is bit `k` of the
@@ -125,7 +136,7 @@ impl Gate {
         }
     }
     pub fn rx(t: usize, theta: f64) -> Self {
-        let (c, s) = ((theta / 2.0).cos(), (theta / 2.0).sin());
+        let (c, s) = sin_cos_half(theta);
         Self::from_f64(t, vec![], [(c, 0.0), (0.0, -s), (0.0, -s), (c, 0.0)])
     }
     pub fn x(t: usize) -> Self {
@@ -138,11 +149,11 @@ impl Gate {
         }
     }
     pub fn ry(t: usize, theta: f64) -> Self {
-        let (c, s) = ((theta / 2.0).cos(), (theta / 2.0).sin());
+        let (c, s) = sin_cos_half(theta);
         Self::from_f64(t, vec![], [(c, 0.0), (-s, 0.0), (s, 0.0), (c, 0.0)])
     }
     pub fn rz(t: usize, theta: f64) -> Self {
-        let (c, s) = ((theta / 2.0).cos(), (theta / 2.0).sin());
+        let (c, s) = sin_cos_half(theta);
         Self::from_f64(t, vec![], [(c, -s), (0.0, 0.0), (0.0, 0.0), (c, s)])
     }
     pub fn t(t: usize) -> Self {
@@ -151,7 +162,22 @@ impl Gate {
     }
 }
 
+/// `(cos θ/2, sin θ/2)` from the pinned `libm`: `std`'s `sin`/`cos` follow the platform libm
+/// and may differ by an ulp, which could change a rounded entry and so the circuit.
+fn sin_cos_half(theta: f64) -> (f64, f64) {
+    (libm::cos(theta / 2.0), libm::sin(theta / 2.0))
+}
+
 pub type C = (i64, i64);
+
+/// Rounds `v / S` to nearest (ties up): the gate output and its remainder.
+pub(crate) fn round_div(v: C) -> (C, C) {
+    let (re, im) = (v.0 + HALF_S, v.1 + HALF_S);
+    (
+        (re.div_euclid(S), im.div_euclid(S)),
+        (re.rem_euclid(S), im.rem_euclid(S)),
+    )
+}
 
 pub(crate) fn cm(m: C, x: C) -> C {
     (m.0 * x.0 - m.1 * x.1, m.0 * x.1 + m.1 * x.0)
@@ -197,10 +223,9 @@ pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
             } else {
                 ((ai.0 * S, ai.1 * S), (aj.0 * S, aj.1 * S))
             };
-            let fl = |v: C| (v.0.div_euclid(S), v.1.div_euclid(S));
-            let rm = |v: C| (v.0.rem_euclid(S), v.1.rem_euclid(S));
-            nx[i] = fl(ni);
-            nx[j] = fl(nj);
+            let ((bi, ri), (bj, rj)) = (round_div(ni), round_div(nj));
+            nx[i] = bi;
+            nx[j] = bj;
             rows.push(PairRow {
                 t,
                 i,
@@ -209,7 +234,7 @@ pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
                 m: g.m,
                 a: [ai, aj],
                 b: [nx[i], nx[j]],
-                r: [rm(ni), rm(nj)],
+                r: [ri, rj],
             });
         }
         st = nx;
@@ -269,8 +294,7 @@ pub(crate) fn apply_tamper(tamper: Tamper, rows: &mut [PairRow], fin: &mut [C], 
             let outs = [(x.0 + y.0, x.1 + y.1), (z.0 + w.0, z.1 + w.1)];
             let idx = [pr.i, pr.j];
             for q in 0..2 {
-                rows[k].b[q] = (outs[q].0.div_euclid(S), outs[q].1.div_euclid(S));
-                rows[k].r[q] = (outs[q].0.rem_euclid(S), outs[q].1.rem_euclid(S));
+                (rows[k].b[q], rows[k].r[q]) = round_div(outs[q]);
                 fin[idx[q]] = rows[k].b[q];
             }
         }

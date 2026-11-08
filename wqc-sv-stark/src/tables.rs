@@ -15,8 +15,10 @@ use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrix;
 
 pub(crate) const LOG_RANGE: usize = 16;
-pub(crate) const R_HI_SHIFT: u64 = 1 << 8;
-pub(crate) const B_HI_SHIFT: u64 = 1 << 6;
+// The high limb of a value below 2^k (k ≤ 32) is range-checked shifted by 2^(32−k), so a
+// 16-bit lookup bounds it to k − 16 bits: r < S, and b + 2S < 4S.
+pub(crate) const R_HI_SHIFT: u64 = 1 << (2 * LOG_RANGE as u32 - LOG_S);
+pub(crate) const B_HI_SHIFT: u64 = 1 << (2 * LOG_RANGE as u32 - LOG_S - 2);
 pub(crate) const MEM: &str = "wqc_mem";
 pub(crate) const RANGE: &str = "wqc_range";
 pub(crate) const FIN: &str = "wqc_fin";
@@ -130,6 +132,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for GateTableAir {
             .map(|&x| x.into())
             .collect();
         let s: AB::Expr = F::from_u64(S as u64).into();
+        let half: AB::Expr = F::from_u64(HALF_S as u64).into();
         let one = AB::Expr::ONE;
         let (real, t, i, j, active) = (
             p[0].clone(),
@@ -180,8 +183,15 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for GateTableAir {
                 active.clone() * out.0 + (one.clone() - active.clone()) * s.clone() * id.0;
             let want_im =
                 active.clone() * out.1 + (one.clone() - active.clone()) * s.clone() * id.1;
-            builder.assert_eq(b(k).0 * s.clone() + r(k).0, want_re);
-            builder.assert_eq(b(k).1 * s.clone() + r(k).1, want_im);
+            // Real rows round to nearest (+S/2); padding rows are all zero.
+            builder.assert_eq(
+                b(k).0 * s.clone() + r(k).0,
+                want_re + real.clone() * half.clone(),
+            );
+            builder.assert_eq(
+                b(k).1 * s.clone() + r(k).1,
+                want_im + real.clone() * half.clone(),
+            );
         }
 
         let t1 = t.clone() + one;
