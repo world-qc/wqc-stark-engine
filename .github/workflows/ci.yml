@@ -48,3 +48,32 @@ jobs:
       # E5b-1a: plonky3-stark + shrink fast bounds (R2 size, baseline JSON).
       - name: cargo test (plonky3-stark, release, skip ignored)
         run: cargo test -p wqc-stark-core --features plonky3-stark --release --locked --verbose
+
+  sv-stark:
+    # wqc-sv-stark is outside default-members (Plonky3-recursion builds slowly), so it gets
+    # its own job instead of slowing the main one.
+    name: wqc-sv-stark
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95"
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sv-stark
+
+      - name: cargo clippy
+        run: cargo clippy -p wqc-sv-stark --all-targets --locked -- -D warnings
+
+      # Release only: debug builds assert AIR constraints inside `prove`, so the forgery
+      # tests would panic before the verifier rejects them.
+      - name: cargo test (release)
+        run: cargo test -p wqc-sv-stark --release --locked
