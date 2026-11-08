@@ -1,6 +1,12 @@
 [workspace]
 members = [
     "wqc-stark-core",
+    "wqc-stark-ffi",
+    "wqc-sv-stark"
+]
+# wqc-sv-stark pulls in Plonky3-recursion and builds slowly; build it with `-p wqc-sv-stark`.
+default-members = [
+    "wqc-stark-core",
     "wqc-stark-ffi"
 ]
 resolver = "2"
@@ -10,3 +16,13 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# Plonky3-recursion's crates are large; a single codegen unit takes most of an hour each.
+[profile.release.package.p3-recursion]
+codegen-units = 16
+
+[profile.release.package.p3-circuit]
+codegen-units = 16
+
+[profile.release.package.p3-circuit-prover]
+codegen-units = 16
