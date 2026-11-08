@@ -441,6 +441,15 @@ mod tests {
 
     #[cfg(feature = "plonky3-stark")]
     fn born_compose_fixture_at(security_level: &'static str) -> (StarkContext<'static>, Vec<u8>) {
+        born_compose_fixture_slice(security_level, 0)
+    }
+
+    /// The Born leaf of slice `slice`; distinct slices give distinct bytes.
+    #[cfg(feature = "plonky3-stark")]
+    fn born_compose_fixture_slice(
+        security_level: &'static str,
+        slice: usize,
+    ) -> (StarkContext<'static>, Vec<u8>) {
         use crate::generate_plonky3_stark_proof;
         use crate::plonky3_stark::generate_born_stark_proof;
 
@@ -454,11 +463,19 @@ mod tests {
                 .clone()
                 .into_boxed_str(),
         );
+        let (sub_task_id, slice_id): (&'static str, &'static str) = if slice == 0 {
+            ("sub-born", "0")
+        } else {
+            (
+                Box::leak(format!("sub-born-{slice}").into_boxed_str()),
+                Box::leak(slice.to_string().into_boxed_str()),
+            )
+        };
         let ctx = StarkContext {
             circuit_id: "circuit-bell",
-            sub_task_id: "sub-born",
+            sub_task_id,
             node_id: "node-1",
-            slice_id: "0",
+            slice_id,
             output_hash: "counts-hash",
             terminal_statevector_digest: link,
             measurement_spec_hash: SPEC_HASH,
@@ -467,7 +484,7 @@ mod tests {
         let trace = crate::trace_spec::golden_h_q0_trace();
         let unitary = generate_plonky3_stark_proof(&ctx, &trace).expect("unitary prove");
         let born_ctx = BornStarkContext {
-            sub_task_id: "sub-born",
+            sub_task_id,
             probability_digest: &segment.probability_digest,
             terminal_statevector_digest: link,
             security_level,
@@ -522,6 +539,17 @@ mod tests {
             assert!(cert.deep_ro_traces.iter().all(|d| d.deep_stark.is_empty()));
         }
         assert!(verify_recursive_aggregation_proof(&rec_ctx, rec_bytes));
+        // The lone leaf and its certificate are sent once.
+        assert_eq!(&v3[v3.len() - 4..], &u32::MAX.to_le_bytes());
+        assert_eq!(rec_ctx.left_agg_cert, rec_ctx.right_agg_cert);
+        assert!(crate::aggregation::verify_root_proof(
+            &crate::aggregation::RootVerifyContext {
+                parent_task_id: "task-born",
+                manifest_root_hash: "manifest",
+                security_level,
+            },
+            &root,
+        ));
         root
     }
 
@@ -529,8 +557,9 @@ mod tests {
     #[test]
     fn single_leaf_born_root_ships_host_only_deep_ro() {
         let root = single_leaf_born_root("low");
-        // 264 KB while DeepRo steps carried STARKs; 143 KB host-only.
-        assert!(root.len() < 160_000, "root {} bytes", root.len());
+        // 264 KB while DeepRo steps carried STARKs, 143 KB host-only,
+        // 79 KB once the lone leaf is sent once.
+        assert!(root.len() < 90_000, "root {} bytes", root.len());
     }
 
     /// Prints the single-leaf Born root size per `security_level` (spec zk-STARK §5.1 table).
@@ -650,5 +679,165 @@ mod tests {
         let mid = bad.len() / 2;
         bad[mid] ^= 0xFF;
         assert!(!verify_stark_proof_core(&ctx, &bad));
+    }
+
+    /// A unitary leaf (Bell prefix) for slice `i`; distinct slices give distinct bytes.
+    #[cfg(feature = "plonky3-stark")]
+    fn unitary_leaf(security_level: &'static str, i: usize) -> Vec<u8> {
+        let slice_id: &'static str = Box::leak(format!("{i:04}").into_boxed_str());
+        let ctx = StarkContext {
+            circuit_id: "circuit-bell",
+            sub_task_id: "sub-unitary",
+            node_id: "node-1",
+            slice_id,
+            output_hash: "out",
+            terminal_statevector_digest: "",
+            measurement_spec_hash: "",
+            security_level,
+        };
+        crate::generate_plonky3_stark_proof(&ctx, &crate::trace_spec::golden_h_q0_trace())
+            .expect("unitary prove")
+    }
+
+    /// Builds a compose node the way a composer does, minus the check that the children
+    /// verify — what a dishonest composer could send.
+    #[cfg(feature = "plonky3-stark")]
+    fn compose_without_child_checks(
+        label: &str,
+        manifest_root_hash: &str,
+        left: &[u8],
+        right: &[u8],
+    ) -> Vec<u8> {
+        use crate::aggregation::transcript_v3::{child_digest, encode_compose_v3};
+        use crate::aggregation::{pcs_for_child, rec_context_pcs_complete};
+        use crate::plonky3_stark::recursion::{child_stark_binding, RecursiveAggregationContext};
+        use crate::plonky3_stark::{
+            append_agg_tail, append_rec_tail, generate_aggregation_proof,
+            generate_recursive_aggregation_proof, AggregationContext,
+        };
+
+        let (left_hash, right_hash) = (child_digest(left), child_digest(right));
+        let body = encode_compose_v3("task-forged", label, manifest_root_hash, left, right);
+        let agg = generate_aggregation_proof(&AggregationContext {
+            parent_task_id: "task-forged",
+            compose_label: label,
+            manifest_root_hash,
+            left_child_hash: left_hash,
+            right_child_hash: right_hash,
+            security_level: "low",
+        })
+        .expect("aggregation prove");
+        let out = append_agg_tail(body, &agg);
+        let left_pcs = pcs_for_child(left, "task-forged", None).expect("left PCS");
+        let right_pcs = pcs_for_child(right, "task-forged", None).expect("right PCS");
+        let rec_ctx = RecursiveAggregationContext {
+            parent_task_id: "task-forged",
+            compose_label: label,
+            manifest_root_hash,
+            left_child_hash: left_hash,
+            right_child_hash: right_hash,
+            left_stark_digest: child_stark_binding(left).stark_digest,
+            right_stark_digest: child_stark_binding(right).stark_digest,
+            left_kind: left_pcs.kind,
+            right_kind: right_pcs.kind,
+            left_agg_cert: left_pcs.agg_cert,
+            right_agg_cert: right_pcs.agg_cert,
+            left_leaf_bundle: left_pcs.leaf_bundle,
+            right_leaf_bundle: right_pcs.leaf_bundle,
+            security_level: "low",
+        };
+        if !rec_context_pcs_complete(&rec_ctx) {
+            // A child without PCS (the forged bytes) leaves the node on its AggregationAir.
+            return out;
+        }
+        let rec = generate_recursive_aggregation_proof(&rec_ctx).expect("rec-agg prove");
+        append_rec_tail(out, &rec)
+    }
+
+    /// The RecAgg fast path once accepted a root whose inner node held bytes that are no
+    /// proof at all: the root checked that node's AggregationAir, which attests digests only.
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    fn root_fast_path_rejects_a_forged_grandchild() {
+        use crate::aggregation::{verify_root_proof, RootVerifyContext};
+
+        let leaves: Vec<Vec<u8>> = (0..3).map(|i| unitary_leaf("low", i)).collect();
+        let verify = |root: &[u8]| {
+            verify_root_proof(
+                &RootVerifyContext {
+                    parent_task_id: "task-forged",
+                    manifest_root_hash: "manifest",
+                    security_level: "low",
+                },
+                root,
+            )
+        };
+
+        let honest_inner = compose_without_child_checks("L1:0", "", &leaves[0], &leaves[1]);
+        let honest = compose_without_child_checks("root", "manifest", &honest_inner, &leaves[2]);
+        assert!(verify(&honest));
+
+        let forged_inner = compose_without_child_checks("L1:0", "", b"not a proof", &leaves[1]);
+        let forged = compose_without_child_checks("root", "manifest", &forged_inner, &leaves[2]);
+        assert!(!verify(&forged));
+    }
+
+    /// Prints root and inner-node sizes for multi-slice trees (spec zk-STARK §5.1).
+    #[cfg(feature = "plonky3-stark")]
+    #[test]
+    #[ignore = "measurement; run with --nocapture"]
+    fn multislice_root_sizes() {
+        use crate::aggregation::compose_stark_proofs_with_pcs;
+
+        for level in ["low", "normal"] {
+            let born: Vec<Vec<u8>> = (0..8)
+                .map(|i| born_compose_fixture_slice(level, i).1)
+                .collect();
+            let unitary: Vec<Vec<u8>> = (0..8).map(|i| unitary_leaf(level, i)).collect();
+            for (kind, leaves) in [("born", born), ("unitary", unitary)] {
+                for n in [2usize, 3, 4, 8] {
+                    // Same pairing as the composer: pairs per level, odd tail carried up.
+                    let mut level_nodes = leaves[..n].to_vec();
+                    let mut depth = 1;
+                    while level_nodes.len() > 1 {
+                        let mut next = Vec::new();
+                        for (i, pair) in level_nodes.chunks(2).enumerate() {
+                            let [left, right] = pair else {
+                                next.push(pair[0].clone());
+                                continue;
+                            };
+                            let is_root = level_nodes.len() == 2;
+                            let label = if is_root {
+                                "root".to_string()
+                            } else {
+                                format!("L{depth}:{i}")
+                            };
+                            let node = compose_stark_proofs_with_pcs(
+                                &ComposeContext {
+                                    parent_task_id: "task-multislice",
+                                    compose_label: &label,
+                                    manifest_root_hash: if is_root { "manifest" } else { "" },
+                                    security_level: level,
+                                },
+                                left,
+                                right,
+                                None,
+                                None,
+                                None,
+                                None,
+                            )
+                            .expect("compose");
+                            println!(
+                                "{kind} security_level={level} slices={n} {label}: {} bytes",
+                                node.len()
+                            );
+                            next.push(node);
+                        }
+                        level_nodes = next;
+                        depth += 1;
+                    }
+                }
+            }
+        }
     }
 }

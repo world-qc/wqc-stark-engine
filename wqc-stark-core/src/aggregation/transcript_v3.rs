@@ -8,6 +8,9 @@ use sha3::{Digest, Sha3_256};
 
 pub const V3_COMPOSE_MARKER: &[u8] = b"_WQC_COMPOSE_V3_";
 pub const CHILD_HASH_LEN: usize = 32;
+/// Right-child length that means "same bytes as the left child". A composer
+/// pairing a lone child with itself sends that child once.
+pub const RIGHT_SAME_AS_LEFT: u32 = u32::MAX;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeHeader {
@@ -69,8 +72,12 @@ pub fn encode_compose_v3(
     out.extend_from_slice(&right_hash);
     out.extend_from_slice(&(left_child.len() as u32).to_le_bytes());
     out.extend_from_slice(left_child);
-    out.extend_from_slice(&(right_child.len() as u32).to_le_bytes());
-    out.extend_from_slice(right_child);
+    if right_child == left_child {
+        out.extend_from_slice(&RIGHT_SAME_AS_LEFT.to_le_bytes());
+    } else {
+        out.extend_from_slice(&(right_child.len() as u32).to_le_bytes());
+        out.extend_from_slice(right_child);
+    }
     out
 }
 
@@ -114,8 +121,12 @@ pub fn decode_compose_v3_slices(proof: &[u8]) -> Option<(ComposeHeader, &[u8], &
     let left_child = proof.get(cursor..left_end)?;
     let cursor = left_end;
     let (right_len, cursor) = read_u32_le(proof, cursor)?;
-    let right_end = cursor + right_len as usize;
-    let right_child = proof.get(cursor..right_end)?;
+    let (right_child, right_end) = if right_len == RIGHT_SAME_AS_LEFT {
+        (left_child, cursor)
+    } else {
+        let right_end = cursor + right_len as usize;
+        (proof.get(cursor..right_end)?, right_end)
+    };
     if right_end != proof.len() {
         return None;
     }
@@ -151,6 +162,33 @@ mod tests {
         assert_eq!(decoded_right, right);
         assert_eq!(header.left_child_hash, child_digest(left));
         assert_eq!(header.right_child_hash, child_digest(right));
+    }
+
+    #[test]
+    fn self_pair_sends_the_child_once() {
+        let child = b"lone-child-bytes";
+        let proof = encode_compose_v3("parent-1", "root", "manifest-hash", child, child);
+        let distinct = encode_compose_v3("parent-1", "root", "manifest-hash", child, b"x");
+        // The lone child is not repeated: 4 length bytes vs 4 + 1 for "x".
+        assert_eq!(proof.len(), distinct.len() - 1);
+
+        let (header, left, right) = decode_compose_v3_slices(&proof).expect("decode");
+        assert_eq!(left, child);
+        assert_eq!(right, child);
+        assert_eq!(header.left_child_hash, child_digest(child));
+        assert_eq!(header.right_child_hash, child_digest(child));
+
+        // Older composers repeated the child; that form still decodes.
+        let mut repeated = proof[..proof.len() - 4].to_vec();
+        repeated.extend_from_slice(&(child.len() as u32).to_le_bytes());
+        repeated.extend_from_slice(child);
+        let (_, left, right) = decode_compose_v3_slices(&repeated).expect("decode repeated");
+        assert_eq!((left, right), (&child[..], &child[..]));
+
+        // Bytes after the sentinel are rejected like any trailing bytes.
+        let mut trailing = proof.clone();
+        trailing.push(0);
+        assert!(decode_compose_v3_slices(&trailing).is_none());
     }
 
     #[test]

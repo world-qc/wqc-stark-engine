@@ -1281,6 +1281,34 @@ pub fn decode_leaf_pcs_bundle_bytes(bytes: &[u8]) -> Option<LeafPcsBundle> {
 const SIDE_NONE: u8 = 0;
 const SIDE_AGG: u8 = 1;
 const SIDE_LEAF: u8 = 2;
+/// Right side only: same certificate or bundle as the left side (a lone child paired
+/// with itself).
+const SIDE_SAME_AS_LEFT: u8 = 3;
+
+type Side = (Option<AggPcsCertificate>, Option<LeafPcsBundle>);
+
+/// Reads the right side, which may point back at the left one.
+fn decode_right_side(
+    proof: &[u8],
+    offset: usize,
+    left: &Side,
+) -> Option<(Option<AggPcsCertificate>, Option<LeafPcsBundle>, usize)> {
+    if *proof.get(offset)? == SIDE_SAME_AS_LEFT {
+        return Some((left.0.clone(), left.1.clone(), offset + 1));
+    }
+    decode_side(proof, offset)
+}
+
+fn diagnose_decode_right_side(
+    proof: &[u8],
+    offset: usize,
+    left: &Side,
+) -> Result<(Option<AggPcsCertificate>, Option<LeafPcsBundle>, usize), String> {
+    if *proof.get(offset).ok_or("right flag")? == SIDE_SAME_AS_LEFT {
+        return Ok((left.0.clone(), left.1.clone(), offset + 1));
+    }
+    diagnose_decode_side(proof, offset, "right")
+}
 
 fn encode_side(
     out: &mut Vec<u8>,
@@ -1562,11 +1590,18 @@ pub fn encode_rec_agg_proof_v6(
     out.push(context.left_kind);
     out.push(context.right_kind);
     encode_side(&mut out, &context.left_agg_cert, &context.left_leaf_bundle);
-    encode_side(
-        &mut out,
-        &context.right_agg_cert,
-        &context.right_leaf_bundle,
-    );
+    let same_as_left = (context.left_agg_cert.is_some() || context.left_leaf_bundle.is_some())
+        && context.right_agg_cert == context.left_agg_cert
+        && context.right_leaf_bundle == context.left_leaf_bundle;
+    if same_as_left {
+        out.push(SIDE_SAME_AS_LEFT);
+    } else {
+        encode_side(
+            &mut out,
+            &context.right_agg_cert,
+            &context.right_leaf_bundle,
+        );
+    }
     out.extend_from_slice(&(plonky3_bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(plonky3_bytes);
     out
@@ -1620,7 +1655,9 @@ pub fn diagnose_parse_rec_agg_sides_v6(proof: &[u8]) -> Result<RecAggSidesV6, St
     let right_kind = *proof.get(cursor + 1).ok_or("right_kind")?;
     let cursor = cursor + 2;
     let (left_cert, left_leaf, cursor) = diagnose_decode_side(proof, cursor, "left")?;
-    let (right_cert, right_leaf, cursor) = diagnose_decode_side(proof, cursor, "right")?;
+    let left = (left_cert, left_leaf);
+    let (right_cert, right_leaf, cursor) = diagnose_decode_right_side(proof, cursor, &left)?;
+    let (left_cert, left_leaf) = left;
 
     // Ensure the trailing Plonky3 payload is well-formed even though callers may
     // ignore it (they re-decode via [`decode_rec_agg_proof_owned_v6`]).
@@ -1695,7 +1732,9 @@ pub fn decode_rec_agg_proof_owned_v6(
     let right_kind = *proof.get(cursor + 1)?;
     let cursor = cursor + 2;
     let (left_cert, left_leaf, cursor) = decode_side(proof, cursor)?;
-    let (right_cert, right_leaf, cursor) = decode_side(proof, cursor)?;
+    let left = (left_cert, left_leaf);
+    let (right_cert, right_leaf, cursor) = decode_right_side(proof, cursor, &left)?;
+    let (left_cert, left_leaf) = left;
 
     if compose_label != expected.compose_label
         || manifest_root_hash != expected.manifest_root_hash
@@ -1789,7 +1828,9 @@ pub fn diagnose_decode_rec_agg_v6(
     let right_kind = *proof.get(cursor + 1).ok_or("right_kind")?;
     let cursor = cursor + 2;
     let (left_cert, left_leaf, cursor) = diagnose_decode_side(proof, cursor, "left")?;
-    let (right_cert, right_leaf, cursor) = diagnose_decode_side(proof, cursor, "right")?;
+    let left = (left_cert, left_leaf);
+    let (right_cert, right_leaf, cursor) = diagnose_decode_right_side(proof, cursor, &left)?;
+    let (left_cert, left_leaf) = left;
 
     if compose_label != expected.compose_label {
         return Err(format!(
@@ -1916,6 +1957,44 @@ mod tests {
         assert_eq!(sides.right_kind, REC_KIND_LEAF);
         assert!(sides.left_leaf_bundle.is_none());
         assert!(sides.right_leaf_bundle.is_none());
+    }
+
+    #[test]
+    fn same_as_left_flag_is_only_read_on_the_right() {
+        let ctx = RecursiveAggregationContext {
+            parent_task_id: "parent-same",
+            compose_label: "root",
+            manifest_root_hash: "manifest",
+            left_child_hash: [1u8; CHILD_HASH_LEN],
+            right_child_hash: [1u8; CHILD_HASH_LEN],
+            left_stark_digest: [3u8; STARK_DIGEST_LEN],
+            right_stark_digest: [3u8; STARK_DIGEST_LEN],
+            left_kind: REC_KIND_LEAF,
+            right_kind: REC_KIND_LEAF,
+            left_agg_cert: None,
+            right_agg_cert: None,
+            left_leaf_bundle: None,
+            right_leaf_bundle: None,
+            security_level: "",
+        };
+        let encoded = encode_rec_agg_proof_v6(&ctx, b"plonky3-bytes");
+        let sides_at = locate_inner_marker(&encoded).unwrap()
+            + V6_REC_AGG_INNER_MARKER.len()
+            + "root\0manifest\0".len()
+            + 2 * CHILD_HASH_LEN
+            + 2 * STARK_DIGEST_LEN
+            + 2;
+        // Empty sides stay explicit.
+        assert_eq!(encoded[sides_at..sides_at + 2], [SIDE_NONE, SIDE_NONE]);
+
+        let mut right_same = encoded.clone();
+        right_same[sides_at + 1] = SIDE_SAME_AS_LEFT;
+        let sides = parse_rec_agg_sides_v6(&right_same).expect("right may point left");
+        assert!(sides.right_agg_cert.is_none() && sides.right_leaf_bundle.is_none());
+
+        let mut left_same = encoded;
+        left_same[sides_at] = SIDE_SAME_AS_LEFT;
+        assert!(parse_rec_agg_sides_v6(&left_same).is_none());
     }
 
     #[test]
