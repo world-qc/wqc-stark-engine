@@ -49,8 +49,10 @@ pub fn perm_type() -> NpoTypeId {
 #[derive(Debug, Default)]
 pub struct SvState {
     pub rows: Vec<PairRow>,
+    /// Final stored vector, by stored position (the boundary table reads it).
     pub fin: Vec<C>,
-    /// Final state the digest table hashes (equals `fin` unless tampered).
+    /// Final logical state the digest table hashes: `fin` through the plan's frame, unless
+    /// tampered.
     pub hashed: Vec<C>,
     pub sponge_in: Vec<[F; PW]>,
     pub sponge_out: Vec<[F; PW]>,
@@ -70,9 +72,10 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
         outputs: &[Vec<WitnessId>],
         ctx: &mut ExecutionContext<'_, EF>,
     ) -> Result<(), CircuitError> {
-        let (mut rows, mut fin) = execute(self.n, &self.gates);
-        apply_tamper(self.tamper, &mut rows, &mut fin, self.gates.len());
-        let mut hashed = fin.clone();
+        let plan = plan(self.n, &self.gates);
+        let (mut rows, mut fin) = run(self.n, &plan);
+        apply_tamper(self.tamper, &mut rows, &mut fin, plan.steps);
+        let mut hashed = plan.frame.logical(&fin);
         if self.tamper == Tamper::DigestSwap {
             hashed[2].0 += 3;
         }
@@ -100,29 +103,34 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
         outputs: &[Vec<WitnessId>],
         pw: &mut dyn PreprocessedWriter<EF>,
     ) -> Result<(), CircuitError> {
+        let plan = plan(self.n, &self.gates);
         let mut gate = Vec::new();
-        for (t, g) in self.gates.iter().enumerate() {
-            for (i, j, active) in pairs(self.n, g) {
-                gate.extend([
-                    EF::ONE,
-                    EF::from_usize(t),
-                    EF::from_usize(i),
-                    EF::from_usize(j),
-                    EF::from_bool(active),
-                ]);
-                for (re, im) in g.m {
-                    gate.extend([fi::<EF>(re), fi::<EF>(im)]);
-                }
+        for r in &plan.rows {
+            gate.extend([
+                EF::ONE,
+                EF::from_usize(r.t),
+                EF::from_usize(r.i),
+                EF::from_usize(r.j),
+                EF::from_bool(r.active),
+            ]);
+            for (re, im) in r.m {
+                gate.extend([fi::<EF>(re), fi::<EF>(im)]);
             }
         }
         pw.register_non_primitive_preprocessed_no_read(&gate_type(), &gate);
+        // One row per stored position: its initial value, the step of its final read, and the
+        // logical index and phase the final frame gives it.
         let mut boundary = Vec::new();
-        for k in 0..1usize << self.n {
+        for (s, (logical, phase)) in plan.frame.inverse().into_iter().enumerate() {
+            let (c, d) = rot((1, 0), phase);
             boundary.extend([
                 EF::ONE,
-                EF::from_usize(k),
-                if k == 0 { fi::<EF>(S) } else { EF::ZERO },
-                EF::from_usize(self.gates.len()),
+                EF::from_usize(s),
+                if s == 0 { fi::<EF>(S) } else { EF::ZERO },
+                EF::from_usize(plan.steps),
+                EF::from_usize(logical),
+                fi::<EF>(c),
+                fi::<EF>(d),
             ]);
         }
         pw.register_non_primitive_preprocessed_no_read(&boundary_type(), &boundary);

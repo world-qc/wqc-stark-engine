@@ -24,7 +24,7 @@ pub(crate) const RANGE: &str = "wqc_range";
 pub(crate) const FIN: &str = "wqc_fin";
 pub(crate) const PERM: &str = "wqc_perm";
 pub(crate) const GP: usize = 13; // gate preprocessed: real, t, i, j, active, m[8]
-pub(crate) const BP: usize = 4; // boundary preprocessed: real, idx, init_re, last_t
+pub(crate) const BP: usize = 7; // boundary preprocessed: real, idx, init_re, last_t, logical idx, phase (c, d)
 pub(crate) const DP: usize = 3 + 2 * DIGEST_LEN; // digest preprocessed: real, is_last, idx0, (out_idx, out_mult) × 4
 pub(crate) const PP: usize = 1; // perm preprocessed: real
 
@@ -265,6 +265,8 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for BoundaryTableAir {
             .map(|&x| x.into())
             .collect();
         let (real, idx, init, last) = (p[0].clone(), p[1].clone(), p[2].clone(), p[3].clone());
+        // The final frame: this stored position holds logical `out` times `c + d·i`.
+        let (out, c, d) = (p[4].clone(), p[5].clone(), p[6].clone());
         let zero = AB::Expr::ZERO;
         builder.push_interaction(
             MEM,
@@ -276,9 +278,14 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for BoundaryTableAir {
             [last, idx.clone(), cur[0].clone(), cur[1].clone()],
             Count::bounded(-real.clone(), 1),
         );
+        let (re, im) = (cur[0].clone(), cur[1].clone());
         builder.push_interaction(
             FIN,
-            [idx, cur[0].clone(), cur[1].clone()],
+            [
+                out,
+                c.clone() * re.clone() - d.clone() * im.clone(),
+                d * re + c * im,
+            ],
             Count::bounded(real, 1),
         );
     }

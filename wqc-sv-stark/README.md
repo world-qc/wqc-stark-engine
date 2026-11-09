@@ -45,15 +45,29 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate table has `gates · 2^(n−1)` rows. On an 8-core machine, a 64-gate leaf at n = 16
-  takes about 33 s and 11 GB to prove at any tier (see below).
+- The gate table has `2^(n−1)` rows per rounding gate, padded to a power of two. A gate rounds
+  unless its quantized matrix is monomial: in practice H, T and RX/RY/RZ at generic angles
+  round, while X, Y, Z, S, CNOT, CZ, CCNOT (and rotations such as RZ(π)) add no rows (see
+  below). On an 8-core
+  machine, a leaf at n = 16 with 64 rounding gates takes about 33 s and 11 GB to prove; a
+  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB.
+
+## Monomial gates
+
+X, Y, Z, S, CNOT, CZ and CCNOT (and any rotation whose quantized matrix is monomial) map each
+amplitude to one other times a unit phase, and their fixed-point outputs are exact. `build` folds them into a frame instead of giving them rows:
+logical amplitude `k` is `i^phase[k]` times stored position `perm[k]`. A rounding gate reads
+the stored positions its logical pairs map to, with the phases folded into its matrix entries
+(exact), and the boundary table applies the final frame before the digest. The result is the
+dense execution's bit for bit (a test checks random circuits); only the rows change.
 
 ## Security levels
 
 The orchestrator's `security_level` sets the leaf's FRI query count: `leaf::build` takes a
 `SecurityLevel` and uses `FriParams::leaf`. Every tier uses rate 1/4 and a 16-bit query PoW;
 prove time and memory are set by the rate, so they are nearly the same at every tier
-(n = 16, 64 gates: 32–35 s), and the tier mainly changes the leaf proof size.
+(n = 16 with 64 rounding gates, the worst case for 64 gates: 32–35 s), and the tier mainly
+changes the leaf proof size.
 
 Every recursion proof (layers and aggregation) uses `FriParams::RECURSION`; the public
 constructors take no FRI parameters. A tree is therefore as sound as its leaves' tier, and the
@@ -61,7 +75,7 @@ recursion's own FRI parameters are the same at every tier. A layer's verifier st
 its child, so the first layer over a `low` leaf and over an `ultra` leaf are different
 verifiers. Recursion proofs are roughly the same size at every tier.
 
-| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 gates) |
+| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 rounding gates) |
 |---|---:|---:|---:|---|---:|
 | `low` leaf | 22 | 60 | 59 | FRI queries | 209 KB |
 | `normal` leaf | 32 | 80 | 79 | FRI queries | 289 KB |
@@ -71,7 +85,8 @@ verifiers. Recursion proofs are roughly the same size at every tier.
 
 **Estimated bits** are conjectured soundness from p3-security 0.9.0-rc.2 (random-words regime,
 128-bit collision-resistant commitments), for the largest leaves (n = 16; the gate table is
-2^21 rows at 64 gates and 2^22 at 100). The query phase comes out about a bit below the simple
+up to 2^21 rows at 64 gates and 2^22 at 100, when every gate rounds; fewer rounding gates
+only shorten the trace and raise the field terms). The query phase comes out about a bit below the simple
 `log_blowup · q + PoW` because of the rate's proximity margin. At `ultra` the binding terms are
 the Goldilocks² ones that grow with the trace: the random combination batching the opened
 columns (95.4 bits at 2^22 rows, 96.4 at 2^21) and the LogUp fingerprint (97.0 / 98.0, 28
