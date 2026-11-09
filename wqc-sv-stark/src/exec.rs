@@ -378,7 +378,8 @@ pub(crate) fn split_rows<T>(
     width: usize,
     rows: &[T],
 ) -> [&[T]; GATE_CHUNKS] {
-    let [a, b, _] = chunk_steps(steps).map(|k| (k << (n - 1)) * width);
+    debug_assert!(n >= 1, "a leaf has at least one qubit");
+    let [a, b, _] = chunk_steps(steps).map(|k| (k << n.saturating_sub(1)) * width);
     let (x, rest) = rows.split_at(a.min(rows.len()));
     let (y, z) = rest.split_at(b.min(rest.len()));
     [x, y, z]

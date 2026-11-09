@@ -27,6 +27,9 @@ use p3_field::{PrimeCharacteristicRing, PrimeField64};
 pub const GATE_OP: &str = "wqc/gate";
 /// The second and third gate tables (see [`GATE_CHUNKS`]); the first is [`GATE_OP`].
 pub const GATE_CHUNK_OPS: [&str; GATE_CHUNKS] = [GATE_OP, "wqc/gate1", "wqc/gate2"];
+// `ALL`, `gate_chunk_plugins` and these generators are written out for three gate tables.
+const _: () = assert!(GATE_CHUNKS == 3);
+const GATE_TRACES: [TraceGeneratorFn<EF>; GATE_CHUNKS] = [gate_trace, gate1_trace, gate2_trace];
 pub const BOUNDARY_OP: &str = "wqc/boundary";
 pub const RANGE_OP: &str = "wqc/range";
 
@@ -51,6 +54,8 @@ pub fn perm_type() -> NpoTypeId {
     NpoTypeId::new(PERM_OP)
 }
 
+/// The gate op's execution state. `Default` (with `n = 0`) is only the framework's placeholder
+/// before execution; the trace generators read a state the executor filled (`n ≥ 1`).
 #[derive(Debug, Default)]
 pub struct SvState {
     pub n: usize,
@@ -360,8 +365,8 @@ impl NpoCircuitPlugin<EF> for SvSidePlugin {
 /// The gate tables after the first, which the gate op's trace fills.
 pub fn gate_chunk_plugins() -> [SvSidePlugin; GATE_CHUNKS - 1] {
     [
-        SvSidePlugin(gate_chunk_type(1), gate1_trace),
-        SvSidePlugin(gate_chunk_type(2), gate2_trace),
+        SvSidePlugin(gate_chunk_type(1), GATE_TRACES[1]),
+        SvSidePlugin(gate_chunk_type(2), GATE_TRACES[2]),
     ]
 }
 pub fn boundary_plugin() -> SvSidePlugin {
@@ -433,7 +438,10 @@ pub enum SvTable {
 }
 
 impl SvTable {
-    pub const ALL: [Self; 7] = [
+    /// Every table, in prover registration order. The gate tables are listed one by one, as
+    /// are [`gate_chunk_plugins`] and the `gate*_trace` generators: changing [`GATE_CHUNKS`]
+    /// means updating all three (the assertions below catch a mismatch in count).
+    pub const ALL: [Self; GATE_CHUNKS + 4] = [
         Self::Gate(0),
         Self::Gate(1),
         Self::Gate(2),

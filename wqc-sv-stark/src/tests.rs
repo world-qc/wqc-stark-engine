@@ -809,6 +809,41 @@ fn rows_across_three_gate_tables_prove() {
     let l = build_with(FRI, 3, gates.clone()).unwrap();
     let p = l.prove(CTX).unwrap();
     assert_eq!(
+        p.proof.non_primitives.len(),
+        8,
+        "statement + boundary, range, digest, perm + three gate tables"
+    );
+    assert_eq!(
+        p.statement,
+        statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
+    );
+    l.verify(&p.proof, &p.statement).unwrap();
+}
+
+#[test]
+fn split_rows_partitions_by_chunk_steps() {
+    for n in 1..=4 {
+        for steps in [0, 1, 5, 7, 48, 63] {
+            let width = 3;
+            let rows: Vec<usize> = (0..(steps << (n - 1)) * width).collect();
+            let parts = split_rows(n, steps, width, &rows);
+            let want = chunk_steps(steps).map(|k| (k << (n - 1)) * width);
+            assert_eq!(parts.map(|p| p.len()), want, "n={n} steps={steps}");
+            assert_eq!(parts.concat(), rows);
+        }
+    }
+}
+
+/// 48 rounding steps split 32 + 16 with the third gate table absent.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn two_gate_tables_with_the_third_absent_prove() {
+    let gates: Vec<Gate> = (0..48).map(|k| Gate::ry(k % 3, 0.1 + k as f64)).collect();
+    assert_eq!(chunk_steps(plan(3, &gates).steps), [32, 16, 0]);
+    let l = build_with(FRI, 3, gates.clone()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    assert_eq!(p.proof.non_primitives.len(), 7);
+    assert_eq!(
         p.statement,
         statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
     );
