@@ -6,6 +6,10 @@
 //! statement of the recursion proof: a layer over a leaf verifies against the leaf's
 //! `[context, digest]`, and a 2-to-1 aggregation against `left ‖ right`.
 //!
+//! Every recursion proof uses [`FriParams::RECURSION`], whatever the leaves' tier; the public
+//! constructors take no FRI parameters. A layer's verifier still depends on its child (the leaf
+//! circuit and tier, or the layer below).
+//!
 //! The stock FRI backend suffices: the trusted path rebuilds the child's tables, the leaf's
 //! custom ones included, from the retained verifier.
 
@@ -53,12 +57,24 @@ pub struct Layer {
 impl Layer {
     /// A layer over leaf proofs of `leaf`. `sample` fixes the allocation shape; any proof of
     /// the same circuit fits.
-    pub fn over_leaf(leaf: &Leaf, sample: &LeafProof, fri: FriParams) -> Result<Self, Error> {
-        Self::over(leaf.verifier(), &sample.proof, &sample.statement, fri)
+    pub fn over_leaf(leaf: &Leaf, sample: &LeafProof) -> Result<Self, Error> {
+        Self::over_leaf_with(leaf, sample, FriParams::RECURSION)
     }
 
     /// A layer over proofs of another layer (or aggregation) with verifier `child`.
-    pub fn over_layer(
+    pub fn over_layer(child: CircuitVerifier<Cfg>, sample: &RecursionProof) -> Result<Self, Error> {
+        Self::over_layer_with(child, sample, FriParams::RECURSION)
+    }
+
+    pub(crate) fn over_leaf_with(
+        leaf: &Leaf,
+        sample: &LeafProof,
+        fri: FriParams,
+    ) -> Result<Self, Error> {
+        Self::over(leaf.verifier(), &sample.proof, &sample.statement, fri)
+    }
+
+    pub(crate) fn over_layer_with(
         child: CircuitVerifier<Cfg>,
         sample: &RecursionProof,
         fri: FriParams,
@@ -109,6 +125,13 @@ pub struct Aggregation {
 
 impl Aggregation {
     pub fn new(
+        left: (CircuitVerifier<Cfg>, &RecursionProof),
+        right: (CircuitVerifier<Cfg>, &RecursionProof),
+    ) -> Result<Self, Error> {
+        Self::new_with(left, right, FriParams::RECURSION)
+    }
+
+    pub(crate) fn new_with(
         left: (CircuitVerifier<Cfg>, &RecursionProof),
         right: (CircuitVerifier<Cfg>, &RecursionProof),
         fri: FriParams,

@@ -45,19 +45,54 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate table has `gates · 2^(n−1)` rows. With `FriParams::PRODUCTION` on an 8-core
-  machine, 64 gates take about 1.5 s at n = 10 and 70 s / 14 GB at n = 16.
+- The gate table has `gates · 2^(n−1)` rows. On an 8-core machine, a 64-gate leaf at n = 16
+  takes about 33 s and 11 GB to prove at any tier (see below).
+
+## Security levels
+
+The orchestrator's `security_level` sets the leaf's FRI query count: `leaf::build` takes a
+`SecurityLevel` and uses `FriParams::leaf`. Every tier uses rate 1/4 and a 16-bit query PoW;
+prove time and memory are set by the rate, so they are nearly the same at every tier
+(n = 16, 64 gates: 32–35 s), and the tier mainly changes the leaf proof size.
+
+Every recursion proof (layers and aggregation) uses `FriParams::RECURSION`; the public
+constructors take no FRI parameters. A tree is therefore as sound as its leaves' tier, and the
+recursion's own FRI parameters are the same at every tier. A layer's verifier still depends on
+its child, so the first layer over a `low` leaf and over an `ultra` leaf are different
+verifiers. Recursion proofs are roughly the same size at every tier.
+
+| | FRI queries | Conjectured bits | Proof size (n = 16, 64 gates) |
+|---|---:|---:|---:|
+| `low` leaf | 22 | 60 | 209 KB |
+| `normal` leaf | 32 | 80 | 289 KB |
+| `high` leaf | 37 | 90 | 332 KB |
+| `ultra` (or empty) leaf | 42 | 100 | 365 KB |
+| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 174–191 KB (first layer, low and ultra leaves, n = 4 and 16) |
+
+Bits are the FRI estimate `log_blowup · queries + PoW bits`, as p3-fri's
+`conjectured_soundness_bits`. The total soundness error also has terms bounded by the 128-bit
+Goldilocks² field, the domain size and the constraint degree; they are not yet calibrated, so
+no tier claims more than 100 bits.
+
+- **The tier is not in the statement.** It is part of the leaf's verifier, and a proof made at
+  another tier fails it. Build the verifier from the authoritative tier (the dispatched
+  `SubTask.security_level`), never from anything the prover claims.
+- **Names** parse trimmed and case-insensitive, like v1; empty means `ultra`. Unlike v1, an
+  unknown name is rejected rather than treated as `ultra`.
+- **Not v1's ladder.** v1 leaves use 8 / 16 / 32 / 40 queries on another field (wqc-docs
+  `spec/zk-STARK.md` §5.1), and the fee multiplier `num_queries / 16` assumes that ladder.
+  Both are to be updated when the orchestrator adopts v2 leaves.
 
 ## Usage
 
 ```rust,ignore
 use wqc_sv_stark::exec::Gate;
 use wqc_sv_stark::recursion::{verify, Aggregation, Layer};
-use wqc_sv_stark::{leaf, FriParams};
+use wqc_sv_stark::{leaf, SecurityLevel};
 
-let fri = FriParams::PRODUCTION;
+let level = SecurityLevel::parse("normal").expect("known tier");
 let gates = vec![Gate::h(0), Gate::cnot(0, 1)];
-let bell = leaf::build(fri, 2, gates)?;
+let bell = leaf::build(level, 2, gates)?;
 
 // Leaf: prove under a context, verify against the expected statement.
 let a = bell.prove([1, 2, 3, 4])?;
@@ -65,14 +100,14 @@ bell.verify(&a.proof, &a.statement)?;
 
 // First recursion layer over leaves of this circuit; its proofs verify against the leaf
 // statement with the layer's verifier.
-let layer = Layer::over_leaf(&bell, &a, fri)?;
+let layer = Layer::over_leaf(&bell, &a)?;
 let ra = layer.prove(&a.proof, &a.statement)?;
 verify(&layer.verifier(), &ra.proof, &a.statement)?;
 
 // 2-to-1 aggregation: the root verifies against left ‖ right.
 let b = bell.prove([5, 6, 7, 8])?;
 let rb = layer.prove(&b.proof, &b.statement)?;
-let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb), fri)?;
+let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb))?;
 let root = agg.prove(&ra, &rb)?;
 verify(&agg.verifier(), &root.proof, &root.statement)?;
 ```

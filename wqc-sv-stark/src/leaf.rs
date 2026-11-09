@@ -19,7 +19,7 @@ use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use crate::digest::DIGEST_LEN;
 use crate::exec::*;
 use crate::npo::*;
-use crate::{Cfg, Error, FriParams, EF, F, MAX_QUBITS};
+use crate::{Cfg, Error, FriParams, SecurityLevel, EF, F, MAX_QUBITS};
 
 /// Statement length: 4 context elements, then the 4-element terminal digest.
 pub const STATEMENT_LEN: usize = 4 + DIGEST_LEN;
@@ -37,8 +37,15 @@ pub struct LeafProof {
     pub statement: Vec<F>,
 }
 
-/// Builds and prepares the leaf circuit for `gates` on `n` qubits (`1 ≤ n ≤ MAX_QUBITS`).
-pub fn build(fri: FriParams, n: usize, gates: Vec<Gate>) -> Result<Leaf, Error> {
+/// Builds and prepares the leaf circuit for `gates` on `n` qubits (`1 ≤ n ≤ MAX_QUBITS`) at
+/// `level`, which fixes the FRI parameters ([`FriParams::leaf`]) and so the verifier.
+pub fn build(level: SecurityLevel, n: usize, gates: Vec<Gate>) -> Result<Leaf, Error> {
+    build_with_tamper(FriParams::leaf(level), n, gates, Tamper::None)
+}
+
+/// [`build`] with explicit FRI parameters (tests use [`FriParams::TESTING`] for speed).
+#[cfg(test)]
+pub(crate) fn build_with(fri: FriParams, n: usize, gates: Vec<Gate>) -> Result<Leaf, Error> {
     build_with_tamper(fri, n, gates, Tamper::None)
 }
 
