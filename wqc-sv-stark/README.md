@@ -61,18 +61,25 @@ recursion's own FRI parameters are the same at every tier. A layer's verifier st
 its child, so the first layer over a `low` leaf and over an `ultra` leaf are different
 verifiers. Recursion proofs are roughly the same size at every tier.
 
-| | FRI queries | Conjectured bits | Proof size (n = 16, 64 gates) |
-|---|---:|---:|---:|
-| `low` leaf | 22 | 60 | 209 KB |
-| `normal` leaf | 32 | 80 | 289 KB |
-| `high` leaf | 37 | 90 | 332 KB |
-| `ultra` (or empty) leaf | 42 | 100 | 365 KB |
-| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 174–191 KB (first layer, low and ultra leaves, n = 4 and 16) |
+| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 gates) |
+|---|---:|---:|---:|---|---:|
+| `low` leaf | 22 | 60 | 59 | FRI queries | 209 KB |
+| `normal` leaf | 32 | 80 | 79 | FRI queries | 289 KB |
+| `high` leaf | 37 | 90 | 89 | FRI queries | 332 KB |
+| `ultra` (or empty) leaf | 42 | 100 | 95 | Field terms | 365 KB |
+| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 99 | FRI queries | 174–191 KB (first layer, low and ultra leaves, n = 4 and 16) |
 
-Bits are the FRI estimate `log_blowup · queries + PoW bits`, as p3-fri's
-`conjectured_soundness_bits`. The total soundness error also has terms bounded by the 128-bit
-Goldilocks² field, the domain size and the constraint degree; they are not yet calibrated, so
-no tier claims more than 100 bits.
+**Estimated bits** are conjectured soundness from p3-security 0.9.0-rc.2 (random-words regime,
+128-bit collision-resistant commitments), for the largest leaves (n = 16; the gate table is
+2^21 rows at 64 gates and 2^22 at 100). The query phase comes out about a bit below the simple
+`log_blowup · q + PoW` because of the rate's proximity margin. At `ultra` the binding terms are
+the Goldilocks² ones that grow with the trace: the random combination batching the opened
+columns (95.4 bits at 2^22 rows, 96.4 at 2^21) and the LogUp fingerprint (97.0 / 98.0, 28
+lookups per gate row, widest message 16). The built-in config grinds none of those
+challenges, so more queries would not raise the ceiling; a larger extension field would.
+The column and constraint counts behind the estimate are approximate (±1 bit). Proven
+(Johnson-bound) soundness is far lower (38–58 bits), as for FRI-based STARKs generally; the
+tiers rest on the conjectured regime.
 
 - **The tier is not in the statement.** It is part of the leaf's verifier, and a proof made at
   another tier fails it. Build the verifier from the authoritative tier (the dispatched
