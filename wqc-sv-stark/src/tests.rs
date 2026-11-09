@@ -5,7 +5,7 @@ use p3_field::PrimeCharacteristicRing;
 
 use crate::digest::*;
 use crate::exec::*;
-use crate::leaf::{build, build_with_tamper, statement, Leaf, LeafProof};
+use crate::leaf::{build, build_with, build_with_tamper, statement, Leaf, LeafProof};
 use crate::recursion::{verify, Aggregation, Layer, RecursionProof};
 use crate::{Error, FriParams, SecurityLevel, F, MAX_QUBITS};
 
@@ -33,7 +33,7 @@ fn honest_statement() -> Vec<F> {
 }
 
 fn layer1(l: &Leaf, p: &LeafProof) -> (Layer, RecursionProof) {
-    let layer = Layer::over_leaf(l, p, FRI).unwrap();
+    let layer = Layer::over_leaf_with(l, p, FRI).unwrap();
     let out = layer.prove(&p.proof, &p.statement).unwrap();
     (layer, out)
 }
@@ -80,7 +80,7 @@ fn statement_side_mismatches_are_rejected() {
     assert!(l.verify(&p.proof, &wrong_digest).is_err());
     let mut g2 = gates();
     g2[3] = Gate::ry(2, 0.71);
-    let other_circuit = build(FRI, 3, g2).unwrap();
+    let other_circuit = build_with(FRI, 3, g2).unwrap();
     assert!(other_circuit.verify(&p.proof, &p.statement).is_err());
 }
 
@@ -114,7 +114,7 @@ fn tampered_table_manifest_is_rejected() {
     renamed.proof.non_primitives[1].op_type = p3_circuit::ops::NpoTypeId::new("wqc/other");
     assert!(l.verify(&renamed.proof, &renamed.statement).is_err());
     // The trusted recursion layer rejects them too.
-    let layer = Layer::over_leaf(&l, &honest, FRI).unwrap();
+    let layer = Layer::over_leaf_with(&l, &honest, FRI).unwrap();
     for bad in [&dropped, &swapped, &renamed] {
         assert!(layer.prove(&bad.proof, &bad.statement).is_err());
     }
@@ -123,7 +123,7 @@ fn tampered_table_manifest_is_rejected() {
 #[test]
 fn invalid_circuits_are_rejected_at_build() {
     let invalid =
-        |n: usize, g: Vec<Gate>| matches!(build(FRI, n, g), Err(Error::InvalidCircuit(_)));
+        |n: usize, g: Vec<Gate>| matches!(build_with(FRI, n, g), Err(Error::InvalidCircuit(_)));
     assert!(invalid(0, vec![]));
     assert!(invalid(MAX_QUBITS + 1, vec![]));
     assert!(invalid(1, vec![Gate::h(1)]));
@@ -193,7 +193,7 @@ fn recursion_layers_verify_against_the_leaf_statement() {
     wrong[4] += F::ONE;
     assert!(verify(&layer.verifier(), &r1.proof, &wrong).is_err());
 
-    let layer2 = Layer::over_layer(layer.verifier(), &r1, FRI).unwrap();
+    let layer2 = Layer::over_layer_with(layer.verifier(), &r1, FRI).unwrap();
     let r2 = layer2.prove(&r1.proof, &r1.statement).unwrap();
     verify(&layer2.verifier(), &r2.proof, &p.statement).unwrap();
 }
@@ -202,10 +202,10 @@ fn recursion_layers_verify_against_the_leaf_statement() {
 fn aggregation_verifies_against_left_then_right() {
     let l = leaf(Tamper::None);
     let (pa, pb) = (l.prove(CTX).unwrap(), l.prove([5, 6, 7, 8]).unwrap());
-    let layer = Layer::over_leaf(&l, &pa, FRI).unwrap();
+    let layer = Layer::over_leaf_with(&l, &pa, FRI).unwrap();
     let ra = layer.prove(&pa.proof, &pa.statement).unwrap();
     let rb = layer.prove(&pb.proof, &pb.statement).unwrap();
-    let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb), FRI).unwrap();
+    let agg = Aggregation::new_with((layer.verifier(), &ra), (layer.verifier(), &rb), FRI).unwrap();
     let root = agg.prove(&ra, &rb).unwrap();
     let both: Vec<F> = pa.statement.iter().chain(&pb.statement).copied().collect();
     assert_eq!(root.statement, both);
@@ -218,10 +218,10 @@ fn aggregation_verifies_against_left_then_right() {
 fn recursion_rejects_another_circuits_leaf() {
     let l = leaf(Tamper::None);
     let p = l.prove(CTX).unwrap();
-    let layer = Layer::over_leaf(&l, &p, FRI).unwrap();
+    let layer = Layer::over_leaf_with(&l, &p, FRI).unwrap();
     let mut g2 = gates();
     g2[3] = Gate::ry(2, 0.71);
-    let other = build(FRI, 3, g2).unwrap().prove(CTX).unwrap();
+    let other = build_with(FRI, 3, g2).unwrap().prove(CTX).unwrap();
     assert!(layer.prove(&other.proof, &other.statement).is_err());
 }
 
@@ -230,7 +230,7 @@ fn recursion_rejects_another_circuits_leaf() {
 fn recursion_rejects_forged_leaves() {
     let l = leaf(Tamper::None);
     let honest = l.prove(CTX).unwrap();
-    let layer = Layer::over_leaf(&l, &honest, FRI).unwrap();
+    let layer = Layer::over_leaf_with(&l, &honest, FRI).unwrap();
     for t in [
         Tamper::GateOutput,
         Tamper::ReadMismatch,
@@ -257,7 +257,7 @@ fn eight_qubit_smoke() {
             _ => Gate::t(k % n),
         })
         .collect();
-    let l = build(FRI, n, g.clone()).unwrap();
+    let l = build_with(FRI, n, g.clone()).unwrap();
     let p = l.prove(CTX).unwrap();
     assert_eq!(
         p.statement,
@@ -436,7 +436,7 @@ fn every_gate_matches_the_core_engine() {
 #[cfg_attr(debug_assertions, ignore = "release only")]
 fn every_gate_proves_and_verifies() {
     let gates: Vec<Gate> = all_gates().into_iter().map(to_leaf).collect();
-    let l = build(FRI, 3, gates.clone()).unwrap();
+    let l = build_with(FRI, 3, gates.clone()).unwrap();
     let p = l.prove(CTX).unwrap();
     assert_eq!(
         p.statement,
@@ -540,30 +540,72 @@ fn rotation_matrices_known_answer() {
 
 #[test]
 fn tiers_map_to_leaf_parameters() {
-    let bits = |s: &str| FriParams::leaf(SecurityLevel::parse(s).unwrap()).conjectured_bits();
+    use SecurityLevel::*;
+    let leaf = |l| FriParams::leaf(l);
     assert_eq!(
-        ["low", "normal", "high", "ultra", ""].map(bits),
-        [60, 80, 90, 100, 100]
+        [Low, Normal, High, Ultra].map(|l| leaf(l).num_queries),
+        [22, 32, 37, 42]
     );
-    assert_eq!(SecurityLevel::parse("medium"), None);
-    // Prove cost depends on the blowup alone, so every tier shares it.
-    for l in [SecurityLevel::Low, SecurityLevel::Ultra] {
-        assert_eq!(FriParams::leaf(l).log_blowup, 2);
+    assert_eq!(
+        [Low, Normal, High, Ultra].map(|l| leaf(l).conjectured_bits()),
+        [60, 80, 90, 100]
+    );
+    for l in [Low, Normal, High, Ultra] {
+        // Rate and PoW are shared, so prove cost is (nearly) the same at every tier.
+        assert_eq!((leaf(l).log_blowup, leaf(l).query_pow_bits), (2, 16));
+        // The built-in descriptor accepts every tier.
+        let _ = leaf(l).config();
     }
     assert_eq!(FriParams::RECURSION.conjectured_bits(), 100);
+    let _ = FriParams::RECURSION.config();
 }
 
-/// A tier is part of the leaf's verifier: a proof verifies only at the tier it was proved at,
-/// and the fixed recursion parameters take a leaf of any tier.
+/// Trimmed and case-insensitive like v1; empty is `ultra`; unknown names are rejected rather
+/// than falling back as v1 does.
+#[test]
+fn security_level_names_parse_like_v1() {
+    use SecurityLevel::*;
+    let cases = [
+        ("low", Some(Low)),
+        (" Normal ", Some(Normal)),
+        ("HIGH", Some(High)),
+        ("ultra", Some(Ultra)),
+        ("", Some(Ultra)),
+        ("  ", Some(Ultra)),
+        ("medium", None),
+    ];
+    for (name, want) in cases {
+        assert_eq!(SecurityLevel::parse(name), want, "{name:?}");
+    }
+}
+
+/// A tier is part of the leaf's verifier: a proof verifies only at the tier it was proved at.
+/// The public recursion constructors (fixed `RECURSION` parameters) take leaves of any tier, up
+/// to an aggregation; an `ultra` leaf proves too.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "release only")]
 fn a_leaf_verifies_only_at_its_own_tier() {
-    let low = build(FriParams::leaf(SecurityLevel::Low), 3, gates()).unwrap();
-    let normal = build(FriParams::leaf(SecurityLevel::Normal), 3, gates()).unwrap();
+    let low = build(SecurityLevel::Low, 3, gates()).unwrap();
+    let normal = build(SecurityLevel::Normal, 3, gates()).unwrap();
     let p = low.prove(CTX).unwrap();
     low.verify(&p.proof, &p.statement).unwrap();
     assert!(normal.verify(&p.proof, &p.statement).is_err());
-    let layer = Layer::over_leaf(&low, &p, FriParams::RECURSION).unwrap();
-    let r = layer.prove(&p.proof, &p.statement).unwrap();
-    verify(&layer.verifier(), &r.proof, &p.statement).unwrap();
+
+    let ultra = build(SecurityLevel::Ultra, 3, gates()).unwrap();
+    let u = ultra.prove([5, 6, 7, 8]).unwrap();
+    ultra.verify(&u.proof, &u.statement).unwrap();
+    assert!(normal.verify(&u.proof, &u.statement).is_err());
+
+    let low_layer = Layer::over_leaf(&low, &p).unwrap();
+    let ultra_layer = Layer::over_leaf(&ultra, &u).unwrap();
+    let rl = low_layer.prove(&p.proof, &p.statement).unwrap();
+    let ru = ultra_layer.prove(&u.proof, &u.statement).unwrap();
+    verify(&low_layer.verifier(), &rl.proof, &p.statement).unwrap();
+    verify(&ultra_layer.verifier(), &ru.proof, &u.statement).unwrap();
+    // The first layer's verifier depends on the leaf's tier.
+    assert!(verify(&ultra_layer.verifier(), &rl.proof, &p.statement).is_err());
+
+    let agg = Aggregation::new((low_layer.verifier(), &rl), (ultra_layer.verifier(), &ru)).unwrap();
+    let root = agg.prove(&rl, &ru).unwrap();
+    verify(&agg.verifier(), &root.proof, &root.statement).unwrap();
 }

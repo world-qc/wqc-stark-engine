@@ -58,8 +58,12 @@ pub type Cfg = p3_recursion::builtin_config::GoldilocksD2Poseidon2BinaryConfig;
 /// Challenge field of the recursion layers.
 pub type Challenge = BinomialExtensionField<F, 2>;
 
-/// The orchestrator's security tier. It sets the leaf's FRI query count; recursion layers and
-/// aggregation always use [`FriParams::RECURSION`], so a tree is as sound as its leaves' tier.
+/// The orchestrator's security tier. It sets the leaf's FRI query count; every recursion proof
+/// uses [`FriParams::RECURSION`], so a tree is as sound as its leaves' tier.
+///
+/// The tier is not in the statement: it is part of the leaf's verifier, and a proof made at
+/// another tier fails it. A verifier must therefore be built from the authoritative tier (the
+/// dispatched `SubTask.security_level`), never from anything the prover claims.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecurityLevel {
     Low,
@@ -69,9 +73,10 @@ pub enum SecurityLevel {
 }
 
 impl SecurityLevel {
-    /// Parses the wire name. Empty means `ultra`, as for v1 leaves; an unknown name is `None`.
+    /// Parses the wire name, trimmed and case-insensitive like v1's ladder. Empty means
+    /// `ultra`, as for v1; an unknown name is `None` (v1 falls back to `ultra` instead).
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
+        match s.trim().to_ascii_lowercase().as_str() {
             "low" => Some(Self::Low),
             "normal" => Some(Self::Normal),
             "high" => Some(Self::High),
@@ -92,9 +97,12 @@ pub struct FriParams {
 }
 
 impl FriParams {
-    /// Leaf parameters for `level`: rate 1/4 and a 16-bit query PoW at every tier, so prove
-    /// time and memory do not depend on the tier; only the query count (proof size) does.
-    /// Conjectured bits: low 60, normal 80, high 90, ultra 100.
+    /// Leaf parameters for `level`: rate 1/4 and a 16-bit query PoW at every tier; only the
+    /// query count changes. Prove time and memory are set by the blowup, so they are nearly the
+    /// same at every tier (n = 16, 64 gates: 32–35 s at both low and ultra); the query count
+    /// mainly sets proof size. Conjectured bits: low 60, normal 80, high 90, ultra 100.
+    ///
+    /// This ladder is v2's own: v1 leaves use 8 / 16 / 32 / 40 queries on another field.
     pub const fn leaf(level: SecurityLevel) -> Self {
         let num_queries = match level {
             SecurityLevel::Low => 22,
@@ -111,9 +119,11 @@ impl FriParams {
         }
     }
 
-    /// Recursion layers and aggregation at every tier: rate 1/8, 28 queries, 16-bit query PoW
-    /// (100 conjectured bits). Fixing them keeps one verifier for every layer above the first
-    /// and a root of the same size whatever the tier.
+    /// Every recursion proof (layers and aggregation) at every tier: rate 1/8, 28 queries,
+    /// 16-bit query PoW (100 conjectured bits). The recursion's own FRI does not vary with the
+    /// tier, so recursion proofs are roughly the same size at every tier; the size still varies
+    /// a little with the child (first layers over low and ultra leaves at n = 4 and 16 measured
+    /// 174–191 KB).
     pub const RECURSION: Self = Self {
         log_blowup: 3,
         log_final_poly_len: 0,
@@ -123,7 +133,8 @@ impl FriParams {
     };
 
     /// Two queries: fast, for tests only.
-    pub const TESTING: Self = Self {
+    #[cfg(test)]
+    pub(crate) const TESTING: Self = Self {
         log_blowup: 1,
         log_final_poly_len: 0,
         max_log_arity: 2,
@@ -131,9 +142,10 @@ impl FriParams {
         query_pow_bits: 0,
     };
 
-    /// Conjectured FRI soundness bits, `log_blowup · num_queries + query_pow_bits`. The other
-    /// terms are bounded by the 128-bit Goldilocks² field less the domain size and constraint
-    /// degree; a rough estimate puts that ceiling near 100 bits, not yet calibrated.
+    /// Conjectured FRI soundness bits, `log_blowup · num_queries + query_pow_bits` (the same
+    /// formula as p3-fri's `FriParameters::conjectured_soundness_bits`). The total soundness
+    /// error also has terms bounded by the 128-bit Goldilocks² field, the domain size and the
+    /// constraint degree; they are not yet calibrated, so no tier claims more than 100 bits.
     pub const fn conjectured_bits(&self) -> u32 {
         self.log_blowup * self.num_queries + self.query_pow_bits
     }

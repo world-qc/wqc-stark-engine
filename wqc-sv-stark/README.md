@@ -50,35 +50,49 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
 
 ## Security levels
 
-The orchestrator's `security_level` sets the leaf's FRI query count (`FriParams::leaf`).
-Every tier uses rate 1/4 and a 16-bit query PoW, so prove time and memory are the same at
-every tier; only the leaf proof size changes. Recursion layers and aggregation always use
-`FriParams::RECURSION`, so a tree is as sound as its leaves' tier, every layer above the first
-has one verifier, and the root has the same size at every tier.
+The orchestrator's `security_level` sets the leaf's FRI query count: `leaf::build` takes a
+`SecurityLevel` and uses `FriParams::leaf`. Every tier uses rate 1/4 and a 16-bit query PoW;
+prove time and memory are set by the rate, so they are nearly the same at every tier
+(n = 16, 64 gates: 32–35 s), and the tier mainly changes the leaf proof size.
 
-| Tier | Leaf queries | Conjectured bits | Leaf proof (n = 16, 64 gates) |
+Every recursion proof (layers and aggregation) uses `FriParams::RECURSION`; the public
+constructors take no FRI parameters. A tree is therefore as sound as its leaves' tier, and the
+recursion's own FRI parameters are the same at every tier. A layer's verifier still depends on
+its child, so the first layer over a `low` leaf and over an `ultra` leaf are different
+verifiers. Recursion proofs are roughly the same size at every tier.
+
+| | FRI queries | Conjectured bits | Proof size (n = 16, 64 gates) |
 |---|---:|---:|---:|
-| `low` | 22 | 60 | 209 KB |
-| `normal` | 32 | 80 | 289 KB |
-| `high` | 37 | 90 | 332 KB |
-| `ultra` (or empty) | 42 | 100 | 365 KB |
-| recursion / aggregation | 28 at rate 1/8 | 100 | 187 KB (first layer) |
+| `low` leaf | 22 | 60 | 209 KB |
+| `normal` leaf | 32 | 80 | 289 KB |
+| `high` leaf | 37 | 90 | 332 KB |
+| `ultra` (or empty) leaf | 42 | 100 | 365 KB |
+| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 174–191 KB (first layer, low and ultra leaves, n = 4 and 16) |
 
-Bits are the FRI estimate `log_blowup · queries + PoW bits`. The rest of the soundness error
-is bounded by the 128-bit Goldilocks² field less the domain size and constraint degree; a
-rough estimate puts that ceiling near 100 bits, so no tier claims more.
+Bits are the FRI estimate `log_blowup · queries + PoW bits`, as p3-fri's
+`conjectured_soundness_bits`. The total soundness error also has terms bounded by the 128-bit
+Goldilocks² field, the domain size and the constraint degree; they are not yet calibrated, so
+no tier claims more than 100 bits.
+
+- **The tier is not in the statement.** It is part of the leaf's verifier, and a proof made at
+  another tier fails it. Build the verifier from the authoritative tier (the dispatched
+  `SubTask.security_level`), never from anything the prover claims.
+- **Names** parse trimmed and case-insensitive, like v1; empty means `ultra`. Unlike v1, an
+  unknown name is rejected rather than treated as `ultra`.
+- **Not v1's ladder.** v1 leaves use 8 / 16 / 32 / 40 queries on another field (wqc-docs
+  `spec/zk-STARK.md` §5.1), and the fee multiplier `num_queries / 16` assumes that ladder.
+  Both are to be updated when the orchestrator adopts v2 leaves.
 
 ## Usage
 
 ```rust,ignore
 use wqc_sv_stark::exec::Gate;
 use wqc_sv_stark::recursion::{verify, Aggregation, Layer};
-use wqc_sv_stark::{leaf, FriParams, SecurityLevel};
+use wqc_sv_stark::{leaf, SecurityLevel};
 
 let level = SecurityLevel::parse("normal").expect("known tier");
 let gates = vec![Gate::h(0), Gate::cnot(0, 1)];
-let bell = leaf::build(FriParams::leaf(level), 2, gates)?;
-let fri = FriParams::RECURSION;
+let bell = leaf::build(level, 2, gates)?;
 
 // Leaf: prove under a context, verify against the expected statement.
 let a = bell.prove([1, 2, 3, 4])?;
@@ -86,14 +100,14 @@ bell.verify(&a.proof, &a.statement)?;
 
 // First recursion layer over leaves of this circuit; its proofs verify against the leaf
 // statement with the layer's verifier.
-let layer = Layer::over_leaf(&bell, &a, fri)?;
+let layer = Layer::over_leaf(&bell, &a)?;
 let ra = layer.prove(&a.proof, &a.statement)?;
 verify(&layer.verifier(), &ra.proof, &a.statement)?;
 
 // 2-to-1 aggregation: the root verifies against left ‖ right.
 let b = bell.prove([5, 6, 7, 8])?;
 let rb = layer.prove(&b.proof, &b.statement)?;
-let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb), fri)?;
+let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb))?;
 let root = agg.prove(&ra, &rb)?;
 verify(&agg.verifier(), &root.proof, &root.statement)?;
 ```
