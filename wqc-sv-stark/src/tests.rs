@@ -735,3 +735,31 @@ fn monomial_only_circuit_proves() {
     );
     l.verify(&p.proof, &p.statement).unwrap();
 }
+
+/// A final frame with a quarter-turn phase on top of a non-empty gate table: the boundary's
+/// `d·re + c·im` term is exercised only when monomial gates follow the last rounding gate.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn final_frame_phase_after_rounding_gates_proves() {
+    let mut g = gates();
+    g.extend([Gate::s(0), Gate::y(1), Gate::cnot(1, 2)]);
+    let p = plan(3, &g);
+    assert!(p.steps > 0);
+    assert!(p.frame.phase.iter().any(|&k| k & 1 == 1));
+    let l = build_with(FRI, 3, g.clone()).unwrap();
+    let proof = l.prove(CTX).unwrap();
+    assert_eq!(
+        proof.statement,
+        statement(CTX, terminal_digest(&naive_execute(3, &g))).unwrap()
+    );
+    l.verify(&proof.proof, &proof.statement).unwrap();
+}
+
+/// A rotation that quantizes to a monomial matrix folds like the fixed monomial gates.
+#[test]
+fn monomial_rotations_fold() {
+    let pi = std::f64::consts::PI;
+    for g in [Gate::rx(0, 0.0), Gate::rz(0, pi), Gate::ry(0, pi)] {
+        assert_eq!(plan(1, &[g]).steps, 0);
+    }
+}
