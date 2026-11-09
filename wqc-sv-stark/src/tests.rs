@@ -46,8 +46,8 @@ fn honest_leaf_exports_the_native_digest() {
     l.verify(&p.proof, &p.statement).unwrap();
     assert_eq!(
         p.proof.non_primitives.len(),
-        6,
-        "statement + five leaf tables"
+        7,
+        "statement + boundary, range, digest, perm + the two non-empty gate tables (4 + 1 steps)"
     );
 }
 
@@ -762,4 +762,90 @@ fn monomial_rotations_fold() {
     for g in [Gate::rx(0, 0.0), Gate::rz(0, pi), Gate::ry(0, pi)] {
         assert_eq!(plan(1, &[g]).steps, 0);
     }
+}
+
+#[test]
+fn rounding_steps_split_into_power_of_two_tables() {
+    let cases = [
+        (0, [0, 0, 0]),
+        (1, [1, 0, 0]),
+        (5, [4, 1, 0]),
+        (7, [4, 2, 1]),
+        (48, [32, 16, 0]),
+        (49, [32, 16, 1]),
+        (63, [32, 16, 15]),
+        (64, [64, 0, 0]),
+    ];
+    for (steps, want) in cases {
+        assert_eq!(chunk_steps(steps), want, "{steps}");
+    }
+    // Padding: the rows pad to at most a quarter more than needed, where one table could pad
+    // to nearly double.
+    for steps in 1..=4096usize {
+        let padded: usize = chunk_steps(steps)
+            .iter()
+            .map(|&k| if k == 0 { 0 } else { k.next_power_of_two() })
+            .sum();
+        assert!(4 * padded <= 5 * steps + 4, "{steps}: {padded}");
+    }
+}
+
+/// Seven rounding steps fill all three gate tables (4 + 2 + 1); the memory bus runs across them.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn rows_across_three_gate_tables_prove() {
+    let gates = vec![
+        Gate::h(0),
+        Gate::cnot(0, 1),
+        Gate::ry(1, 0.4),
+        Gate::t(2),
+        Gate::rx(0, -0.9),
+        Gate::s(2),
+        Gate::h(2),
+        Gate::rz(1, 1.7),
+        Gate::h(1),
+    ];
+    assert_eq!(chunk_steps(plan(3, &gates).steps), [4, 2, 1]);
+    let l = build_with(FRI, 3, gates.clone()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    assert_eq!(
+        p.proof.non_primitives.len(),
+        8,
+        "statement + boundary, range, digest, perm + three gate tables"
+    );
+    assert_eq!(
+        p.statement,
+        statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
+    );
+    l.verify(&p.proof, &p.statement).unwrap();
+}
+
+#[test]
+fn split_rows_partitions_by_chunk_steps() {
+    for n in 1..=4 {
+        for steps in [0, 1, 5, 7, 48, 63] {
+            let width = 3;
+            let rows: Vec<usize> = (0..(steps << (n - 1)) * width).collect();
+            let parts = split_rows(n, steps, width, &rows);
+            let want = chunk_steps(steps).map(|k| (k << (n - 1)) * width);
+            assert_eq!(parts.map(|p| p.len()), want, "n={n} steps={steps}");
+            assert_eq!(parts.concat(), rows);
+        }
+    }
+}
+
+/// 48 rounding steps split 32 + 16 with the third gate table absent.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn two_gate_tables_with_the_third_absent_prove() {
+    let gates: Vec<Gate> = (0..48).map(|k| Gate::ry(k % 3, 0.1 + k as f64)).collect();
+    assert_eq!(chunk_steps(plan(3, &gates).steps), [32, 16, 0]);
+    let l = build_with(FRI, 3, gates.clone()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    assert_eq!(p.proof.non_primitives.len(), 7);
+    assert_eq!(
+        p.statement,
+        statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
+    );
+    l.verify(&p.proof, &p.statement).unwrap();
 }

@@ -67,6 +67,9 @@ pub(crate) fn build_with_tamper(
     let packing = TablePacking::default().with_min_trace_height(fri.min_trace_height());
     let mut b = CircuitBuilder::<EF>::new();
     b.register_npo(SvGatePlugin { n, gates, tamper });
+    for p in gate_chunk_plugins() {
+        b.register_npo(p);
+    }
     for p in [
         boundary_plugin(),
         range_plugin(),

@@ -45,12 +45,16 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate table has `2^(n−1)` rows per rounding gate, padded to a power of two. A gate rounds
+- The gate tables have `2^(n−1)` rows per rounding gate. The rounding steps are split over up
+  to three gate tables (the two largest powers of two that fit, then the rest; an empty one is
+  omitted), so the rows pad to at most about a quarter more than needed instead of nearly
+  double. A gate rounds
   unless its quantized matrix is monomial: in practice H, T and RX/RY/RZ at generic angles
   round, while X, Y, Z, S, CNOT, CZ, CCNOT (and rotations such as RZ(π)) add no rows (see
   below). On an 8-core
   machine, a leaf at n = 16 with 64 rounding gates takes about 33 s and 11 GB to prove; a
-  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB.
+  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB, and 64 gates
+  cycling H / CNOT / RY / T (48 rounding, split 32 + 16) take 27 s and 7 GB.
 
 ## Monomial gates
 
@@ -75,22 +79,28 @@ recursion's own FRI parameters are the same at every tier. A layer's verifier st
 its child, so the first layer over a `low` leaf and over an `ultra` leaf are different
 verifiers. Recursion proofs are roughly the same size at every tier.
 
-| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 rounding gates) |
+| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 rounding gates, one gate table) |
 |---|---:|---:|---:|---|---:|
 | `low` leaf | 22 | 60 | 59 | FRI queries | 209 KB |
 | `normal` leaf | 32 | 80 | 79 | FRI queries | 289 KB |
 | `high` leaf | 37 | 90 | 89 | FRI queries | 332 KB |
 | `ultra` (or empty) leaf | 42 | 100 | 95 | Field terms | 365 KB |
-| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 99 | FRI queries | 174–191 KB (first layer, low and ultra leaves, n = 4 and 16) |
+| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 99 | FRI queries | 174–203 KB (first layer, low and ultra leaves, n = 4 and 16) |
+
+Proof sizes vary by a few KB from proof to proof (postcard writes field elements as varints,
+and their values follow the transcript; one 12-qubit circuit measured 320–328 KB across six
+contexts), and each extra gate table adds about 20 KB, so a split leaf can be larger than a
+one-table leaf with more rounding steps (48 steps, 32 + 16: 389 KB).
 
 **Estimated bits** are conjectured soundness from p3-security 0.9.0-rc.2 (random-words regime,
-128-bit collision-resistant commitments), for the largest leaves (n = 16; the gate table is
-up to 2^21 rows at 64 gates and 2^22 at 100, when every gate rounds; fewer rounding gates
-only shorten the trace and raise the field terms). The query phase comes out about a bit below the simple
+128-bit collision-resistant commitments), for the largest leaves (n = 16, every gate rounding:
+64 steps fill one 2^21-row gate table; 100 steps split 64 + 32 + 4, so the largest table is
+still 2^21 rows but there are more columns and lookups). Fewer rounding gates only shorten the
+trace and raise the field terms. The query phase comes out about a bit below the simple
 `log_blowup · q + PoW` because of the rate's proximity margin. At `ultra` the binding terms are
-the Goldilocks² ones that grow with the trace: the random combination batching the opened
-columns (95.4 bits at 2^22 rows, 96.4 at 2^21) and the LogUp fingerprint (97.0 / 98.0, 28
-lookups per gate row, widest message 16). The built-in config grinds none of those
+the Goldilocks² ones that grow with the trace and the column count: the random combination
+batching the opened columns (96.4 bits at 64 steps; 96.0 at 100 steps, 95.4 if the extra gate
+tables' columns are counted generously) and the LogUp fingerprint (98.0 / 97.3, 28 lookups per gate row, widest message 16). The built-in config grinds none of those
 challenges, so more queries would not raise the ceiling; a larger extension field would.
 The column and constraint counts behind the estimate are approximate (±1 bit). Proven
 (Johnson-bound) soundness is far lower (38–58 bits), as for FRI-based STARKs generally; the

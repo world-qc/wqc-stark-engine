@@ -127,7 +127,7 @@ impl FriParams {
     /// tables are at most 2^14 rows and the field terms stay above 100). The recursion's own FRI does not vary with the
     /// tier, so recursion proofs are roughly the same size at every tier; the size still varies
     /// a little with the child (first layers over low and ultra leaves at n = 4 and 16 measured
-    /// 174–191 KB).
+    /// 174–203 KB).
     pub const RECURSION: Self = Self {
         log_blowup: 3,
         log_final_poly_len: 0,
