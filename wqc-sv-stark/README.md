@@ -61,7 +61,7 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
 
 X, Y, Z, S, CNOT, CZ and CCNOT (and any rotation whose quantized matrix is monomial) map each
 amplitude to one other times a unit phase, and their fixed-point outputs are exact. `build` folds them into a frame instead of giving them rows:
-logical amplitude `k` is `i^phase[k]` times stored position `perm[k]`. A rounding gate reads
+logical amplitude `k` is `i^phase[k]` times stored position `perm[k]`. A rounding step reads
 the stored positions its logical pairs map to, with the phases folded into its matrix entries
 (exact), and the boundary table applies the final frame before the digest. The result is the
 dense execution's bit for bit (a test checks random circuits); only the rows change.
@@ -73,23 +73,28 @@ rewritten list. Each qubit keeps a pending product of the single-qubit gates app
 (rounding or monomial) since a multi-qubit gate last touched it. A gate with controls first
 emits the pending products of the qubits it touches, as control or target, in ascending qubit
 order, then itself; at the end the remaining products are emitted in ascending qubit order.
-A product is computed in `f64` from the gates' unrounded matrices, `a · b` entry by entry as
+A product is computed in `f64` from the gates' unrounded matrices, each new gate multiplied
+from the left: the run `G_1, …, G_L` (in circuit order) becomes `G_L · … · G_1`. Each step
+`a · b` (`a` the new gate, `b` the product so far) is computed entry by entry as
 `(a_r0·b_0c) + (a_r1·b_1c)` with complex products `(xr·yr − xi·yi, xr·yi + xi·yr)` (IEEE
-basic operations, no fused multiply-add), and then rounded once like any gate matrix.
+basic operations, no fused multiply-add), and the final product is rounded once like any gate
+matrix. `build` validates the fused gates as it does the given ones.
 
 So a run of single-qubit gates costs at most one rounding step, and none if its product
 rounds to a monomial matrix (H·H, H·Z·H, RZ(π/2)²). A lone gate is unchanged, but a
 single-qubit gate is emitted where its run ends, not where it appears, so rounding steps on
-different qubits may run in another order than written. Fusion does not commute gates past
-anything that touches their qubit (an RZ is not moved through a CNOT's control, for
-example). Changing the rule changes the result, so it is fixed with the leaf format.
+different qubits may run in another order than written. A gate never moves past another gate
+that touches its qubit: an RZ on a CNOT's control qubit stays on its side of the CNOT,
+although the two commute. Changing the rule changes the result, so the rule is part of the
+leaf format: before anything consumes these digests, the leaf format will be tied to a
+capability bit or leaf version, and a new rule needs a new one.
 
 ## Security levels
 
 The orchestrator's `security_level` sets the leaf's FRI query count: `leaf::build` takes a
 `SecurityLevel` and uses `FriParams::leaf`. Every tier uses rate 1/4 and a 16-bit query PoW;
 prove time and memory are set by the rate, so they are nearly the same at every tier
-(n = 16 with 64 rounding gates, the worst case for 64 gates: 32–35 s), and the tier mainly
+(n = 16 with 64 rounding steps, the worst case for 64 gates: 32–35 s), and the tier mainly
 changes the leaf proof size.
 
 Every recursion proof (layers and aggregation) uses `FriParams::RECURSION`; the public
@@ -98,7 +103,7 @@ recursion's own FRI parameters are the same at every tier. A layer's verifier st
 its child, so the first layer over a `low` leaf and over an `ultra` leaf are different
 verifiers. Recursion proofs are roughly the same size at every tier.
 
-| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 rounding gates, one gate table) |
+| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 rounding steps, one gate table) |
 |---|---:|---:|---:|---|---:|
 | `low` leaf | 22 | 60 | 59 | FRI queries | 209 KB |
 | `normal` leaf | 32 | 80 | 79 | FRI queries | 289 KB |
@@ -114,7 +119,7 @@ one-table leaf with more rounding steps (48 steps, 32 + 16: 389 KB).
 **Estimated bits** are conjectured soundness from p3-security 0.9.0-rc.2 (random-words regime,
 128-bit collision-resistant commitments), for the largest leaves (n = 16, every gate rounding:
 64 steps fill one 2^21-row gate table; 100 steps split 64 + 32 + 4, so the largest table is
-still 2^21 rows but there are more columns and lookups). Fewer rounding gates only shorten the
+still 2^21 rows but there are more columns and lookups). Fewer rounding steps only shorten the
 trace and raise the field terms. The query phase comes out about a bit below the simple
 `log_blowup · q + PoW` because of the rate's proximity margin. At `ultra` the binding terms are
 the Goldilocks² ones that grow with the trace and the column count: the random combination

@@ -496,7 +496,11 @@ fn rounding_error_stays_within_the_bound() {
         .sum::<f64>()
         .sqrt();
     let ulp = 0.5 / scale;
-    let bound = circuit.len() as f64 * ((2f64.powi(n as i32 + 1)).sqrt() + 2.0 * 8f64.sqrt()) * ulp;
+    // Fused gates count once.
+    let gates: Vec<Gate> = circuit.iter().map(|&g| to_leaf(g)).collect();
+    let fused = fuse(n, &gates).len();
+    assert!(fused < circuit.len());
+    let bound = fused as f64 * ((2f64.powi(n as i32 + 1)).sqrt() + 2.0 * 8f64.sqrt()) * ulp;
     assert!(circuit.len() > count * 9 / 10);
     eprintln!("L2 error {err:.2e}, bound {bound:.2e}");
     assert!(err <= bound, "L2 error {err} above the bound {bound}");
@@ -738,7 +742,7 @@ fn monomial_only_circuit_proves() {
 }
 
 /// A final frame with a quarter-turn phase on top of a non-empty gate table: the boundary's
-/// `d·re + c·im` term is exercised only when monomial gates follow the last rounding gate.
+/// `d·re + c·im` term is exercised only when monomial gates follow the last rounding step.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "release only")]
 fn final_frame_phase_after_rounding_gates_proves() {
@@ -884,6 +888,10 @@ fn single_qubit_runs_fuse() {
         2
     );
     assert_eq!(plan(3, &[Gate::h(0), Gate::cz(1, 0), Gate::h(0)]).steps, 2);
+    for q in 0..3 {
+        let g = [Gate::h(q), Gate::ccnot(0, 1, 2), Gate::h(q)];
+        assert_eq!(plan(3, &g).steps, 2, "CCNOT touching qubit {q}");
+    }
     // Monomial gates join the run: H·S·H is one step, H·Z·H = X folds.
     assert_eq!(plan(1, &[Gate::h(0), Gate::s(0), Gate::h(0)]).steps, 1);
     assert_eq!(plan(1, &[Gate::h(0), Gate::z(0), Gate::h(0)]).steps, 0);
@@ -974,5 +982,43 @@ fn fusion_does_not_add_error() {
             ef <= eu * 1.5 + 1e-8,
             "seed={seed}: fused {ef:.2e} vs unfused {eu:.2e}"
         );
+    }
+}
+
+/// Fusion preserves the circuit's unitary before any integer rounding: the fused gates'
+/// unrounded matrices give the same `f64` state as the gates as written.
+#[test]
+fn fusion_preserves_the_unrounded_circuit() {
+    let apply = |n: usize, gates: &[Gate]| {
+        let mut st = vec![(0.0f64, 0.0f64); 1 << n];
+        st[0] = (1.0, 0.0);
+        let c = |x: (f64, f64), y: (f64, f64)| (x.0 * y.0 - x.1 * y.1, x.0 * y.1 + x.1 * y.0);
+        for g in gates {
+            let prev = st.clone();
+            for i in 0..1usize << n {
+                if (i >> g.target) & 1 == 1 || !g.controls.iter().all(|&k| (i >> k) & 1 == 1) {
+                    continue;
+                }
+                let j = i | 1 << g.target;
+                let (a, b) = (prev[i], prev[j]);
+                let (p, q, r, s) = (c(g.f[0], a), c(g.f[1], b), c(g.f[2], a), c(g.f[3], b));
+                st[i] = (p.0 + q.0, p.1 + q.1);
+                st[j] = (r.0 + s.0, r.1 + s.1);
+            }
+        }
+        st
+    };
+    for n in 1..=5 {
+        for seed in 0..20u64 {
+            let gates = random_circuit(n, 60, seed * 131 + n as u64);
+            let (a, b) = (apply(n, &gates), apply(n, &fuse(n, &gates)));
+            let d = a
+                .iter()
+                .zip(&b)
+                .map(|(x, y)| (x.0 - y.0).powi(2) + (x.1 - y.1).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            assert!(d < 1e-12, "n={n} seed={seed}: {d:e}");
+        }
     }
 }

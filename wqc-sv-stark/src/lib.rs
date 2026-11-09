@@ -23,9 +23,9 @@ use p3_goldilocks::Goldilocks;
 
 pub type F = Goldilocks;
 
-/// Largest supported qubit count. The gate table has `2^(n−1)` rows per rounding gate (monomial
-/// gates fold away); at n = 16 and 64 rounding gates a leaf takes about 33 s and 11 GB to prove
-/// at any [`SecurityLevel`].
+/// Largest supported qubit count. The gate tables have `2^(n−1)` rows per rounding step (runs
+/// of single-qubit gates fuse into one gate, and monomial gates fold away); at n = 16 and 64
+/// rounding steps a leaf takes about 33 s and 11 GB to prove at any [`SecurityLevel`].
 pub const MAX_QUBITS: usize = 16;
 
 #[derive(Debug)]

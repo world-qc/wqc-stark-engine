@@ -336,15 +336,17 @@ fn mul_f64(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> [(f64, f64); 4] {
 /// touched it. A gate with controls first emits the pending products of the qubits it
 /// touches (ascending qubit), then itself; at the end the remaining products are emitted
 /// (ascending qubit). A product is multiplied in `f64` from the gates' unrounded matrices and
-/// rounded once, so a run of single-qubit gates costs at most one rounding step.
+/// rounded once, so a run of single-qubit gates costs at most one rounding step. Each new gate
+/// multiplies from the left: a run `G_1, …, G_L` becomes `G_L · … · G_1`.
+///
+/// A product of validated gates is unitary up to `f64` error, far inside the rounding
+/// tolerance; [`crate::leaf::build`] still validates the fused gates.
 pub(crate) fn fuse(n: usize, gates: &[Gate]) -> Vec<Gate> {
     let mut pending: Vec<Option<[(f64, f64); 4]>> = vec![None; n];
     let mut out = Vec::with_capacity(gates.len());
     let emit = |q: usize, p: &mut Option<[(f64, f64); 4]>, out: &mut Vec<Gate>| {
         if let Some(f) = p.take() {
-            let g = Gate::from_f64(q, vec![], f);
-            debug_assert!(g.validate(n).is_ok(), "fused matrix is not unitary");
-            out.push(g);
+            out.push(Gate::from_f64(q, vec![], f));
         }
     };
     for g in gates {
@@ -356,10 +358,11 @@ pub(crate) fn fuse(n: usize, gates: &[Gate]) -> Vec<Gate> {
             });
             continue;
         }
-        let mut touched: Vec<usize> = g.controls.iter().copied().chain([g.target]).collect();
-        touched.sort_unstable();
-        for q in touched {
-            emit(q, &mut pending[q], &mut out);
+        // Ascending qubit order; every qubit is touched at most once (validated wiring).
+        for (q, p) in pending.iter_mut().enumerate() {
+            if q == g.target || g.controls.contains(&q) {
+                emit(q, p, &mut out);
+            }
         }
         out.push(g.clone());
     }
@@ -372,10 +375,15 @@ pub(crate) fn fuse(n: usize, gates: &[Gate]) -> Vec<Gate> {
 /// Compiles validated gates (see [`Gate::validate`]; [`crate::leaf::build`] validates first)
 /// after [`fuse`].
 pub(crate) fn plan(n: usize, gates: &[Gate]) -> Plan {
+    plan_fused(n, &fuse(n, gates))
+}
+
+/// [`plan`] for gates that are already the output of [`fuse`] (the leaf fuses once, at build).
+pub(crate) fn plan_fused(n: usize, gates: &[Gate]) -> Plan {
     let mut frame = Frame::identity(n);
     let mut rows = Vec::new();
     let mut steps = 0;
-    for g in &fuse(n, gates) {
+    for g in gates {
         if let Some(mono) = g.monomial() {
             frame.apply_monomial(n, g, mono);
             continue;
@@ -475,7 +483,8 @@ pub(crate) fn run(n: usize, plan: &Plan) -> (Vec<PairRow>, Vec<C>) {
     (rows, st)
 }
 
-/// Executes validated gates: the gate rows and the final logical state.
+/// Executes validated gates: the gate rows and the final logical state. The circuit executed
+/// is the [`fuse`]d one, so the state differs from rounding after every gate as written.
 pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
     let plan = plan(n, gates);
     let (rows, stored) = run(n, &plan);
