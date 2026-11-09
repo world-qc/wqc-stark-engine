@@ -125,6 +125,33 @@ pub(crate) fn build_with_tamper(
     })
 }
 
+/// Domain tag of [`context`]; the version changes if the encoding does.
+pub const CONTEXT_TAG: &[u8] = b"WQC_SV_CTX_V1";
+
+/// The leaf context: binds a proof to its dispatch. SHA3-256 of [`CONTEXT_TAG`] followed by
+/// each field as its byte length (`u32` little-endian) and its UTF-8 bytes, in this order; the
+/// 32-byte hash is split into four little-endian `u64` words, each reduced modulo the
+/// Goldilocks prime.
+///
+/// The fields are the dispatch's `circuit_id`, `sub_task_id`, `node_id` and `slice_id`. The
+/// context differs per node, while the digest does not, so a quorum compares digests. The
+/// security tier is not included: it is part of the verifier, not the statement.
+pub fn context(circuit_id: &str, sub_task_id: &str, node_id: &str, slice_id: &str) -> [u64; 4] {
+    use sha3::{Digest, Sha3_256};
+    let mut h = Sha3_256::new();
+    h.update(CONTEXT_TAG);
+    for field in [circuit_id, sub_task_id, node_id, slice_id] {
+        let len = u32::try_from(field.len()).expect("dispatch field longer than 4 GiB");
+        h.update(len.to_le_bytes());
+        h.update(field.as_bytes());
+    }
+    let out = h.finalize();
+    std::array::from_fn(|k| {
+        let w = u64::from_le_bytes(out[8 * k..8 * k + 8].try_into().expect("8 bytes"));
+        w % F::ORDER_U64
+    })
+}
+
 /// Statement `[context, digest]` from canonical `u64`s; values at or above the field modulus
 /// are rejected rather than reduced.
 pub fn statement(ctx: [u64; 4], digest: [u64; DIGEST_LEN]) -> Result<Vec<F>, Error> {
@@ -143,8 +170,8 @@ pub fn statement(ctx: [u64; 4], digest: [u64; DIGEST_LEN]) -> Result<Vec<F>, Err
 }
 
 impl Leaf {
-    /// Proves the circuit under `ctx`; the returned statement holds the terminal digest the
-    /// circuit exported.
+    /// Proves the circuit under `ctx` (from [`context`]); the returned statement holds the
+    /// terminal digest the circuit exported.
     pub fn prove(&self, ctx: [u64; 4]) -> Result<LeafProof, Error> {
         let ctx = statement(ctx, [0; DIGEST_LEN])?[..4].to_vec();
         let mut runner = self.circuit.runner();

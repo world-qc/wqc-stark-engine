@@ -13,9 +13,20 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   leaf is built. A proof only verifies against the verifier of the circuit it was built for
   (`Leaf::verifier()`), so a verifier must be derived from the expected circuit, never taken
   from the prover.
-- **Statement.** `[context(4), digest(4)]`. The context is caller-supplied (task binding); the
-  digest is computed in-circuit from the final state. The statement does not name the
-  circuit: it is meaningful only together with that circuit's verifier.
+- **Statement.** `[context(4), digest(4)]`, eight Goldilocks elements and fixed. The context
+  binds the proof to its dispatch (below); the digest is computed in-circuit from the final
+  state. Both are public values of the proof, so a proof verifies only against its own. The
+  statement does not name the circuit: it is meaningful only together with that circuit's
+  verifier.
+- **Context.** `leaf::context(circuit_id, sub_task_id, node_id, slice_id)`, from the dispatch:
+  SHA3-256 of `WQC_SV_CTX_V1` followed by each field as its byte length (`u32`
+  little-endian) and its UTF-8 bytes, in that order; the 32 bytes split into four
+  little-endian `u64` words, each reduced modulo the Goldilocks prime `2^64 − 2^32 + 1`. A
+  verifier recomputes it from the dispatch it signed, never from the prover. It differs per
+  node, so a node cannot submit another node's proof, while the digest is the same for every
+  honest node, so a quorum compares digests. Not included: the output payload (the digest is
+  the result; the payload is checked against it), the security tier (part of the verifier),
+  and measurement data (a Born leaf's own statement). A known-answer test pins the encoding.
 - **Digest.** A Poseidon2 sponge (Goldilocks, width 8, rate 4) over the final amplitudes, two
   amplitudes per block, from the zero state; the digest is the first four state elements.
   The round constants are not the standard Goldilocks Poseidon2 ones: they are drawn from
@@ -151,7 +162,7 @@ let gates = vec![Gate::h(0), Gate::cnot(0, 1)];
 let bell = leaf::build(level, 2, gates)?;
 
 // Leaf: prove under a context, verify against the expected statement.
-let a = bell.prove([1, 2, 3, 4])?;
+let a = bell.prove(leaf::context("circuit-id", "sub-task-1", "node-a", "0"))?;
 bell.verify(&a.proof, &a.statement)?;
 
 // First recursion layer over leaves of this circuit; its proofs verify against the leaf
@@ -161,7 +172,7 @@ let ra = layer.prove(&a.proof, &a.statement)?;
 verify(&layer.verifier(), &ra.proof, &a.statement)?;
 
 // 2-to-1 aggregation: the root verifies against left ‖ right.
-let b = bell.prove([5, 6, 7, 8])?;
+let b = bell.prove(leaf::context("circuit-id", "sub-task-2", "node-a", "0"))?;
 let rb = layer.prove(&b.proof, &b.statement)?;
 let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb))?;
 let root = agg.prove(&ra, &rb)?;

@@ -5,7 +5,7 @@ use p3_field::PrimeCharacteristicRing;
 
 use crate::digest::*;
 use crate::exec::*;
-use crate::leaf::{build, build_with, build_with_tamper, statement, Leaf, LeafProof};
+use crate::leaf::{build, build_with, build_with_tamper, context, statement, Leaf, LeafProof};
 use crate::recursion::{verify, Aggregation, Layer, RecursionProof};
 use crate::{Error, FriParams, SecurityLevel, F, MAX_QUBITS};
 
@@ -1021,4 +1021,69 @@ fn fusion_preserves_the_unrounded_circuit() {
             assert!(d < 1e-12, "n={n} seed={seed}: {d:e}");
         }
     }
+}
+
+/// Pins the context encoding; the values were computed independently (Python `hashlib`).
+#[test]
+fn context_known_answer() {
+    assert_eq!(
+        context("3f2a9c", "sub-7", "12D3KooWExample", "0"),
+        [
+            2629832246304586780,
+            6289402838643317648,
+            3984696892480907753,
+            15826953888818560288
+        ]
+    );
+    assert_eq!(
+        context("", "", "", ""),
+        [
+            6244185044995144319,
+            17249683863875817547,
+            190826013191292089,
+            6584790768701115510
+        ]
+    );
+}
+
+/// Every field changes the context, field boundaries are unambiguous, and the words are
+/// canonical field elements.
+#[test]
+fn context_separates_fields() {
+    let base = context("c", "s", "n", "0");
+    for other in [
+        context("d", "s", "n", "0"),
+        context("c", "t", "n", "0"),
+        context("c", "s", "m", "0"),
+        context("c", "s", "n", "1"),
+        context("cs", "", "n", "0"),
+        context("", "cs", "n", "0"),
+        context("c", "s", "n0", ""),
+    ] {
+        assert_ne!(base, other);
+    }
+    for f in [base, context("", "", "", "")] {
+        assert!(f
+            .iter()
+            .all(|&x| x < <F as p3_field::PrimeField64>::ORDER_U64));
+        statement(f, [0; DIGEST_LEN]).unwrap();
+    }
+}
+
+/// A proof made under one node's context does not verify under another node's.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn a_proof_is_bound_to_its_node() {
+    let l = leaf(Tamper::None);
+    let mine = context("circuit", "sub-1", "node-a", "0");
+    let p = l.prove(mine).unwrap();
+    assert_eq!(
+        p.statement[..4],
+        statement(mine, [0; DIGEST_LEN]).unwrap()[..4]
+    );
+    l.verify(&p.proof, &p.statement).unwrap();
+    let theirs = context("circuit", "sub-1", "node-b", "0");
+    let mut claimed = statement(theirs, [0; DIGEST_LEN]).unwrap();
+    claimed[4..].copy_from_slice(&p.statement[4..]);
+    assert!(l.verify(&p.proof, &claimed).is_err());
 }
