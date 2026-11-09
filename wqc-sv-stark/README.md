@@ -45,12 +45,16 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate table has `2^(n−1)` rows per rounding gate, padded to a power of two. A gate rounds
+- The gate tables have `2^(n−1)` rows per rounding gate. The rounding steps are split over up
+  to three gate tables (the two largest powers of two that fit, then the rest; an empty one is
+  omitted), so the rows pad to at most about a quarter more than needed instead of nearly
+  double. A gate rounds
   unless its quantized matrix is monomial: in practice H, T and RX/RY/RZ at generic angles
   round, while X, Y, Z, S, CNOT, CZ, CCNOT (and rotations such as RZ(π)) add no rows (see
   below). On an 8-core
   machine, a leaf at n = 16 with 64 rounding gates takes about 33 s and 11 GB to prove; a
-  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB.
+  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB, and 64 gates
+  cycling H / CNOT / RY / T (48 rounding, split 32 + 16) take 27 s and 7 GB.
 
 ## Monomial gates
 
@@ -81,7 +85,7 @@ verifiers. Recursion proofs are roughly the same size at every tier.
 | `normal` leaf | 32 | 80 | 79 | FRI queries | 289 KB |
 | `high` leaf | 37 | 90 | 89 | FRI queries | 332 KB |
 | `ultra` (or empty) leaf | 42 | 100 | 95 | Field terms | 365 KB |
-| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 99 | FRI queries | 174–191 KB (first layer, low and ultra leaves, n = 4 and 16) |
+| Recursion layer / aggregation | 28 at rate 1/8 | 100 | 99 | FRI queries | 174–203 KB (first layer, low and ultra leaves, n = 4 and 16) |
 
 **Estimated bits** are conjectured soundness from p3-security 0.9.0-rc.2 (random-words regime,
 128-bit collision-resistant commitments), for the largest leaves (n = 16; the gate table is

@@ -358,6 +358,32 @@ pub(crate) fn plan(n: usize, gates: &[Gate]) -> Plan {
     Plan { rows, steps, frame }
 }
 
+/// The gate table is split into this many tables, so its rows pad to a sum of powers of two
+/// rather than one: padding wastes at most about a quarter instead of half.
+pub(crate) const GATE_CHUNKS: usize = 3;
+
+/// Rounding steps per gate table: the two largest powers of two that fit, then the rest.
+/// Every step has `2^(n−1)` rows, so the first two tables need no padding.
+pub(crate) fn chunk_steps(steps: usize) -> [usize; GATE_CHUNKS] {
+    let pow2_floor = |x: usize| if x == 0 { 0 } else { 1 << x.ilog2() };
+    let a = pow2_floor(steps);
+    let b = pow2_floor(steps - a);
+    [a, b, steps - a - b]
+}
+
+/// Splits rows (ordered by step, `width` items each) into the gate tables' shares.
+pub(crate) fn split_rows<T>(
+    n: usize,
+    steps: usize,
+    width: usize,
+    rows: &[T],
+) -> [&[T]; GATE_CHUNKS] {
+    let [a, b, _] = chunk_steps(steps).map(|k| (k << (n - 1)) * width);
+    let (x, rest) = rows.split_at(a.min(rows.len()));
+    let (y, z) = rest.split_at(b.min(rest.len()));
+    [x, y, z]
+}
+
 /// Executes `plan`: the gate rows and the final stored vector.
 pub(crate) fn run(n: usize, plan: &Plan) -> (Vec<PairRow>, Vec<C>) {
     let mut st = vec![(0i64, 0i64); 1 << n];

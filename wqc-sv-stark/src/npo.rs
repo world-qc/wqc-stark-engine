@@ -25,11 +25,16 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 
 pub const GATE_OP: &str = "wqc/gate";
+/// The second and third gate tables (see [`GATE_CHUNKS`]); the first is [`GATE_OP`].
+pub const GATE_CHUNK_OPS: [&str; GATE_CHUNKS] = [GATE_OP, "wqc/gate1", "wqc/gate2"];
 pub const BOUNDARY_OP: &str = "wqc/boundary";
 pub const RANGE_OP: &str = "wqc/range";
 
 pub fn gate_type() -> NpoTypeId {
     NpoTypeId::new(GATE_OP)
+}
+pub fn gate_chunk_type(c: usize) -> NpoTypeId {
+    NpoTypeId::new(GATE_CHUNK_OPS[c])
 }
 pub fn boundary_type() -> NpoTypeId {
     NpoTypeId::new(BOUNDARY_OP)
@@ -48,6 +53,8 @@ pub fn perm_type() -> NpoTypeId {
 
 #[derive(Debug, Default)]
 pub struct SvState {
+    pub n: usize,
+    pub steps: usize,
     pub rows: Vec<PairRow>,
     /// Final stored vector, by stored position (the boundary table reads it).
     pub fin: Vec<C>,
@@ -85,6 +92,8 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
         }
         let st = ctx.get_op_state_mut::<SvState>(&gate_type());
         *st = SvState {
+            n: self.n,
+            steps: plan.steps,
             rows,
             fin,
             hashed,
@@ -117,7 +126,16 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
                 gate.extend([fi::<EF>(re), fi::<EF>(im)]);
             }
         }
-        pw.register_non_primitive_preprocessed_no_read(&gate_type(), &gate);
+        // The first gate table always exists (it is this op's); the others only when they
+        // have rows, so a circuit pays for no empty table.
+        for (c, chunk) in split_rows(self.n, plan.steps, GP, &gate)
+            .into_iter()
+            .enumerate()
+        {
+            if c == 0 || !chunk.is_empty() {
+                pw.register_non_primitive_preprocessed_no_read(&gate_chunk_type(c), chunk);
+            }
+        }
         // One row per stored position: its initial value, the step of its final read, and the
         // logical index and phase the final frame gives it.
         let mut boundary = Vec::new();
@@ -170,7 +188,7 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
 /// The logical traces, all derived from the gate op's execution state.
 #[derive(Clone)]
 pub enum SvTrace {
-    Gate(Vec<PairRow>),
+    Gate(usize, Vec<PairRow>),
     Boundary(Vec<C>),
     Range(Vec<u64>),
     Digest {
@@ -184,7 +202,7 @@ pub enum SvTrace {
 impl<T> NonPrimitiveTrace<T> for SvTrace {
     fn op_type(&self) -> NpoTypeId {
         match self {
-            Self::Gate(_) => gate_type(),
+            Self::Gate(c, _) => gate_chunk_type(*c),
             Self::Boundary(_) => boundary_type(),
             Self::Range(_) => range_type(),
             Self::Digest { .. } => digest_type(),
@@ -193,7 +211,7 @@ impl<T> NonPrimitiveTrace<T> for SvTrace {
     }
     fn rows(&self) -> usize {
         match self {
-            Self::Gate(r) => r.len(),
+            Self::Gate(_, r) => r.len(),
             Self::Boundary(f) => f.len(),
             Self::Range(_) => 1 << LOG_RANGE,
             Self::Digest { ins, .. } => ins.len(),
@@ -212,11 +230,33 @@ pub(crate) fn state(op_states: &OpStateMap) -> Option<&SvState> {
     op_states.get(&gate_type())?.downcast_ref::<SvState>()
 }
 
+fn gate_chunk_trace(
+    op_states: &OpStateMap,
+    c: usize,
+) -> Result<Option<Box<dyn NonPrimitiveTrace<EF>>>, CircuitError> {
+    let Some(s) = state(op_states) else {
+        return Ok(None);
+    };
+    let rows = split_rows(s.n, s.steps, 1, &s.rows)[c].to_vec();
+    if c > 0 && rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Box::new(SvTrace::Gate(c, rows))))
+}
 pub(crate) fn gate_trace(
     op_states: &OpStateMap,
 ) -> Result<Option<Box<dyn NonPrimitiveTrace<EF>>>, CircuitError> {
-    Ok(state(op_states)
-        .map(|s| Box::new(SvTrace::Gate(s.rows.clone())) as Box<dyn NonPrimitiveTrace<EF>>))
+    gate_chunk_trace(op_states, 0)
+}
+pub(crate) fn gate1_trace(
+    op_states: &OpStateMap,
+) -> Result<Option<Box<dyn NonPrimitiveTrace<EF>>>, CircuitError> {
+    gate_chunk_trace(op_states, 1)
+}
+pub(crate) fn gate2_trace(
+    op_states: &OpStateMap,
+) -> Result<Option<Box<dyn NonPrimitiveTrace<EF>>>, CircuitError> {
+    gate_chunk_trace(op_states, 2)
 }
 pub(crate) fn boundary_trace(
     op_states: &OpStateMap,
@@ -317,6 +357,13 @@ impl NpoCircuitPlugin<EF> for SvSidePlugin {
     }
 }
 
+/// The gate tables after the first, which the gate op's trace fills.
+pub fn gate_chunk_plugins() -> [SvSidePlugin; GATE_CHUNKS - 1] {
+    [
+        SvSidePlugin(gate_chunk_type(1), gate1_trace),
+        SvSidePlugin(gate_chunk_type(2), gate2_trace),
+    ]
+}
 pub fn boundary_plugin() -> SvSidePlugin {
     SvSidePlugin(boundary_type(), boundary_trace)
 }
@@ -342,7 +389,12 @@ impl NpoPreprocessor<F> for SvPreprocessor {
         let Some(prep) = preprocessed.downcast_mut::<PreprocessedColumns<EF, 1>>() else {
             return Ok(out);
         };
-        for ty in [gate_type(), boundary_type(), range_type(), perm_type()] {
+        let types = (0..GATE_CHUNKS).map(gate_chunk_type).chain([
+            boundary_type(),
+            range_type(),
+            perm_type(),
+        ]);
+        for ty in types {
             if let Some(v) = prep.non_primitive.get(&ty) {
                 out.insert(ty, v.clone());
             }
@@ -372,7 +424,8 @@ impl NpoPreprocessor<F> for SvPreprocessor {
 
 #[derive(Clone, Copy)]
 pub enum SvTable {
-    Gate,
+    /// Gate table `c` of [`GATE_CHUNKS`].
+    Gate(usize),
     Boundary,
     Range,
     Digest,
@@ -380,8 +433,10 @@ pub enum SvTable {
 }
 
 impl SvTable {
-    pub const ALL: [Self; 5] = [
-        Self::Gate,
+    pub const ALL: [Self; 7] = [
+        Self::Gate(0),
+        Self::Gate(1),
+        Self::Gate(2),
         Self::Boundary,
         Self::Range,
         Self::Digest,
@@ -389,7 +444,7 @@ impl SvTable {
     ];
     pub fn op_type(self) -> NpoTypeId {
         match self {
-            Self::Gate => gate_type(),
+            Self::Gate(c) => gate_chunk_type(c),
             Self::Boundary => boundary_type(),
             Self::Range => range_type(),
             Self::Digest => digest_type(),
@@ -398,7 +453,7 @@ impl SvTable {
     }
     fn width(self) -> usize {
         match self {
-            Self::Gate => GP,
+            Self::Gate(_) => GP,
             Self::Boundary => BP,
             Self::Range => 1,
             Self::Digest => DP,
@@ -410,7 +465,7 @@ impl SvTable {
     }
     fn air(self, prep: Vec<F>, min_height: usize) -> DynamicAirEntry<Cfg> {
         match self {
-            Self::Gate => DynamicAirEntry::new(Box::new(GateTableAir { prep, min_height })),
+            Self::Gate(_) => DynamicAirEntry::new(Box::new(GateTableAir { prep, min_height })),
             Self::Boundary => DynamicAirEntry::new(Box::new(BoundaryTableAir { prep, min_height })),
             Self::Range => DynamicAirEntry::new(Box::new(RangeTableAir { prep, min_height })),
             Self::Digest => DynamicAirEntry::new(Box::new(DigestTableAir { prep, min_height })),
@@ -447,7 +502,7 @@ impl TableProver<Cfg> for SvProver {
             .downcast_ref::<SvTrace>()?;
         let min_height = packing.min_trace_height();
         let (air, matrix, rows) = match (self.0, trace) {
-            (SvTable::Gate, SvTrace::Gate(r)) => {
+            (SvTable::Gate(c), SvTrace::Gate(tc, r)) if c == *tc => {
                 let a = GateTableAir {
                     prep: committed.to_vec(),
                     min_height,
