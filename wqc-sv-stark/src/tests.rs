@@ -18,6 +18,7 @@ fn gates() -> Vec<Gate> {
         Gate::cnot(0, 1),
         Gate::cnot(1, 2),
         Gate::ry(2, 0.7),
+        Gate::cnot(2, 0),
         Gate::rz(1, 1.3),
         Gate::t(0),
         Gate::h(2),
@@ -495,7 +496,11 @@ fn rounding_error_stays_within_the_bound() {
         .sum::<f64>()
         .sqrt();
     let ulp = 0.5 / scale;
-    let bound = circuit.len() as f64 * ((2f64.powi(n as i32 + 1)).sqrt() + 2.0 * 8f64.sqrt()) * ulp;
+    // Fused gates count once.
+    let gates: Vec<Gate> = circuit.iter().map(|&g| to_leaf(g)).collect();
+    let fused = fuse(n, &gates).len();
+    assert!(fused < circuit.len());
+    let bound = fused as f64 * ((2f64.powi(n as i32 + 1)).sqrt() + 2.0 * 8f64.sqrt()) * ulp;
     assert!(circuit.len() > count * 9 / 10);
     eprintln!("L2 error {err:.2e}, bound {bound:.2e}");
     assert!(err <= bound, "L2 error {err} above the bound {bound}");
@@ -669,15 +674,15 @@ fn random_circuit(n: usize, count: usize, seed: u64) -> Vec<Gate> {
 }
 
 /// Folding monomial gates into the frame changes the rows, not the result: the final state
-/// equals executing every gate densely, bit for bit, and only rounding gates get rows.
+/// equals executing every fused gate densely, bit for bit, and only rounding ones get rows.
 #[test]
 fn folding_matches_dense_execution() {
     for n in 1..=6 {
         for seed in 0..40u64 {
             let gates = random_circuit(n, 60, seed * 7919 + n as u64);
             let (rows, fin) = execute(n, &gates);
-            assert_eq!(fin, naive_execute(n, &gates), "n={n} seed={seed}");
-            let rounding = gates
+            assert_eq!(fin, naive_execute(n, &fuse(n, &gates)), "n={n} seed={seed}");
+            let rounding = fuse(n, &gates)
                 .iter()
                 .filter(|g| plan(n, std::slice::from_ref(g)).steps == 1)
                 .count();
@@ -731,18 +736,19 @@ fn monomial_only_circuit_proves() {
     let p = l.prove(CTX).unwrap();
     assert_eq!(
         p.statement,
-        statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
+        statement(CTX, terminal_digest(&naive_execute(3, &fuse(3, &gates)))).unwrap()
     );
     l.verify(&p.proof, &p.statement).unwrap();
 }
 
 /// A final frame with a quarter-turn phase on top of a non-empty gate table: the boundary's
-/// `d·re + c·im` term is exercised only when monomial gates follow the last rounding gate.
+/// `d·re + c·im` term is exercised only when monomial gates follow the last rounding step.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "release only")]
 fn final_frame_phase_after_rounding_gates_proves() {
     let mut g = gates();
-    g.extend([Gate::s(0), Gate::y(1), Gate::cnot(1, 2)]);
+    // The CNOT ends the rounding runs, so S and Y fold into the frame on their own.
+    g.extend([Gate::cnot(0, 1), Gate::s(0), Gate::y(1), Gate::cnot(1, 2)]);
     let p = plan(3, &g);
     assert!(p.steps > 0);
     assert!(p.frame.phase.iter().any(|&k| k & 1 == 1));
@@ -750,7 +756,7 @@ fn final_frame_phase_after_rounding_gates_proves() {
     let proof = l.prove(CTX).unwrap();
     assert_eq!(
         proof.statement,
-        statement(CTX, terminal_digest(&naive_execute(3, &g))).unwrap()
+        statement(CTX, terminal_digest(&naive_execute(3, &fuse(3, &g)))).unwrap()
     );
     l.verify(&proof.proof, &proof.statement).unwrap();
 }
@@ -798,11 +804,15 @@ fn rows_across_three_gate_tables_prove() {
         Gate::h(0),
         Gate::cnot(0, 1),
         Gate::ry(1, 0.4),
+        Gate::cz(1, 2),
         Gate::t(2),
+        Gate::cnot(2, 0),
         Gate::rx(0, -0.9),
         Gate::s(2),
         Gate::h(2),
+        Gate::cz(2, 1),
         Gate::rz(1, 1.7),
+        Gate::cnot(1, 0),
         Gate::h(1),
     ];
     assert_eq!(chunk_steps(plan(3, &gates).steps), [4, 2, 1]);
@@ -815,7 +825,7 @@ fn rows_across_three_gate_tables_prove() {
     );
     assert_eq!(
         p.statement,
-        statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
+        statement(CTX, terminal_digest(&naive_execute(3, &fuse(3, &gates)))).unwrap()
     );
     l.verify(&p.proof, &p.statement).unwrap();
 }
@@ -838,14 +848,177 @@ fn split_rows_partitions_by_chunk_steps() {
 #[test]
 #[cfg_attr(debug_assertions, ignore = "release only")]
 fn two_gate_tables_with_the_third_absent_prove() {
-    let gates: Vec<Gate> = (0..48).map(|k| Gate::ry(k % 3, 0.1 + k as f64)).collect();
+    // Each CZ ends its rotation's run, so nothing fuses.
+    let gates: Vec<Gate> = (0..48)
+        .flat_map(|k| {
+            [
+                Gate::ry(k % 3, 0.1 + k as f64),
+                Gate::cz(k % 3, (k + 1) % 3),
+            ]
+        })
+        .collect();
     assert_eq!(chunk_steps(plan(3, &gates).steps), [32, 16, 0]);
     let l = build_with(FRI, 3, gates.clone()).unwrap();
     let p = l.prove(CTX).unwrap();
     assert_eq!(p.proof.non_primitives.len(), 7);
     assert_eq!(
         p.statement,
-        statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
+        statement(CTX, terminal_digest(&naive_execute(3, &fuse(3, &gates)))).unwrap()
     );
     l.verify(&p.proof, &p.statement).unwrap();
+}
+
+/// The fusion rule: a run of single-qubit gates on one qubit becomes one gate, ended only by a
+/// gate that touches that qubit; runs are emitted where they end, then at the end by qubit.
+#[test]
+fn single_qubit_runs_fuse() {
+    let pi = std::f64::consts::PI;
+    // A lone gate is unchanged.
+    for g in [Gate::h(0), Gate::rx(1, 0.3), Gate::t(2)] {
+        assert_eq!(fuse(3, std::slice::from_ref(&g))[0].m, g.m);
+    }
+    // H·H is the identity (no rows), even across gates on other qubits.
+    assert_eq!(
+        plan(3, &[Gate::h(0), Gate::cnot(1, 2), Gate::h(0)]).steps,
+        0
+    );
+    // A gate touching the qubit, as control or target, ends the run.
+    assert_eq!(
+        plan(3, &[Gate::h(0), Gate::cnot(0, 1), Gate::h(0)]).steps,
+        2
+    );
+    assert_eq!(plan(3, &[Gate::h(0), Gate::cz(1, 0), Gate::h(0)]).steps, 2);
+    for q in 0..3 {
+        let g = [Gate::h(q), Gate::ccnot(0, 1, 2), Gate::h(q)];
+        assert_eq!(plan(3, &g).steps, 2, "CCNOT touching qubit {q}");
+    }
+    // Monomial gates join the run: H·S·H is one step, H·Z·H = X folds.
+    assert_eq!(plan(1, &[Gate::h(0), Gate::s(0), Gate::h(0)]).steps, 1);
+    assert_eq!(plan(1, &[Gate::h(0), Gate::z(0), Gate::h(0)]).steps, 0);
+    // RY(a)·RY(b) is RY(a + b) up to rounding a few entries.
+    let f = fuse(1, &[Gate::ry(0, 0.4), Gate::ry(0, 0.9)]);
+    assert_eq!(f.len(), 1);
+    for (x, y) in f[0].m.iter().zip(Gate::ry(0, 1.3).m) {
+        assert!((x.0 - y.0).abs() <= 1 && (x.1 - y.1).abs() <= 1);
+    }
+    // RZ(π/2)·RZ(π/2) = RZ(π), which is monomial.
+    assert_eq!(
+        plan(1, &[Gate::rz(0, pi / 2.0), Gate::rz(0, pi / 2.0)]).steps,
+        0
+    );
+    // Emission order: qubit 1's run ends at the CNOT; the others follow by qubit.
+    let order: Vec<(usize, usize)> = fuse(
+        3,
+        &[
+            Gate::h(2),
+            Gate::t(0),
+            Gate::ry(1, 0.2),
+            Gate::cnot(1, 2),
+            Gate::rx(1, 0.5),
+        ],
+    )
+    .iter()
+    .map(|g| (g.target(), g.controls().len()))
+    .collect();
+    assert_eq!(order, vec![(1, 0), (2, 0), (2, 1), (0, 0), (1, 0)]);
+}
+
+/// Pins a fused matrix: the `f64` product's operation order is part of the circuit.
+#[test]
+fn fused_matrix_known_answer() {
+    let f = fuse(
+        1,
+        &[Gate::h(0), Gate::t(0), Gate::rx(0, 0.37), Gate::ry(0, -1.1)],
+    );
+    assert_eq!(f.len(), 1);
+    assert_eq!(
+        f[0].m,
+        [
+            (249063269, 29659112),
+            (69053900, -66158735),
+            (2047191, 95609771),
+            (-197086486, -155142167)
+        ]
+    );
+}
+
+/// Fusion lowers the error from the ideal state: fewer roundings.
+#[test]
+fn fusion_does_not_add_error() {
+    for seed in 0..20u64 {
+        let n = 4;
+        let gates = random_circuit(n, 80, seed * 31 + 5);
+        let unfused = naive_execute(n, &gates);
+        let fused = execute(n, &gates).1;
+        let mut reference = vec![(0.0f64, 0.0f64); 1 << n];
+        reference[0] = (1.0, 0.0);
+        for g in &gates {
+            let prev = reference.clone();
+            for i in 0..1usize << n {
+                if (i >> g.target) & 1 == 1 || !g.controls.iter().all(|&c| (i >> c) & 1 == 1) {
+                    continue;
+                }
+                let j = i | 1 << g.target;
+                let m = g.f;
+                let c =
+                    |x: (f64, f64), y: (f64, f64)| (x.0 * y.0 - x.1 * y.1, x.0 * y.1 + x.1 * y.0);
+                let (a, b) = (prev[i], prev[j]);
+                let (p, q, r, s) = (c(m[0], a), c(m[1], b), c(m[2], a), c(m[3], b));
+                reference[i] = (p.0 + q.0, p.1 + q.1);
+                reference[j] = (r.0 + s.0, r.1 + s.1);
+            }
+        }
+        let err = |v: &[C]| {
+            v.iter()
+                .zip(&reference)
+                .map(|(a, b)| {
+                    (a.0 as f64 / S as f64 - b.0).powi(2) + (a.1 as f64 / S as f64 - b.1).powi(2)
+                })
+                .sum::<f64>()
+                .sqrt()
+        };
+        let (eu, ef) = (err(&unfused), err(&fused));
+        assert!(
+            ef <= eu * 1.5 + 1e-8,
+            "seed={seed}: fused {ef:.2e} vs unfused {eu:.2e}"
+        );
+    }
+}
+
+/// Fusion preserves the circuit's unitary before any integer rounding: the fused gates'
+/// unrounded matrices give the same `f64` state as the gates as written.
+#[test]
+fn fusion_preserves_the_unrounded_circuit() {
+    let apply = |n: usize, gates: &[Gate]| {
+        let mut st = vec![(0.0f64, 0.0f64); 1 << n];
+        st[0] = (1.0, 0.0);
+        let c = |x: (f64, f64), y: (f64, f64)| (x.0 * y.0 - x.1 * y.1, x.0 * y.1 + x.1 * y.0);
+        for g in gates {
+            let prev = st.clone();
+            for i in 0..1usize << n {
+                if (i >> g.target) & 1 == 1 || !g.controls.iter().all(|&k| (i >> k) & 1 == 1) {
+                    continue;
+                }
+                let j = i | 1 << g.target;
+                let (a, b) = (prev[i], prev[j]);
+                let (p, q, r, s) = (c(g.f[0], a), c(g.f[1], b), c(g.f[2], a), c(g.f[3], b));
+                st[i] = (p.0 + q.0, p.1 + q.1);
+                st[j] = (r.0 + s.0, r.1 + s.1);
+            }
+        }
+        st
+    };
+    for n in 1..=5 {
+        for seed in 0..20u64 {
+            let gates = random_circuit(n, 60, seed * 131 + n as u64);
+            let (a, b) = (apply(n, &gates), apply(n, &fuse(n, &gates)));
+            let d = a
+                .iter()
+                .zip(&b)
+                .map(|(x, y)| (x.0 - y.0).powi(2) + (x.1 - y.1).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            assert!(d < 1e-12, "n={n} seed={seed}: {d:e}");
+        }
+    }
 }

@@ -63,6 +63,11 @@ pub(crate) fn build_with_tamper(
     for g in &gates {
         g.validate(n)?;
     }
+    // The leaf proves the fused circuit; its gates pass the same check.
+    let gates = fuse(n, &gates);
+    for g in &gates {
+        g.validate(n)?;
+    }
     let cfg: Cfg = fri.config();
     let packing = TablePacking::default().with_min_trace_height(fri.min_trace_height());
     let mut b = CircuitBuilder::<EF>::new();

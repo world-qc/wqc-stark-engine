@@ -24,13 +24,14 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   is `Σ m·a / S` rounded to nearest, ties up: the gate table proves `b·S + r = Σ m·a + S/2`
   with `r ∈ [0, S)` and `b ∈ [−2S, 2S)` range-checked. Both sides stay below 2^60 in
   magnitude, so the field equation is the integer one.
-- **What the result is.** The final integer state vector is the result: execution is
-  integer-only and bit-exact on any hardware (CPU or GPU), and a float view is that vector
-  divided by `S`. Gate matrices are rounded from `f64` once, at build; the one
-  platform-dependent step there would be the `sin`/`cos` of RX/RY/RZ, so they come from the
-  pure-Rust `libm` (pinned to `=0.2.16`) and every party derives the same circuit. A
-  known-answer test pins a few quantized rotations; the pin is what guarantees the rest.
-- **Error.** Per gate, the L2 distance from the ideal state grows by at most
+- **What the result is.** The final integer state vector of the fused circuit (see
+  [Fusion](#fusion)) is the result: execution is integer-only and bit-exact on any hardware
+  (CPU or GPU), and a float view is that vector divided by `S`. Gate matrices are rounded from
+  `f64` once, at build, after fusion; the one platform-dependent step there would be the
+  `sin`/`cos` of RX/RY/RZ, so they come from the pure-Rust `libm` (pinned to `=0.2.16`) and
+  every party derives the same circuit. Known-answer tests pin a few quantized rotations and a
+  fused product; the pins are what guarantee the rest.
+- **Error.** Per gate (fused gates count once), the L2 distance from the ideal state grows by at most
   `(√(2^(n+1)) + 2√8) · 2^-29` (output rounding, plus matrix quantization). For n = 16 and
   1000 gates that bound is 6.8e-4; random circuits measure about 7e-6, since nearest rounding
   is unbiased and the error walks rather than drifts.
@@ -45,32 +46,55 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate tables have `2^(n−1)` rows per rounding gate. The rounding steps are split over up
+- The gate tables have `2^(n−1)` rows per rounding step. The rounding steps are split over up
   to three gate tables (the two largest powers of two that fit, then the rest; an empty one is
   omitted), so the rows pad to at most about a quarter more than needed instead of nearly
-  double. A gate rounds
-  unless its quantized matrix is monomial: in practice H, T and RX/RY/RZ at generic angles
-  round, while X, Y, Z, S, CNOT, CZ, CCNOT (and rotations such as RZ(π)) add no rows (see
-  below). On an 8-core
-  machine, a leaf at n = 16 with 64 rounding gates takes about 33 s and 11 GB to prove; a
-  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB, and 64 gates
-  cycling H / CNOT / RY / T (48 rounding, split 32 + 16) take 27 s and 7 GB.
+  double. A fused gate
+  rounds unless its quantized matrix is monomial: in practice H, T and RX/RY/RZ at generic
+  angles round, while X, Y, Z, S, CNOT, CZ, CCNOT (and rotations such as RZ(π)) add no rows
+  (see below). On an 8-core machine, a leaf at n = 16 with 64 rounding steps takes about 33 s
+  and 11 GB to prove; a 64-gate brickwork of RY and CNOT layers (32 steps) takes 19 s and 5.5
+  GB, and 64 gates cycling H / CNOT / RY / T (20 steps after fusion, 16 + 4) take 13 s and
+  3.5 GB.
 
 ## Monomial gates
 
 X, Y, Z, S, CNOT, CZ and CCNOT (and any rotation whose quantized matrix is monomial) map each
 amplitude to one other times a unit phase, and their fixed-point outputs are exact. `build` folds them into a frame instead of giving them rows:
-logical amplitude `k` is `i^phase[k]` times stored position `perm[k]`. A rounding gate reads
+logical amplitude `k` is `i^phase[k]` times stored position `perm[k]`. A rounding step reads
 the stored positions its logical pairs map to, with the phases folded into its matrix entries
 (exact), and the boundary table applies the final frame before the digest. The result is the
 dense execution's bit for bit (a test checks random circuits); only the rows change.
+
+## Fusion
+
+`build` first rewrites the gate list by one fixed rule, and the result is defined on the
+rewritten list. Each qubit keeps a pending product of the single-qubit gates applied to it
+(rounding or monomial) since a multi-qubit gate last touched it. A gate with controls first
+emits the pending products of the qubits it touches, as control or target, in ascending qubit
+order, then itself; at the end the remaining products are emitted in ascending qubit order.
+A product is computed in `f64` from the gates' unrounded matrices, each new gate multiplied
+from the left: the run `G_1, …, G_L` (in circuit order) becomes `G_L · … · G_1`. Each step
+`a · b` (`a` the new gate, `b` the product so far) is computed entry by entry as
+`(a_r0·b_0c) + (a_r1·b_1c)` with complex products `(xr·yr − xi·yi, xr·yi + xi·yr)` (IEEE
+basic operations, no fused multiply-add), and the final product is rounded once like any gate
+matrix. `build` validates the fused gates as it does the given ones.
+
+So a run of single-qubit gates costs at most one rounding step, and none if its product
+rounds to a monomial matrix (H·H, H·Z·H, RZ(π/2)²). A lone gate is unchanged, but a
+single-qubit gate is emitted where its run ends, not where it appears, so rounding steps on
+different qubits may run in another order than written. A gate never moves past another gate
+that touches its qubit: an RZ on a CNOT's control qubit stays on its side of the CNOT,
+although the two commute. Changing the rule changes the result, so the rule is part of the
+leaf format: before anything consumes these digests, the leaf format will be tied to a
+capability bit or leaf version, and a new rule needs a new one.
 
 ## Security levels
 
 The orchestrator's `security_level` sets the leaf's FRI query count: `leaf::build` takes a
 `SecurityLevel` and uses `FriParams::leaf`. Every tier uses rate 1/4 and a 16-bit query PoW;
 prove time and memory are set by the rate, so they are nearly the same at every tier
-(n = 16 with 64 rounding gates, the worst case for 64 gates: 32–35 s), and the tier mainly
+(n = 16 with 64 rounding steps, the worst case for 64 gates: 32–35 s), and the tier mainly
 changes the leaf proof size.
 
 Every recursion proof (layers and aggregation) uses `FriParams::RECURSION`; the public
@@ -79,7 +103,7 @@ recursion's own FRI parameters are the same at every tier. A layer's verifier st
 its child, so the first layer over a `low` leaf and over an `ultra` leaf are different
 verifiers. Recursion proofs are roughly the same size at every tier.
 
-| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 rounding gates, one gate table) |
+| | FRI queries | `log_blowup · q + PoW` | Estimated bits | Binding term | Proof size (n = 16, 64 rounding steps, one gate table) |
 |---|---:|---:|---:|---|---:|
 | `low` leaf | 22 | 60 | 59 | FRI queries | 209 KB |
 | `normal` leaf | 32 | 80 | 79 | FRI queries | 289 KB |
@@ -95,7 +119,7 @@ one-table leaf with more rounding steps (48 steps, 32 + 16: 389 KB).
 **Estimated bits** are conjectured soundness from p3-security 0.9.0-rc.2 (random-words regime,
 128-bit collision-resistant commitments), for the largest leaves (n = 16, every gate rounding:
 64 steps fill one 2^21-row gate table; 100 steps split 64 + 32 + 4, so the largest table is
-still 2^21 rows but there are more columns and lookups). Fewer rounding gates only shorten the
+still 2^21 rows but there are more columns and lookups). Fewer rounding steps only shorten the
 trace and raise the field terms. The query phase comes out about a bit below the simple
 `log_blowup · q + PoW` because of the rate's proximity margin. At `ultra` the binding terms are
 the Goldilocks² ones that grow with the trace and the column count: the random combination

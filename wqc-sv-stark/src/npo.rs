@@ -73,6 +73,7 @@ pub struct SvState {
 #[derive(Clone, Debug)]
 pub struct SvExecutor {
     pub n: usize,
+    /// Already fused ([`fuse`]).
     pub gates: Vec<Gate>,
     pub(crate) tamper: Tamper,
 }
@@ -84,7 +85,7 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
         outputs: &[Vec<WitnessId>],
         ctx: &mut ExecutionContext<'_, EF>,
     ) -> Result<(), CircuitError> {
-        let plan = plan(self.n, &self.gates);
+        let plan = plan_fused(self.n, &self.gates);
         let (mut rows, mut fin) = run(self.n, &plan);
         apply_tamper(self.tamper, &mut rows, &mut fin, plan.steps);
         let mut hashed = plan.frame.logical(&fin);
@@ -117,7 +118,7 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
         outputs: &[Vec<WitnessId>],
         pw: &mut dyn PreprocessedWriter<EF>,
     ) -> Result<(), CircuitError> {
-        let plan = plan(self.n, &self.gates);
+        let plan = plan_fused(self.n, &self.gates);
         let mut gate = Vec::new();
         for r in &plan.rows {
             gate.extend([
@@ -297,6 +298,7 @@ pub(crate) fn perm_trace_gen(
 
 pub struct SvGatePlugin {
     pub n: usize,
+    /// Already fused ([`fuse`]).
     pub gates: Vec<Gate>,
     pub(crate) tamper: Tamper,
 }

@@ -5,9 +5,9 @@
 //! gate table proves `b·S + r = Σ m·a + S/2` and range-checks `b`, `r`.
 //!
 //! Execution is integer-only and therefore bit-exact on any hardware. Matrices are rounded from
-//! `f64` once, at build; the one platform-dependent step there would be a rotation's
-//! `sin`/`cos`, so those come from the pure-Rust `libm` (pinned) and every party derives the
-//! same preprocessed circuit.
+//! `f64` once, at build, after [`fuse`] multiplies runs of single-qubit gates; the one
+//! platform-dependent step there would be a rotation's `sin`/`cos`, so those come from the
+//! pure-Rust `libm` (pinned) and every party derives the same preprocessed circuit.
 //!
 //! Field soundness: entries are at most `S` and inputs lie in `[−2S, 2S)`, so both sides of the
 //! row equation stay below `2^(2·LOG_S+4)` in magnitude (`8S² + S/2` on the right), far
@@ -32,6 +32,8 @@ pub struct Gate {
     pub(crate) target: usize,
     pub(crate) controls: Vec<usize>,
     pub(crate) m: [(i64, i64); 4],
+    /// The matrix before rounding, which [`fuse`] multiplies.
+    pub(crate) f: [(f64, f64); 4],
 }
 
 /// Rounds to fixed point. A non-finite value becomes 0 (a NaN angle yields NaN entries), so
@@ -108,6 +110,7 @@ impl Gate {
             target,
             controls,
             m: m.map(|(re, im)| (q(re), q(im))),
+            f: m,
         }
     }
     pub fn h(t: usize) -> Self {
@@ -308,8 +311,8 @@ pub(crate) struct PlanRow {
     pub m: [C; 4],
 }
 
-/// The circuit compiled for the gate table: rows only for gates that round (H, T, RX, RY,
-/// RZ), the number of such steps, and the frame left at the end.
+/// The circuit compiled for the gate table: rows only for fused gates that round, the number
+/// of such steps, and the frame left at the end.
 #[derive(Clone, Debug)]
 pub(crate) struct Plan {
     pub rows: Vec<PlanRow>,
@@ -317,8 +320,66 @@ pub(crate) struct Plan {
     pub frame: Frame,
 }
 
-/// Compiles validated gates (see [`Gate::validate`]); [`crate::leaf::build`] validates first.
+/// `a · b` in `f64`, in a fixed operation order (Rust does not contract to FMA), so every
+/// party gets the same bits.
+fn mul_f64(a: &[(f64, f64); 4], b: &[(f64, f64); 4]) -> [(f64, f64); 4] {
+    let c = |x: (f64, f64), y: (f64, f64)| (x.0 * y.0 - x.1 * y.1, x.0 * y.1 + x.1 * y.0);
+    let e = |r: usize, k: usize| {
+        let (x, y) = (c(a[2 * r], b[k]), c(a[2 * r + 1], b[2 + k]));
+        (x.0 + y.0, x.1 + y.1)
+    };
+    [e(0, 0), e(0, 1), e(1, 0), e(1, 1)]
+}
+
+/// The canonical fusion of validated gates, which defines the circuit that executes. Each
+/// qubit keeps a pending product of the single-qubit gates applied to it since anything else
+/// touched it. A gate with controls first emits the pending products of the qubits it
+/// touches (ascending qubit), then itself; at the end the remaining products are emitted
+/// (ascending qubit). A product is multiplied in `f64` from the gates' unrounded matrices and
+/// rounded once, so a run of single-qubit gates costs at most one rounding step. Each new gate
+/// multiplies from the left: a run `G_1, …, G_L` becomes `G_L · … · G_1`.
+///
+/// A product of validated gates is unitary up to `f64` error, far inside the rounding
+/// tolerance; [`crate::leaf::build`] still validates the fused gates.
+pub(crate) fn fuse(n: usize, gates: &[Gate]) -> Vec<Gate> {
+    let mut pending: Vec<Option<[(f64, f64); 4]>> = vec![None; n];
+    let mut out = Vec::with_capacity(gates.len());
+    let emit = |q: usize, p: &mut Option<[(f64, f64); 4]>, out: &mut Vec<Gate>| {
+        if let Some(f) = p.take() {
+            out.push(Gate::from_f64(q, vec![], f));
+        }
+    };
+    for g in gates {
+        if g.controls.is_empty() {
+            let p = &mut pending[g.target];
+            *p = Some(match p {
+                None => g.f,
+                Some(acc) => mul_f64(&g.f, acc),
+            });
+            continue;
+        }
+        // Ascending qubit order; every qubit is touched at most once (validated wiring).
+        for (q, p) in pending.iter_mut().enumerate() {
+            if q == g.target || g.controls.contains(&q) {
+                emit(q, p, &mut out);
+            }
+        }
+        out.push(g.clone());
+    }
+    for (q, p) in pending.iter_mut().enumerate() {
+        emit(q, p, &mut out);
+    }
+    out
+}
+
+/// Compiles validated gates (see [`Gate::validate`]; [`crate::leaf::build`] validates first)
+/// after [`fuse`].
 pub(crate) fn plan(n: usize, gates: &[Gate]) -> Plan {
+    plan_fused(n, &fuse(n, gates))
+}
+
+/// [`plan`] for gates that are already the output of [`fuse`] (the leaf fuses once, at build).
+pub(crate) fn plan_fused(n: usize, gates: &[Gate]) -> Plan {
     let mut frame = Frame::identity(n);
     let mut rows = Vec::new();
     let mut steps = 0;
@@ -422,7 +483,8 @@ pub(crate) fn run(n: usize, plan: &Plan) -> (Vec<PairRow>, Vec<C>) {
     (rows, st)
 }
 
-/// Executes validated gates: the gate rows and the final logical state.
+/// Executes validated gates: the gate rows and the final logical state. The circuit executed
+/// is the [`fuse`]d one, so the state differs from rounding after every gate as written.
 pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
     let plan = plan(n, gates);
     let (rows, stored) = run(n, &plan);
