@@ -100,7 +100,9 @@ impl FriParams {
     /// Leaf parameters for `level`: rate 1/4 and a 16-bit query PoW at every tier; only the
     /// query count changes. Prove time and memory are set by the blowup, so they are nearly the
     /// same at every tier (n = 16, 64 gates: 32–35 s at both low and ultra); the query count
-    /// mainly sets proof size. Conjectured bits: low 60, normal 80, high 90, ultra 100.
+    /// mainly sets proof size. Estimated conjectured soundness (p3-security, n = 16 leaves):
+    /// low 59, normal 79, high 89, ultra 95. Up to high the query phase binds; at ultra the
+    /// Goldilocks² field terms (opening batch, LogUp) do, so more queries would not help.
     ///
     /// This ladder is v2's own: v1 leaves use 8 / 16 / 32 / 40 queries on another field.
     pub const fn leaf(level: SecurityLevel) -> Self {
@@ -120,7 +122,8 @@ impl FriParams {
     }
 
     /// Every recursion proof (layers and aggregation) at every tier: rate 1/8, 28 queries,
-    /// 16-bit query PoW (100 conjectured bits). The recursion's own FRI does not vary with the
+    /// 16-bit query PoW (about 99 bits estimated; the query phase binds, since the recursion's
+    /// tables are at most 2^14 rows and the field terms stay above 100). The recursion's own FRI does not vary with the
     /// tier, so recursion proofs are roughly the same size at every tier; the size still varies
     /// a little with the child (first layers over low and ultra leaves at n = 4 and 16 measured
     /// 174–191 KB).
@@ -142,10 +145,10 @@ impl FriParams {
         query_pow_bits: 0,
     };
 
-    /// Conjectured FRI soundness bits, `log_blowup · num_queries + query_pow_bits` (the same
-    /// formula as p3-fri's `FriParameters::conjectured_soundness_bits`). The total soundness
-    /// error also has terms bounded by the 128-bit Goldilocks² field, the domain size and the
-    /// constraint degree; they are not yet calibrated, so no tier claims more than 100 bits.
+    /// The simple FRI query estimate `log_blowup · num_queries + query_pow_bits` (p3-fri's
+    /// `FriParameters::conjectured_soundness_bits`). It is an upper bound on what a proof
+    /// attains: p3-security's random-words estimate of the query phase is about a bit lower, and
+    /// the field terms cap a leaf near 95 bits (see [`FriParams::leaf`]).
     pub const fn conjectured_bits(&self) -> u32 {
         self.log_blowup * self.num_queries + self.query_pow_bits
     }
