@@ -609,3 +609,129 @@ fn a_leaf_verifies_only_at_its_own_tier() {
     let root = agg.prove(&rl, &ru).unwrap();
     verify(&agg.verifier(), &root.proof, &root.statement).unwrap();
 }
+
+/// The unfolded semantics: every gate executed on the dense state, rounding each output.
+fn naive_execute(n: usize, gates: &[Gate]) -> Vec<C> {
+    let mut st = vec![(0i64, 0i64); 1 << n];
+    st[0] = (S, 0);
+    for g in gates {
+        let prev = st.clone();
+        for i in 0..1usize << n {
+            if (i >> g.target) & 1 == 1 || !g.controls.iter().all(|&c| (i >> c) & 1 == 1) {
+                continue;
+            }
+            let j = i | 1 << g.target;
+            let (a, b) = (prev[i], prev[j]);
+            let out = |m0: C, m1: C| {
+                let (x, y) = (cm(m0, a), cm(m1, b));
+                round_div((x.0 + y.0, x.1 + y.1)).0
+            };
+            st[i] = out(g.m[0], g.m[1]);
+            st[j] = out(g.m[2], g.m[3]);
+        }
+    }
+    st
+}
+
+fn random_circuit(n: usize, count: usize, seed: u64) -> Vec<Gate> {
+    let mut s = seed | 1;
+    let mut next = move || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        s
+    };
+    (0..count)
+        .filter_map(|_| {
+            let t = (next() % n as u64) as usize;
+            let c1 = (next() % n as u64) as usize;
+            let c2 = (next() % n as u64) as usize;
+            let th = ((next() % 10_000) as f64 / 10_000.0 - 0.5) * std::f64::consts::TAU;
+            let two = c1 != t;
+            let three = two && c2 != t && c2 != c1;
+            Some(match next() % 12 {
+                0 => Gate::h(t),
+                1 => Gate::x(t),
+                2 => Gate::y(t),
+                3 => Gate::z(t),
+                4 => Gate::s(t),
+                5 => Gate::t(t),
+                6 if two => Gate::cnot(c1, t),
+                7 if two => Gate::cz(c1, t),
+                8 if three => Gate::ccnot(c1, c2, t),
+                9 => Gate::rx(t, th),
+                10 => Gate::ry(t, th),
+                11 => Gate::rz(t, th),
+                _ => return None,
+            })
+        })
+        .collect()
+}
+
+/// Folding monomial gates into the frame changes the rows, not the result: the final state
+/// equals executing every gate densely, bit for bit, and only rounding gates get rows.
+#[test]
+fn folding_matches_dense_execution() {
+    for n in 1..=6 {
+        for seed in 0..40u64 {
+            let gates = random_circuit(n, 60, seed * 7919 + n as u64);
+            let (rows, fin) = execute(n, &gates);
+            assert_eq!(fin, naive_execute(n, &gates), "n={n} seed={seed}");
+            let rounding = gates
+                .iter()
+                .filter(|g| plan(n, std::slice::from_ref(g)).steps == 1)
+                .count();
+            assert_eq!(rows.len(), rounding << (n - 1));
+        }
+    }
+}
+
+/// Which gates fold: the seven monomial ones, and none of the rounding ones.
+#[test]
+fn monomial_gates_fold_and_rounding_gates_do_not() {
+    let steps = |g: Gate| plan(3, &[g]).steps;
+    for g in [
+        Gate::x(0),
+        Gate::y(1),
+        Gate::z(2),
+        Gate::s(0),
+        Gate::cnot(0, 1),
+        Gate::cz(2, 0),
+        Gate::ccnot(0, 1, 2),
+    ] {
+        assert_eq!(steps(g), 0);
+    }
+    for g in [
+        Gate::h(0),
+        Gate::t(1),
+        Gate::rx(2, 0.3),
+        Gate::ry(0, 0.3),
+        Gate::rz(1, 0.3),
+    ] {
+        assert_eq!(steps(g), 1);
+    }
+}
+
+/// A circuit of monomial gates only has an empty gate table: the frame alone carries the
+/// state to the digest.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn monomial_only_circuit_proves() {
+    let gates = vec![
+        Gate::x(0),
+        Gate::cnot(0, 1),
+        Gate::y(2),
+        Gate::s(1),
+        Gate::cz(1, 2),
+        Gate::ccnot(0, 2, 1),
+        Gate::z(0),
+    ];
+    assert_eq!(plan(3, &gates).steps, 0);
+    let l = build_with(FRI, 3, gates.clone()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    assert_eq!(
+        p.statement,
+        statement(CTX, terminal_digest(&naive_execute(3, &gates))).unwrap()
+    );
+    l.verify(&p.proof, &p.statement).unwrap();
+}

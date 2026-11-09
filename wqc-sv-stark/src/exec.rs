@@ -204,42 +204,194 @@ pub(crate) fn pairs(n: usize, g: &Gate) -> impl Iterator<Item = (usize, usize, b
         })
 }
 
-pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
+/// `x · i^k`, exact.
+pub(crate) fn rot(x: C, k: u8) -> C {
+    match k & 3 {
+        0 => x,
+        1 => (-x.1, x.0),
+        2 => (-x.0, -x.1),
+        _ => (x.1, -x.0),
+    }
+}
+
+/// `k` with `S · i^k == u`, if `u` is a unit phase.
+fn unit_phase(u: C) -> Option<u8> {
+    match u {
+        (re, 0) if re == S => Some(0),
+        (0, im) if im == S => Some(1),
+        (re, 0) if re == -S => Some(2),
+        (0, im) if im == -S => Some(3),
+        _ => None,
+    }
+}
+
+impl Gate {
+    /// A monomial gate maps each amplitude to one other times a unit phase (X, Y, Z, S, CNOT, CZ,
+    /// CCNOT). Its fixed-point output is exact, so it can be folded into the [`Frame`] instead of
+    /// executed.
+    fn monomial(&self) -> Option<[(bool, u8); 2]> {
+        // Row k of the matrix: (reads the partner?, phase).
+        let row = |d: C, o: C| match (unit_phase(d), unit_phase(o)) {
+            (Some(k), None) if o == (0, 0) => Some((false, k)),
+            (None, Some(k)) if d == (0, 0) => Some((true, k)),
+            _ => None,
+        };
+        Some([row(self.m[0], self.m[1])?, row(self.m[3], self.m[2])?])
+    }
+}
+
+/// Where each logical amplitude lives: logical `k` is `i^phase[k] · stored[perm[k]]`. Monomial
+/// gates only rewrite the frame; the stored vector changes only at the remaining gates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Frame {
+    pub perm: Vec<usize>,
+    pub phase: Vec<u8>,
+}
+
+impl Frame {
+    fn identity(n: usize) -> Self {
+        Self {
+            perm: (0..1 << n).collect(),
+            phase: vec![0; 1 << n],
+        }
+    }
+
+    fn apply_monomial(&mut self, n: usize, g: &Gate, rows: [(bool, u8); 2]) {
+        let old = self.clone();
+        for (i, j, active) in pairs(n, g) {
+            if !active {
+                continue;
+            }
+            for (out, other, (swap, k)) in [(i, j, rows[0]), (j, i, rows[1])] {
+                let src = if swap { other } else { out };
+                self.perm[out] = old.perm[src];
+                self.phase[out] = (old.phase[src] + k) & 3;
+            }
+        }
+    }
+
+    /// The logical state from the stored one.
+    pub fn logical(&self, stored: &[C]) -> Vec<C> {
+        self.perm
+            .iter()
+            .zip(&self.phase)
+            .map(|(&p, &k)| rot(stored[p], k))
+            .collect()
+    }
+
+    /// For each stored position, the logical index it holds and that index's phase.
+    pub(crate) fn inverse(&self) -> Vec<(usize, u8)> {
+        let mut inv = vec![(0, 0); self.perm.len()];
+        for (k, (&p, &ph)) in self.perm.iter().zip(&self.phase).enumerate() {
+            inv[p] = (k, ph);
+        }
+        inv
+    }
+}
+
+/// One gate-table row before execution: stored positions `i`, `j` at step `t`, and the matrix
+/// with the frame's phases folded into its columns.
+#[derive(Clone, Debug)]
+pub struct PlanRow {
+    pub t: usize,
+    pub i: usize,
+    pub j: usize,
+    pub active: bool,
+    pub m: [C; 4],
+}
+
+/// The circuit compiled for the gate table: rows only for gates that round (H, T, RX, RY,
+/// RZ), the number of such steps, and the frame left at the end.
+#[derive(Clone, Debug)]
+pub struct Plan {
+    pub rows: Vec<PlanRow>,
+    pub steps: usize,
+    pub frame: Frame,
+}
+
+pub fn plan(n: usize, gates: &[Gate]) -> Plan {
+    let mut frame = Frame::identity(n);
+    let mut rows = Vec::new();
+    let mut steps = 0;
+    for g in gates {
+        if let Some(mono) = g.monomial() {
+            frame.apply_monomial(n, g, mono);
+            continue;
+        }
+        for (i, j, active) in pairs(n, g) {
+            let (pi, pj) = (frame.perm[i], frame.perm[j]);
+            let m = if active {
+                // Column 0 reads logical i, column 1 logical j.
+                let (ki, kj) = (frame.phase[i], frame.phase[j]);
+                [
+                    rot(g.m[0], ki),
+                    rot(g.m[1], kj),
+                    rot(g.m[2], ki),
+                    rot(g.m[3], kj),
+                ]
+            } else {
+                g.m
+            };
+            rows.push(PlanRow {
+                t: steps,
+                i: pi,
+                j: pj,
+                active,
+                m,
+            });
+            if active {
+                frame.phase[i] = 0;
+                frame.phase[j] = 0;
+            }
+        }
+        steps += 1;
+    }
+    Plan { rows, steps, frame }
+}
+
+/// Executes `plan`: the gate rows and the final stored vector.
+pub(crate) fn run(n: usize, plan: &Plan) -> (Vec<PairRow>, Vec<C>) {
     let mut st = vec![(0i64, 0i64); 1 << n];
     st[0] = (S, 0);
-    let mut rows = Vec::new();
-    for (t, g) in gates.iter().enumerate() {
-        let mut nx = st.clone();
-        for (i, j, active) in pairs(n, g) {
-            let (ai, aj) = (st[i], st[j]);
-            let (ni, nj) = if active {
-                let (x, y, z, w) = (
-                    cm(g.m[0], ai),
-                    cm(g.m[1], aj),
-                    cm(g.m[2], ai),
-                    cm(g.m[3], aj),
-                );
-                ((x.0 + y.0, x.1 + y.1), (z.0 + w.0, z.1 + w.1))
-            } else {
-                ((ai.0 * S, ai.1 * S), (aj.0 * S, aj.1 * S))
-            };
-            let ((bi, ri), (bj, rj)) = (round_div(ni), round_div(nj));
-            nx[i] = bi;
-            nx[j] = bj;
-            rows.push(PairRow {
-                t,
-                i,
-                j,
-                active,
-                m: g.m,
-                a: [ai, aj],
-                b: [nx[i], nx[j]],
-                r: [ri, rj],
-            });
-        }
-        st = nx;
+    let mut rows = Vec::with_capacity(plan.rows.len());
+    for p in &plan.rows {
+        // Every step touches each stored position once, so reading `st` in row order is
+        // reading the previous step's value.
+        let (ai, aj) = (st[p.i], st[p.j]);
+        let (ni, nj) = if p.active {
+            let (x, y, z, w) = (
+                cm(p.m[0], ai),
+                cm(p.m[1], aj),
+                cm(p.m[2], ai),
+                cm(p.m[3], aj),
+            );
+            ((x.0 + y.0, x.1 + y.1), (z.0 + w.0, z.1 + w.1))
+        } else {
+            ((ai.0 * S, ai.1 * S), (aj.0 * S, aj.1 * S))
+        };
+        let ((bi, ri), (bj, rj)) = (round_div(ni), round_div(nj));
+        st[p.i] = bi;
+        st[p.j] = bj;
+        rows.push(PairRow {
+            t: p.t,
+            i: p.i,
+            j: p.j,
+            active: p.active,
+            m: p.m,
+            a: [ai, aj],
+            b: [bi, bj],
+            r: [ri, rj],
+        });
     }
     (rows, st)
+}
+
+/// Executes the circuit: the gate rows and the final logical state.
+pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
+    let plan = plan(n, gates);
+    let (rows, stored) = run(n, &plan);
+    let fin = plan.frame.logical(&stored);
+    (rows, fin)
 }
 
 pub(crate) fn fi<T: Field>(x: i64) -> T {

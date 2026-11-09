@@ -45,8 +45,19 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate table has `gates · 2^(n−1)` rows. On an 8-core machine, a 64-gate leaf at n = 16
-  takes about 33 s and 11 GB to prove at any tier (see below).
+- The gate table has `2^(n−1)` rows per rounding gate (H, T, RX, RY, RZ), padded to a power of
+  two; the monomial gates (X, Y, Z, S, CNOT, CZ, CCNOT) add none (see below). On an 8-core
+  machine, a leaf at n = 16 with 64 rounding gates takes about 33 s and 11 GB to prove; a
+  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB.
+
+## Monomial gates
+
+X, Y, Z, S, CNOT, CZ and CCNOT map each amplitude to one other times a unit phase, and their
+fixed-point outputs are exact. `build` folds them into a frame instead of giving them rows:
+logical amplitude `k` is `i^phase[k]` times stored position `perm[k]`. A rounding gate reads
+the stored positions its logical pairs map to, with the phases folded into its matrix entries
+(exact), and the boundary table applies the final frame before the digest. The result is the
+dense execution's bit for bit (a test checks random circuits); only the rows change.
 
 ## Security levels
 
