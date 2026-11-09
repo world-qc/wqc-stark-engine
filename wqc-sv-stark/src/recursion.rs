@@ -6,6 +6,9 @@
 //! statement of the recursion proof: a layer over a leaf verifies against the leaf's
 //! `[context, digest]`, and a 2-to-1 aggregation against `left ‖ right`.
 //!
+//! Every layer's own FRI parameters are [`FriParams::RECURSION`](crate::FriParams::RECURSION)
+//! in production, whatever the leaves' tier; the `fri` arguments exist for tests.
+//!
 //! The stock FRI backend suffices: the trusted path rebuilds the child's tables, the leaf's
 //! custom ones included, from the retained verifier.
 

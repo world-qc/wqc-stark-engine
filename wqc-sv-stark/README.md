@@ -45,19 +45,40 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate table has `gates · 2^(n−1)` rows. With `FriParams::PRODUCTION` on an 8-core
-  machine, 64 gates take about 1.5 s at n = 10 and 70 s / 14 GB at n = 16.
+- The gate table has `gates · 2^(n−1)` rows. On an 8-core machine, a 64-gate leaf at n = 16
+  takes about 33 s and 11 GB to prove at any tier (see below).
+
+## Security levels
+
+The orchestrator's `security_level` sets the leaf's FRI query count (`FriParams::leaf`).
+Every tier uses rate 1/4 and a 16-bit query PoW, so prove time and memory are the same at
+every tier; only the leaf proof size changes. Recursion layers and aggregation always use
+`FriParams::RECURSION`, so a tree is as sound as its leaves' tier, every layer above the first
+has one verifier, and the root has the same size at every tier.
+
+| Tier | Leaf queries | Conjectured bits | Leaf proof (n = 16, 64 gates) |
+|---|---:|---:|---:|
+| `low` | 22 | 60 | 209 KB |
+| `normal` | 32 | 80 | 289 KB |
+| `high` | 37 | 90 | 332 KB |
+| `ultra` (or empty) | 42 | 100 | 365 KB |
+| recursion / aggregation | 28 at rate 1/8 | 100 | 187 KB (first layer) |
+
+Bits are the FRI estimate `log_blowup · queries + PoW bits`. The rest of the soundness error
+is bounded by the 128-bit Goldilocks² field less the domain size and constraint degree; a
+rough estimate puts that ceiling near 100 bits, so no tier claims more.
 
 ## Usage
 
 ```rust,ignore
 use wqc_sv_stark::exec::Gate;
 use wqc_sv_stark::recursion::{verify, Aggregation, Layer};
-use wqc_sv_stark::{leaf, FriParams};
+use wqc_sv_stark::{leaf, FriParams, SecurityLevel};
 
-let fri = FriParams::PRODUCTION;
+let level = SecurityLevel::parse("normal").expect("known tier");
 let gates = vec![Gate::h(0), Gate::cnot(0, 1)];
-let bell = leaf::build(fri, 2, gates)?;
+let bell = leaf::build(FriParams::leaf(level), 2, gates)?;
+let fri = FriParams::RECURSION;
 
 // Leaf: prove under a context, verify against the expected statement.
 let a = bell.prove([1, 2, 3, 4])?;

@@ -7,7 +7,7 @@ use crate::digest::*;
 use crate::exec::*;
 use crate::leaf::{build, build_with_tamper, statement, Leaf, LeafProof};
 use crate::recursion::{verify, Aggregation, Layer, RecursionProof};
-use crate::{Error, FriParams, F, MAX_QUBITS};
+use crate::{Error, FriParams, SecurityLevel, F, MAX_QUBITS};
 
 const CTX: [u64; 4] = [1, 2, 3, 4];
 const FRI: FriParams = FriParams::TESTING;
@@ -536,4 +536,34 @@ fn rotation_matrices_known_answer() {
             ],
         ]
     );
+}
+
+#[test]
+fn tiers_map_to_leaf_parameters() {
+    let bits = |s: &str| FriParams::leaf(SecurityLevel::parse(s).unwrap()).conjectured_bits();
+    assert_eq!(
+        ["low", "normal", "high", "ultra", ""].map(bits),
+        [60, 80, 90, 100, 100]
+    );
+    assert_eq!(SecurityLevel::parse("medium"), None);
+    // Prove cost depends on the blowup alone, so every tier shares it.
+    for l in [SecurityLevel::Low, SecurityLevel::Ultra] {
+        assert_eq!(FriParams::leaf(l).log_blowup, 2);
+    }
+    assert_eq!(FriParams::RECURSION.conjectured_bits(), 100);
+}
+
+/// A tier is part of the leaf's verifier: a proof verifies only at the tier it was proved at,
+/// and the fixed recursion parameters take a leaf of any tier.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn a_leaf_verifies_only_at_its_own_tier() {
+    let low = build(FriParams::leaf(SecurityLevel::Low), 3, gates()).unwrap();
+    let normal = build(FriParams::leaf(SecurityLevel::Normal), 3, gates()).unwrap();
+    let p = low.prove(CTX).unwrap();
+    low.verify(&p.proof, &p.statement).unwrap();
+    assert!(normal.verify(&p.proof, &p.statement).is_err());
+    let layer = Layer::over_leaf(&low, &p, FriParams::RECURSION).unwrap();
+    let r = layer.prove(&p.proof, &p.statement).unwrap();
+    verify(&layer.verifier(), &r.proof, &p.statement).unwrap();
 }

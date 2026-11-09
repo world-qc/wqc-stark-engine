@@ -24,7 +24,7 @@ use p3_goldilocks::Goldilocks;
 pub type F = Goldilocks;
 
 /// Largest supported qubit count. The gate table has `gates · 2^(n−1)` rows; at n = 16 and
-/// 64 gates a leaf takes about 70 s and 14 GB to prove with [`FriParams::PRODUCTION`].
+/// 64 gates a leaf takes about 33 s and 11 GB to prove at any [`SecurityLevel`].
 pub const MAX_QUBITS: usize = 16;
 
 #[derive(Debug)]
@@ -58,8 +58,31 @@ pub type Cfg = p3_recursion::builtin_config::GoldilocksD2Poseidon2BinaryConfig;
 /// Challenge field of the recursion layers.
 pub type Challenge = BinomialExtensionField<F, 2>;
 
+/// The orchestrator's security tier. It sets the leaf's FRI query count; recursion layers and
+/// aggregation always use [`FriParams::RECURSION`], so a tree is as sound as its leaves' tier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecurityLevel {
+    Low,
+    Normal,
+    High,
+    Ultra,
+}
+
+impl SecurityLevel {
+    /// Parses the wire name. Empty means `ultra`, as for v1 leaves; an unknown name is `None`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "low" => Some(Self::Low),
+            "normal" => Some(Self::Normal),
+            "high" => Some(Self::High),
+            "ultra" | "" => Some(Self::Ultra),
+            _ => None,
+        }
+    }
+}
+
 /// FRI parameters of a built-in Goldilocks² config.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FriParams {
     pub log_blowup: u32,
     pub log_final_poly_len: u32,
@@ -69,14 +92,36 @@ pub struct FriParams {
 }
 
 impl FriParams {
-    /// Rate 1/8, 28 queries, 16-bit query PoW (about 100 bits, conjectured).
-    pub const PRODUCTION: Self = Self {
+    /// Leaf parameters for `level`: rate 1/4 and a 16-bit query PoW at every tier, so prove
+    /// time and memory do not depend on the tier; only the query count (proof size) does.
+    /// Conjectured bits: low 60, normal 80, high 90, ultra 100.
+    pub const fn leaf(level: SecurityLevel) -> Self {
+        let num_queries = match level {
+            SecurityLevel::Low => 22,
+            SecurityLevel::Normal => 32,
+            SecurityLevel::High => 37,
+            SecurityLevel::Ultra => 42,
+        };
+        Self {
+            log_blowup: 2,
+            log_final_poly_len: 0,
+            max_log_arity: 2,
+            num_queries,
+            query_pow_bits: 16,
+        }
+    }
+
+    /// Recursion layers and aggregation at every tier: rate 1/8, 28 queries, 16-bit query PoW
+    /// (100 conjectured bits). Fixing them keeps one verifier for every layer above the first
+    /// and a root of the same size whatever the tier.
+    pub const RECURSION: Self = Self {
         log_blowup: 3,
         log_final_poly_len: 0,
         max_log_arity: 2,
         num_queries: 28,
         query_pow_bits: 16,
     };
+
     /// Two queries: fast, for tests only.
     pub const TESTING: Self = Self {
         log_blowup: 1,
@@ -85,6 +130,13 @@ impl FriParams {
         num_queries: 2,
         query_pow_bits: 0,
     };
+
+    /// Conjectured FRI soundness bits, `log_blowup · num_queries + query_pow_bits`. The other
+    /// terms are bounded by the 128-bit Goldilocks² field less the domain size and constraint
+    /// degree; a rough estimate puts that ceiling near 100 bits, not yet calibrated.
+    pub const fn conjectured_bits(&self) -> u32 {
+        self.log_blowup * self.num_queries + self.query_pow_bits
+    }
 
     /// Smallest table height the FRI accepts: 2^(log_final_poly_len + log_blowup + 1).
     pub const fn min_trace_height(&self) -> usize {
