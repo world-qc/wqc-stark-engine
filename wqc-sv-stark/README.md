@@ -24,13 +24,14 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   is `Σ m·a / S` rounded to nearest, ties up: the gate table proves `b·S + r = Σ m·a + S/2`
   with `r ∈ [0, S)` and `b ∈ [−2S, 2S)` range-checked. Both sides stay below 2^60 in
   magnitude, so the field equation is the integer one.
-- **What the result is.** The final integer state vector is the result: execution is
-  integer-only and bit-exact on any hardware (CPU or GPU), and a float view is that vector
-  divided by `S`. Gate matrices are rounded from `f64` once, at build; the one
-  platform-dependent step there would be the `sin`/`cos` of RX/RY/RZ, so they come from the
-  pure-Rust `libm` (pinned to `=0.2.16`) and every party derives the same circuit. A
-  known-answer test pins a few quantized rotations; the pin is what guarantees the rest.
-- **Error.** Per gate, the L2 distance from the ideal state grows by at most
+- **What the result is.** The final integer state vector of the fused circuit (see
+  [Fusion](#fusion)) is the result: execution is integer-only and bit-exact on any hardware
+  (CPU or GPU), and a float view is that vector divided by `S`. Gate matrices are rounded from
+  `f64` once, at build, after fusion; the one platform-dependent step there would be the
+  `sin`/`cos` of RX/RY/RZ, so they come from the pure-Rust `libm` (pinned to `=0.2.16`) and
+  every party derives the same circuit. Known-answer tests pin a few quantized rotations and a
+  fused product; the pins are what guarantee the rest.
+- **Error.** Per gate (fused gates count once), the L2 distance from the ideal state grows by at most
   `(√(2^(n+1)) + 2√8) · 2^-29` (output rounding, plus matrix quantization). For n = 16 and
   1000 gates that bound is 6.8e-4; random circuits measure about 7e-6, since nearest rounding
   is unbiased and the error walks rather than drifts.
@@ -45,16 +46,16 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   `CUSTOM_UNITARY` capability bit names the rotations).
 - `build` rejects targets or controls outside `n`, repeated controls, and matrices that are
   not unitary up to rounding (which includes a NaN or infinite angle).
-- The gate tables have `2^(n−1)` rows per rounding gate. The rounding steps are split over up
+- The gate tables have `2^(n−1)` rows per rounding step. The rounding steps are split over up
   to three gate tables (the two largest powers of two that fit, then the rest; an empty one is
   omitted), so the rows pad to at most about a quarter more than needed instead of nearly
-  double. A gate rounds
-  unless its quantized matrix is monomial: in practice H, T and RX/RY/RZ at generic angles
-  round, while X, Y, Z, S, CNOT, CZ, CCNOT (and rotations such as RZ(π)) add no rows (see
-  below). On an 8-core
-  machine, a leaf at n = 16 with 64 rounding gates takes about 33 s and 11 GB to prove; a
-  64-gate brickwork of RY and CNOT layers (32 rounding) takes 18 s and 6 GB, and 64 gates
-  cycling H / CNOT / RY / T (48 rounding, split 32 + 16) take 27 s and 7 GB.
+  double. A fused gate
+  rounds unless its quantized matrix is monomial: in practice H, T and RX/RY/RZ at generic
+  angles round, while X, Y, Z, S, CNOT, CZ, CCNOT (and rotations such as RZ(π)) add no rows
+  (see below). On an 8-core machine, a leaf at n = 16 with 64 rounding steps takes about 33 s
+  and 11 GB to prove; a 64-gate brickwork of RY and CNOT layers (32 steps) takes 19 s and 5.5
+  GB, and 64 gates cycling H / CNOT / RY / T (20 steps after fusion, 16 + 4) take 13 s and
+  3.5 GB.
 
 ## Monomial gates
 
@@ -64,6 +65,24 @@ logical amplitude `k` is `i^phase[k]` times stored position `perm[k]`. A roundin
 the stored positions its logical pairs map to, with the phases folded into its matrix entries
 (exact), and the boundary table applies the final frame before the digest. The result is the
 dense execution's bit for bit (a test checks random circuits); only the rows change.
+
+## Fusion
+
+`build` first rewrites the gate list by one fixed rule, and the result is defined on the
+rewritten list. Each qubit keeps a pending product of the single-qubit gates applied to it
+(rounding or monomial) since a multi-qubit gate last touched it. A gate with controls first
+emits the pending products of the qubits it touches, as control or target, in ascending qubit
+order, then itself; at the end the remaining products are emitted in ascending qubit order.
+A product is computed in `f64` from the gates' unrounded matrices, `a · b` entry by entry as
+`(a_r0·b_0c) + (a_r1·b_1c)` with complex products `(xr·yr − xi·yi, xr·yi + xi·yr)` (IEEE
+basic operations, no fused multiply-add), and then rounded once like any gate matrix.
+
+So a run of single-qubit gates costs at most one rounding step, and none if its product
+rounds to a monomial matrix (H·H, H·Z·H, RZ(π/2)²). A lone gate is unchanged, but a
+single-qubit gate is emitted where its run ends, not where it appears, so rounding steps on
+different qubits may run in another order than written. Fusion does not commute gates past
+anything that touches their qubit (an RZ is not moved through a CNOT's control, for
+example). Changing the rule changes the result, so it is fixed with the leaf format.
 
 ## Security levels
 
