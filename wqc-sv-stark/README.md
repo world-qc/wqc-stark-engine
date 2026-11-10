@@ -63,6 +63,10 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
 ## Limits
 
 - `1 ≤ n ≤ 16` qubits (`MAX_QUBITS`).
+- At most `2^22` gate rows (`MAX_ROWS`): rounding steps × `2^(n−1)`, so 128 rounding steps at
+  n = 16. `leaf::gate_rows(n, gates)` counts them without building the leaf (it is the work
+  `W` a scheduler compares with what a node can prove); `build` rejects a circuit over the
+  limit. At about 4.6 KB per gate row (plus 0.3 GB), a leaf at the limit needs about 20 GB.
 - Gates: wqc-core's unitary gate set — H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY, RZ — with the same
   matrices and phases as its dense engine (a test checks each gate against those formulas,
   global phase included, since it changes the digest). Rotation angles become fixed-point
@@ -186,14 +190,14 @@ contexts), and each extra gate table adds about 20 KB, so a split leaf can be la
 one-table leaf with more rounding steps (48 steps, 32 + 16: 389 KB).
 
 **Estimated bits** are conjectured soundness from p3-security 0.9.0-rc.2 (random-words regime,
-128-bit collision-resistant commitments), for the largest leaves (n = 16, every gate rounding:
-64 steps fill one 2^21-row gate table; 100 steps split 64 + 32 + 4, so the largest table is
-still 2^21 rows but there are more columns and lookups). Fewer rounding steps only shorten the
-trace and raise the field terms. The query phase comes out about a bit below the simple
+128-bit collision-resistant commitments), for the largest leaves `MAX_ROWS` allows (n = 16,
+128 rounding steps in one 2^22-row gate table). Fewer rounding steps only shorten the trace and
+raise the field terms. The query phase comes out about a bit below the simple
 `log_blowup · q + PoW` because of the rate's proximity margin. At `ultra` the binding terms are
 the Goldilocks² ones that grow with the trace and the column count: the random combination
-batching the opened columns (96.4 bits at 64 steps; 96.0 at 100 steps, 95.4 if the extra gate
-tables' columns are counted generously) and the LogUp fingerprint (98.0 / 97.3, 28 lookups per gate row, widest message 16). The built-in config grinds none of those
+batching the opened columns (95.4 bits at 2^22 rows, 94.4 if the columns are counted
+generously; 96.4 at 64 steps in 2^21 rows) and the LogUp fingerprint (97.0 at 2^22 rows, 98.0
+at 2^21; 28 lookups per gate row, widest message 16). The built-in config grinds none of those
 challenges, so more queries would not raise the ceiling; a larger extension field would.
 The column and constraint counts behind the estimate are approximate (±1 bit). Proven
 (Johnson-bound) soundness is far lower (38–58 bits), as for FRI-based STARKs generally; the
@@ -263,6 +267,21 @@ bell.verify_sampling(&p.proof, &d1, digest, seed, &counts)?;
 Recursion goes through Plonky3-recursion's trusted prepared owners: each layer keeps its
 child's verifier, so the child relation (tables, AIRs, preprocessed commitment) is fixed by
 that verifier rather than read from the proof.
+
+### Wire format and the verifier to keep
+
+`wire::parse_circuit` reads wqc-core's gate JSON (`[{"type":"H","params":0},
+{"type":"RZ","params":[0,0.5]}, …]`, terminal `MEASURE`s last; no RESET or IF), and
+`wire::parse_counts` / `wire::counts_json` convert counts to and from the canonical
+`{"counts":{"01":3,…},"shots":N}` (Qiskit key order, zero counts omitted). The prover and the
+verifier both go through these, so they derive the same gates and counts: `serde_json` parses
+with `float_roundtrip`, so an angle is the exact `f64` the orchestrator marshaled. Proofs travel
+as `leaf::encode_proof` / `decode_proof` (postcard, pinned).
+
+`Leaf::leaf_verifier()` returns a `LeafVerifier`: the verifier and the sampling, without the
+proving data, to keep (one per circuit) after the leaf is dropped. The orchestrator reaches it
+through `wqc-stark-ffi` (`wqc_sv_leaf_rows`, `wqc_sv_max_rows`, `wqc_sv_leaf_new` /
+`wqc_sv_leaf_free`, `wqc_sv_verify_leaf`, `wqc_sv_verify_sampling_leaf`).
 
 ## Tests
 

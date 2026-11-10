@@ -16,6 +16,7 @@ pub mod leaf;
 mod npo;
 pub mod recursion;
 mod tables;
+pub mod wire;
 
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,11 @@ pub type F = Goldilocks;
 /// of single-qubit gates fuse into one gate, and monomial gates fold away); at n = 16 and 64
 /// rounding steps a leaf takes about 33 s and 11 GB to prove at any [`SecurityLevel`].
 pub const MAX_QUBITS: usize = 16;
+
+/// Largest number of gate rows (rounding steps × `2^(n−1)`, see [`leaf::gate_rows`]) a leaf
+/// may have: 128 rounding steps at n = 16, about 20 GB to prove. The security estimates in
+/// the README are for a gate table of this size.
+pub const MAX_ROWS: usize = 1 << 22;
 
 #[derive(Debug)]
 pub enum Error {

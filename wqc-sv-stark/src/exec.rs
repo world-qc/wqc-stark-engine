@@ -234,6 +234,12 @@ impl Gate {
     /// phase: X, Y, Z, S, CNOT, CZ, CCNOT, and rotations at angles that quantize to such a
     /// matrix (RX(0), RZ(π), …). Its fixed-point output is exact, so it can be folded into the
     /// [`Frame`] instead of executed.
+    /// Whether the gate takes a rounding step (gate-table rows) rather than folding into the
+    /// frame.
+    pub(crate) fn rounds(&self) -> bool {
+        self.monomial().is_none()
+    }
+
     fn monomial(&self) -> Option<[(bool, u8); 2]> {
         // Row k of the matrix: (reads the partner?, phase).
         let row = |d: C, o: C| match (unit_phase(d), unit_phase(o)) {
