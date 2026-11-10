@@ -5,7 +5,10 @@ use p3_field::PrimeCharacteristicRing;
 
 use crate::digest::*;
 use crate::exec::*;
-use crate::leaf::{build, build_with, build_with_tamper, context, statement, Leaf, LeafProof};
+use crate::leaf::{
+    build, build_with, build_with_tamper, reduce_words, statement, Dispatch, Leaf, LeafProof,
+    STATEMENT_LEN,
+};
 use crate::recursion::{verify, Aggregation, Layer, RecursionProof};
 use crate::{Error, FriParams, SecurityLevel, F, MAX_QUBITS};
 
@@ -1023,7 +1026,19 @@ fn fusion_preserves_the_unrounded_circuit() {
     }
 }
 
-/// Pins the context encoding; the values were computed independently (Python `hashlib`).
+fn context(circuit_id: &str, sub_task_id: &str, node_id: &str, slice_id: &str) -> [u64; 4] {
+    Dispatch {
+        circuit_id,
+        sub_task_id,
+        node_id,
+        slice_id,
+    }
+    .context()
+}
+
+/// Pins the context encoding; the values were computed independently (Python `hashlib`). The
+/// third vector's last word is reduced (raw `p + 930599047`), and the fourth has a non-ASCII
+/// field whose length counts bytes (8), not characters (4).
 #[test]
 fn context_known_answer() {
     assert_eq!(
@@ -1044,6 +1059,37 @@ fn context_known_answer() {
             6584790768701115510
         ]
     );
+    assert_eq!(
+        context("c", "s5-54997470", "n", "0"),
+        [
+            2509611998161888353,
+            10023014128191975046,
+            27256567443016035,
+            930599047
+        ]
+    );
+    assert_eq!(
+        context("回路-1", "sub-7", "12D3KooWExample", "0"),
+        [
+            16226241412038407406,
+            11953317444174577628,
+            3935241966496295430,
+            2834988945403643933
+        ]
+    );
+}
+
+/// The word reduction on its own: words at or above the prime wrap.
+#[test]
+fn context_words_reduce_modulo_the_prime() {
+    let p = <F as p3_field::PrimeField64>::ORDER_U64;
+    let mut h = [0xFF; 32];
+    assert_eq!(reduce_words(h), [u64::MAX - p; 4]);
+    h[..8].copy_from_slice(&p.to_le_bytes());
+    h[8..16].copy_from_slice(&(p - 1).to_le_bytes());
+    h[16..24].copy_from_slice(&(p + 1).to_le_bytes());
+    h[24..].copy_from_slice(&0u64.to_le_bytes());
+    assert_eq!(reduce_words(h), [0, p - 1, 1, 0]);
 }
 
 /// Every field changes the context, field boundaries are unambiguous, and the words are
@@ -1070,20 +1116,53 @@ fn context_separates_fields() {
     }
 }
 
-/// A proof made under one node's context does not verify under another node's.
+/// A proof made for one node's dispatch verifies only for that dispatch; the statement has
+/// exactly `STATEMENT_LEN` elements.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "release only")]
-fn a_proof_is_bound_to_its_node() {
+fn a_proof_is_bound_to_its_dispatch() {
     let l = leaf(Tamper::None);
-    let mine = context("circuit", "sub-1", "node-a", "0");
-    let p = l.prove(mine).unwrap();
-    assert_eq!(
-        p.statement[..4],
-        statement(mine, [0; DIGEST_LEN]).unwrap()[..4]
-    );
-    l.verify(&p.proof, &p.statement).unwrap();
-    let theirs = context("circuit", "sub-1", "node-b", "0");
-    let mut claimed = statement(theirs, [0; DIGEST_LEN]).unwrap();
-    claimed[4..].copy_from_slice(&p.statement[4..]);
-    assert!(l.verify(&p.proof, &claimed).is_err());
+    let mine = Dispatch {
+        circuit_id: "circuit",
+        sub_task_id: "sub-1",
+        node_id: "node-a",
+        slice_id: "0",
+    };
+    let p = l.prove(mine.context()).unwrap();
+    assert_eq!(p.statement.len(), STATEMENT_LEN);
+    // The verifier's expected digest, here from honest execution.
+    let digest = terminal_digest(&execute(3, &gates()).1);
+    l.verify_dispatch(&p.proof, &mine, digest).unwrap();
+    for other in [
+        Dispatch {
+            node_id: "node-b",
+            ..mine
+        },
+        Dispatch {
+            sub_task_id: "sub-2",
+            ..mine
+        },
+        Dispatch {
+            slice_id: "1",
+            ..mine
+        },
+        Dispatch {
+            circuit_id: "other",
+            ..mine
+        },
+    ] {
+        assert!(
+            l.verify_dispatch(&p.proof, &other, digest).is_err(),
+            "{other:?}"
+        );
+    }
+    let mut wrong = digest;
+    wrong[0] ^= 1;
+    assert!(l.verify_dispatch(&p.proof, &mine, wrong).is_err());
+    // Statements of the wrong length are rejected.
+    let full = statement(mine.context(), digest).unwrap();
+    assert!(l.verify(&p.proof, &full[..STATEMENT_LEN - 1]).is_err());
+    let mut longer = full.clone();
+    longer.push(F::ZERO);
+    assert!(l.verify(&p.proof, &longer).is_err());
 }

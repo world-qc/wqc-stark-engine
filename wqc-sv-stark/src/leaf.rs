@@ -34,6 +34,8 @@ pub struct Leaf {
 /// A leaf proof with the statement it was proved for.
 pub struct LeafProof {
     pub proof: BatchStarkProof<Cfg>,
+    /// The prover's own claim. A verifier never verifies against it: it builds the expected
+    /// statement itself (see [`Leaf::verify`]).
     pub statement: Vec<F>,
 }
 
@@ -125,29 +127,60 @@ pub(crate) fn build_with_tamper(
     })
 }
 
-/// Domain tag of [`context`]; the version changes if the encoding does.
+/// Domain tag of [`Dispatch::context`]. Its `V1` versions the context encoding only; it is
+/// unrelated to the leaf format's version.
 pub const CONTEXT_TAG: &[u8] = b"WQC_SV_CTX_V1";
 
-/// The leaf context: binds a proof to its dispatch. SHA3-256 of [`CONTEXT_TAG`] followed by
-/// each field as its byte length (`u32` little-endian) and its UTF-8 bytes, in this order; the
-/// 32-byte hash is split into four little-endian `u64` words, each reduced modulo the
-/// Goldilocks prime.
-///
-/// The fields are the dispatch's `circuit_id`, `sub_task_id`, `node_id` and `slice_id`. The
-/// context differs per node, while the digest does not, so a quorum compares digests. The
-/// security tier is not included: it is part of the verifier, not the statement.
-pub fn context(circuit_id: &str, sub_task_id: &str, node_id: &str, slice_id: &str) -> [u64; 4] {
-    use sha3::{Digest, Sha3_256};
-    let mut h = Sha3_256::new();
-    h.update(CONTEXT_TAG);
-    for field in [circuit_id, sub_task_id, node_id, slice_id] {
-        let len = u32::try_from(field.len()).expect("dispatch field longer than 4 GiB");
-        h.update(len.to_le_bytes());
-        h.update(field.as_bytes());
+/// The dispatch fields a leaf proof is bound to, exactly as the orchestrator signed them: the
+/// bytes are hashed as given, with no normalization (hex case, an empty versus `"0"` slice).
+#[derive(Clone, Copy, Debug)]
+pub struct Dispatch<'a> {
+    pub circuit_id: &'a str,
+    pub sub_task_id: &'a str,
+    pub node_id: &'a str,
+    pub slice_id: &'a str,
+}
+
+impl Dispatch<'_> {
+    /// The leaf context: SHA3-256 of [`CONTEXT_TAG`] followed by each field as its byte length
+    /// (`u32` little-endian, UTF-8 bytes rather than characters) and its UTF-8 bytes, in the
+    /// order `circuit_id`, `sub_task_id`, `node_id`, `slice_id`; the 32-byte hash is split into
+    /// four little-endian `u64` words, each reduced modulo the Goldilocks prime.
+    ///
+    /// The context differs per node, while the digest does not, so a quorum compares the
+    /// statement's digest half (`statement[4..]`). The security tier is not included: it is
+    /// part of the verifier, not the statement.
+    ///
+    /// # Panics
+    ///
+    /// If a field is longer than `u32::MAX` bytes.
+    pub fn context(&self) -> [u64; 4] {
+        reduce_words(self.context_hash())
     }
-    let out = h.finalize();
+
+    fn context_hash(&self) -> [u8; 32] {
+        use sha3::{Digest, Sha3_256};
+        let mut h = Sha3_256::new();
+        h.update(CONTEXT_TAG);
+        for field in [
+            self.circuit_id,
+            self.sub_task_id,
+            self.node_id,
+            self.slice_id,
+        ] {
+            let len =
+                u32::try_from(field.len()).expect("dispatch field longer than u32::MAX bytes");
+            h.update(len.to_le_bytes());
+            h.update(field.as_bytes());
+        }
+        h.finalize().into()
+    }
+}
+
+/// Four little-endian `u64` words, each reduced modulo the Goldilocks prime.
+pub(crate) fn reduce_words(h: [u8; 32]) -> [u64; 4] {
     std::array::from_fn(|k| {
-        let w = u64::from_le_bytes(out[8 * k..8 * k + 8].try_into().expect("8 bytes"));
+        let w = u64::from_le_bytes(h[8 * k..8 * k + 8].try_into().expect("8 bytes"));
         w % F::ORDER_U64
     })
 }
@@ -170,7 +203,7 @@ pub fn statement(ctx: [u64; 4], digest: [u64; DIGEST_LEN]) -> Result<Vec<F>, Err
 }
 
 impl Leaf {
-    /// Proves the circuit under `ctx` (from [`context`]); the returned statement holds the
+    /// Proves the circuit under `ctx` (from [`Dispatch::context`]); the returned statement holds the
     /// terminal digest the circuit exported.
     pub fn prove(&self, ctx: [u64; 4]) -> Result<LeafProof, Error> {
         let ctx = statement(ctx, [0; DIGEST_LEN])?[..4].to_vec();
@@ -193,11 +226,28 @@ impl Leaf {
     }
 
     /// Verifies `proof` against this circuit and the expected `statement`.
+    ///
+    /// # Security
+    ///
+    /// Only an expected statement binds anything: build it from the dispatch the verifier
+    /// signed and the digest it expects (a quorum's, or one recomputed from the result), never
+    /// from the prover's [`LeafProof::statement`]. [`Leaf::verify_dispatch`] does this.
     pub fn verify(&self, proof: &BatchStarkProof<Cfg>, statement: &[F]) -> Result<(), Error> {
         self.prepared
             .verifier()
             .verify(proof, statement)
             .map_err(|e| Error::Verify(format!("{e:?}")))
+    }
+
+    /// Verifies `proof` for `dispatch` with the expected terminal `digest`: [`Leaf::verify`]
+    /// against `statement(dispatch.context(), digest)`.
+    pub fn verify_dispatch(
+        &self,
+        proof: &BatchStarkProof<Cfg>,
+        dispatch: &Dispatch<'_>,
+        digest: [u64; DIGEST_LEN],
+    ) -> Result<(), Error> {
+        self.verify(proof, &statement(dispatch.context(), digest)?)
     }
 
     /// The verifier fixing this circuit's relation and preprocessed commitment.
