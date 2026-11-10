@@ -13,9 +13,32 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   leaf is built. A proof only verifies against the verifier of the circuit it was built for
   (`Leaf::verifier()`), so a verifier must be derived from the expected circuit, never taken
   from the prover.
-- **Statement.** `[context(4), digest(4)]`. The context is caller-supplied (task binding); the
-  digest is computed in-circuit from the final state. The statement does not name the
-  circuit: it is meaningful only together with that circuit's verifier.
+- **Statement.** `[context(4), digest(4)]`, eight Goldilocks elements and fixed. The context
+  binds the proof to its dispatch (below); the digest is computed in-circuit from the final
+  state. Both are public values of the proof, so a proof verifies only against its own. The
+  statement does not name the circuit: it is meaningful only together with that circuit's
+  verifier.
+- **Context.** `leaf::Dispatch { circuit_id, sub_task_id, node_id, slice_id }.context()`:
+  SHA3-256 of `WQC_SV_CTX_V1` followed by each field as its byte length (`u32`
+  little-endian, counting UTF-8 bytes, not characters) and its UTF-8 bytes, in that order;
+  the 32 bytes split into four little-endian `u64` words, each reduced modulo the Goldilocks
+  prime `2^64 − 2^32 + 1`. That keeps about 128 bits of collision resistance (the birthday
+  bound on 256 bits; the reduction merges a 2^-32 fraction of each word's values). The tag's
+  `V1` versions this encoding only, not the leaf format. Known-answer tests pin the encoding,
+  including a reduced word and a non-ASCII field.
+  - The fields are hashed exactly as the orchestrator signed them, with no normalization. Their
+    canonical forms (hex case of `circuit_id`, the `node_id` notation, `slice_id` for an
+    unsliced task) and their relation to v1's binding (`circuit_id`, `node_id`, `slice_id`,
+    `output_hash`, NUL-separated) are for the v2 spec in wqc-docs to fix.
+  - A verifier builds the expected statement from the dispatch it signed and the digest it
+    expects, never from the prover's `LeafProof::statement`; `Leaf::verify_dispatch` does
+    this.
+  - The context differs per node, so a node cannot submit another node's proof, while the
+    digest is the same for every honest node: a quorum compares `statement[4..]`, not whole
+    statements.
+  - Not included: the output payload (the digest is the result; the payload will be checked
+    against it), the security tier (part of the verifier), and measurement data (a Born
+    leaf's own statement).
 - **Digest.** A Poseidon2 sponge (Goldilocks, width 8, rate 4) over the final amplitudes, two
   amplitudes per block, from the zero state; the digest is the first four state elements.
   The round constants are not the standard Goldilocks Poseidon2 ones: they are drawn from
@@ -142,30 +165,44 @@ tiers rest on the conjectured regime.
 ## Usage
 
 ```rust,ignore
-use wqc_sv_stark::exec::Gate;
+use wqc_sv_stark::digest::terminal_digest;
+use wqc_sv_stark::exec::{execute, Gate};
 use wqc_sv_stark::recursion::{verify, Aggregation, Layer};
 use wqc_sv_stark::{leaf, SecurityLevel};
 
 let level = SecurityLevel::parse("normal").expect("known tier");
 let gates = vec![Gate::h(0), Gate::cnot(0, 1)];
-let bell = leaf::build(level, 2, gates)?;
+let bell = leaf::build(level, 2, gates.clone())?;
 
-// Leaf: prove under a context, verify against the expected statement.
-let a = bell.prove([1, 2, 3, 4])?;
-bell.verify(&a.proof, &a.statement)?;
+// The node proves under its dispatch's context.
+let d1 = leaf::Dispatch {
+    circuit_id: "circuit-id",
+    sub_task_id: "sub-task-1",
+    node_id: "node-a",
+    slice_id: "0",
+};
+let a = bell.prove(d1.context())?;
+
+// The verifier never trusts `a.statement`: it expects a digest (the quorum's, or here one
+// recomputed from honest execution) and its own dispatch.
+let digest = terminal_digest(&execute(2, &gates).1);
+bell.verify_dispatch(&a.proof, &d1, digest)?;
+let expected_a = leaf::statement(d1.context(), digest)?;
 
 // First recursion layer over leaves of this circuit; its proofs verify against the leaf
 // statement with the layer's verifier.
 let layer = Layer::over_leaf(&bell, &a)?;
 let ra = layer.prove(&a.proof, &a.statement)?;
-verify(&layer.verifier(), &ra.proof, &a.statement)?;
+verify(&layer.verifier(), &ra.proof, &expected_a)?;
 
 // 2-to-1 aggregation: the root verifies against left ‖ right.
-let b = bell.prove([5, 6, 7, 8])?;
+let d2 = leaf::Dispatch { sub_task_id: "sub-task-2", ..d1 };
+let b = bell.prove(d2.context())?;
 let rb = layer.prove(&b.proof, &b.statement)?;
 let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb))?;
 let root = agg.prove(&ra, &rb)?;
-verify(&agg.verifier(), &root.proof, &root.statement)?;
+let expected_root = [expected_a, leaf::statement(d2.context(), digest)?].concat();
+verify(&agg.verifier(), &root.proof, &expected_root)?;
 ```
 
 Recursion goes through Plonky3-recursion's trusted prepared owners: each layer keeps its

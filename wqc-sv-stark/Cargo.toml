@@ -24,6 +24,9 @@ libm = "=0.2.16"
 # The digest's Poseidon2 constants come from a seeded SmallRng; pin rand exactly (see the
 # digest known-answer test).
 rand = { version = "=0.10.3", default-features = false }
+# The leaf context is SHA3-256 of the dispatch fields (see `leaf::Dispatch::context`); pinned
+# like the other dependencies that fix a value every party must derive.
+sha3 = "=0.10.9"
 
 [dev-dependencies]
 postcard = { version = "1", features = ["alloc"] }
