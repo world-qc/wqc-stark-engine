@@ -60,6 +60,16 @@ pub fn encode_proof(proof: &BatchStarkProof<Cfg>) -> Vec<u8> {
 
 /// Reads [`encode_proof`]'s bytes; trailing bytes are an error.
 pub fn decode_proof(bytes: &[u8]) -> Result<BatchStarkProof<Cfg>, Error> {
+    decode(bytes)
+}
+
+/// [`decode_proof`] for either config: a [`VerifyCfg`] proof has the same fields and types as
+/// a [`Cfg`] one, so the same bytes (a test checks it).
+pub(crate) fn decode<SC>(bytes: &[u8]) -> Result<BatchStarkProof<SC>, Error>
+where
+    SC: p3_uni_stark::StarkGenericConfig,
+    BatchStarkProof<SC>: serde::de::DeserializeOwned,
+{
     match postcard::take_from_bytes(bytes) {
         Ok((proof, [])) => Ok(proof),
         Ok((_, rest)) => Err(Error::Verify(format!(
@@ -288,8 +298,14 @@ pub fn gate_rows(n: usize, gates: &[Gate]) -> Result<usize, Error> {
 /// gate row, 600 per basis state, 800 per shot and 16 MiB. Measured peaks (live heap, n = 2 to
 /// 16, up to 2^22 rows and 2^16 shots) stay 15–80% below it; at 2^22 rows and n = 16 it is
 /// 1.73 GB against 1.45 GB measured. A scheduler divides the memory it can spare by it.
+/// Saturates rather than overflow on out-of-range arguments.
 pub fn verifier_peak_bytes(n: usize, rows: usize, shots: u64) -> u64 {
-    400 * rows as u64 + 600 * (1u64 << n.min(63)) + 800 * shots + (16 << 20)
+    let states = 1u64.checked_shl(n as u32).unwrap_or(u64::MAX);
+    (rows as u64)
+        .saturating_mul(400)
+        .saturating_add(states.saturating_mul(600))
+        .saturating_add(shots.saturating_mul(800))
+        .saturating_add(16 << 20)
 }
 
 /// Domain tag of [`Dispatch::context`]. Its `V1` versions the context encoding only; it is
@@ -435,14 +451,18 @@ impl Leaf {
     }
 
     /// [`LeafVerifier::verify`].
-    pub fn verify(&self, proof: &BatchStarkProof<Cfg>, statement: &[F]) -> Result<(), Error> {
+    pub fn verify<'a>(
+        &self,
+        proof: impl Into<ProofInput<'a>>,
+        statement: &[F],
+    ) -> Result<(), Error> {
         self.leaf_verifier().verify(proof, statement)
     }
 
     /// [`LeafVerifier::verify_dispatch`].
-    pub fn verify_dispatch(
+    pub fn verify_dispatch<'a>(
         &self,
-        proof: &BatchStarkProof<Cfg>,
+        proof: impl Into<ProofInput<'a>>,
         dispatch: &Dispatch<'_>,
         digest: [u64; DIGEST_LEN],
     ) -> Result<(), Error> {
@@ -451,9 +471,9 @@ impl Leaf {
     }
 
     /// [`LeafVerifier::verify_sampling`].
-    pub fn verify_sampling(
+    pub fn verify_sampling<'a>(
         &self,
-        proof: &BatchStarkProof<Cfg>,
+        proof: impl Into<ProofInput<'a>>,
         dispatch: &Dispatch<'_>,
         digest: [u64; DIGEST_LEN],
         seed: u64,
@@ -498,6 +518,26 @@ enum Verifier {
     Coset(CircuitVerifier<VerifyCfg>),
 }
 
+/// A proof to verify: decoded, or its bytes ([`encode_proof`]). A verifier from
+/// [`build_verifier`] reads bytes directly; given a decoded proof it re-reads its bytes.
+#[derive(Clone, Copy)]
+pub enum ProofInput<'a> {
+    Proof(&'a BatchStarkProof<Cfg>),
+    Bytes(&'a [u8]),
+}
+
+impl<'a> From<&'a BatchStarkProof<Cfg>> for ProofInput<'a> {
+    fn from(p: &'a BatchStarkProof<Cfg>) -> Self {
+        Self::Proof(p)
+    }
+}
+
+impl<'a> From<&'a [u8]> for ProofInput<'a> {
+    fn from(b: &'a [u8]) -> Self {
+        Self::Bytes(b)
+    }
+}
+
 impl LeafVerifier {
     /// The sampling of a `sample_counts` leaf, `None` for a unitary one.
     pub fn sampling(&self) -> Option<&Sampling> {
@@ -511,14 +551,17 @@ impl LeafVerifier {
     /// Only an expected statement binds anything: build it from the dispatch the verifier
     /// signed and the digest it expects (a quorum's, or one recomputed from the result), never
     /// from the prover's [`LeafProof::statement`]. [`LeafVerifier::verify_dispatch`] does this.
-    pub fn verify(&self, proof: &BatchStarkProof<Cfg>, statement: &[F]) -> Result<(), Error> {
-        let checked = match &self.verifier {
-            Verifier::Leaf(v) => v.verify(proof, statement),
-            Verifier::Coset(v) => {
-                // The same proof type under the other config: re-read its bytes.
-                let proof = postcard::from_bytes(&encode_proof(proof))
-                    .map_err(|e| Error::Verify(format!("proof bytes: {e}")))?;
-                v.verify(&proof, statement)
+    pub fn verify<'a>(
+        &self,
+        proof: impl Into<ProofInput<'a>>,
+        statement: &[F],
+    ) -> Result<(), Error> {
+        let checked = match (&self.verifier, proof.into()) {
+            (Verifier::Leaf(v), ProofInput::Proof(p)) => v.verify(p, statement),
+            (Verifier::Leaf(v), ProofInput::Bytes(b)) => v.verify(&decode(b)?, statement),
+            (Verifier::Coset(v), ProofInput::Bytes(b)) => v.verify(&decode(b)?, statement),
+            (Verifier::Coset(v), ProofInput::Proof(p)) => {
+                v.verify(&decode(&encode_proof(p))?, statement)
             }
         };
         checked.map_err(|e| Error::Verify(format!("{e:?}")))
@@ -526,9 +569,9 @@ impl LeafVerifier {
 
     /// Verifies `proof` for `dispatch` with the expected terminal `digest`: [`LeafVerifier::verify`]
     /// against `statement(dispatch.context(), digest)`.
-    pub fn verify_dispatch(
+    pub fn verify_dispatch<'a>(
         &self,
-        proof: &BatchStarkProof<Cfg>,
+        proof: impl Into<ProofInput<'a>>,
         dispatch: &Dispatch<'_>,
         digest: [u64; DIGEST_LEN],
     ) -> Result<(), Error> {
@@ -544,9 +587,9 @@ impl LeafVerifier {
     /// The digest reduces each count mod p, so it binds the counts only as field elements.
     /// The counts must also be canonical: `counts_len` entries, each at most `shots`, summing
     /// to `shots`. This checks that; a caller building the statement itself must too.
-    pub fn verify_sampling(
+    pub fn verify_sampling<'a>(
         &self,
-        proof: &BatchStarkProof<Cfg>,
+        proof: impl Into<ProofInput<'a>>,
         dispatch: &Dispatch<'_>,
         digest: [u64; DIGEST_LEN],
         seed: u64,

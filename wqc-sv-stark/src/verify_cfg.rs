@@ -63,6 +63,9 @@ impl VerifyCfg {
         let d = inner.descriptor();
         let log_blowup = d.log_blowup() as usize;
         let cap_height = d.input_cap_height() as usize;
+        // The input MMCS `goldilocks_d2_poseidon2_binary` builds, rebuilt here from its parts
+        // (Cfg's PCS does not expose it): if p3-recursion changes it, the commitment tests fail
+        // (and so would every verification, rather than accept anything).
         let perm = p3_recursion::builtin_config::fixed_goldilocks_poseidon2_8();
         let pcs = VerifyPcs {
             inner: inner.pcs().clone(),
@@ -328,7 +331,11 @@ mod tests {
     use super::*;
     use p3_field::PrimeCharacteristicRing;
 
-    fn matrices(shapes: &[(usize, usize)], seed: u64) -> Vec<(Domain, RowMajorMatrix<F>)> {
+    fn matrices(
+        pcs: &InnerPcs,
+        shapes: &[(usize, usize)],
+        seed: u64,
+    ) -> Vec<(Domain, RowMajorMatrix<F>)> {
         // splitmix64: arbitrary values, reproducible.
         let mut x = seed;
         let mut next = move || {
@@ -338,20 +345,34 @@ mod tests {
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
             F::from_u64(z ^ (z >> 31))
         };
-        let pcs = crate::FriParams::RECURSION.config().pcs().clone();
         shapes
             .iter()
             .map(|&(log_h, width)| {
                 let values = (0..width << log_h).map(|_| next()).collect();
                 (
                     <InnerPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
-                        &pcs,
+                        pcs,
                         1 << log_h,
                     ),
                     RowMajorMatrix::new(values, width),
                 )
             })
             .collect()
+    }
+
+    fn assert_same_commitment(cfg: &Cfg, shapes: &[(usize, usize)], seed: u64) {
+        let (want, _) =
+            <InnerPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_preprocessing(
+                cfg.pcs(),
+                matrices(cfg.pcs(), shapes, seed),
+            )
+            .unwrap();
+        let v = VerifyCfg::new(cfg.clone());
+        let (got, ()) = v
+            .pcs()
+            .commit_preprocessing(matrices(cfg.pcs(), shapes, seed))
+            .unwrap();
+        assert_eq!(got, want, "{:?} {shapes:?}", cfg.descriptor());
     }
 
     /// The run-by-run commitment is the inner PCS's, for one and several matrices of mixed
@@ -369,17 +390,39 @@ mod tests {
             crate::FriParams::RECURSION,
         ] {
             let cfg = fri.config();
-            let v = VerifyCfg::new(cfg.clone());
             for (k, s) in shapes.iter().enumerate() {
-                let (want, _) =
-                    <InnerPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_preprocessing(
-                        cfg.pcs(),
-                        matrices(s, k as u64),
-                    )
-                    .unwrap();
-                let (got, ()) = v.pcs().commit_preprocessing(matrices(s, k as u64)).unwrap();
-                assert_eq!(got, want, "{fri:?} {s:?}");
+                assert_same_commitment(&cfg, s, k as u64);
             }
+        }
+    }
+
+    /// With a Merkle cap instead of a root: below the runs' depth (the runs' roots fold up) and
+    /// above it (each run contributes its own cap). The leaves use cap height 0.
+    #[test]
+    fn commit_by_runs_matches_with_a_cap() {
+        use p3_recursion::artifact::ArtifactLimits;
+        use p3_recursion::builtin_config::{
+            goldilocks_d2_poseidon2_binary, FriConfigV1, SuiteIdV1,
+        };
+        let suite = SuiteIdV1::GoldilocksD2Poseidon2BinaryFri;
+        for cap in [1, 3, LOG_RUNS as u32, LOG_RUNS as u32 + 2] {
+            let descriptor = FriConfigV1::new(
+                suite,
+                2,
+                0,
+                2,
+                42,
+                0,
+                16,
+                cap,
+                cap,
+                0,
+                suite.spec().salt_elements as u32,
+            );
+            let cfg =
+                goldilocks_d2_poseidon2_binary(&descriptor, &ArtifactLimits::default().verifier)
+                    .unwrap();
+            assert_same_commitment(&cfg, &[(9, 13), (8, 8), (9, 2)], u64::from(cap));
         }
     }
 }

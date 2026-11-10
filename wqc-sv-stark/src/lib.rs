@@ -16,7 +16,7 @@ pub mod leaf;
 mod npo;
 pub mod recursion;
 mod tables;
-pub mod verify_cfg;
+pub(crate) mod verify_cfg;
 pub mod wire;
 
 #[cfg(test)]

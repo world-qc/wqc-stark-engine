@@ -287,7 +287,7 @@ as `leaf::encode_proof` / `decode_proof` (postcard, pinned).
 
 A `LeafVerifier` is a leaf's verifier and sampling without the proving data, to keep (one per
 circuit). `Leaf::leaf_verifier()` takes it from a built leaf; `leaf::build_verifier(level, n,
-gates, sampling)` builds it without one, in less memory: a `VerifyCfg` (`verify_cfg`) prepares
+gates, sampling)` builds it without one, in less memory: an internal `VerifyCfg` prepares
 the same circuit with a PCS that computes the preprocessed commitment 64 runs of LDE rows at a
 time (each run a coset of a smaller subgroup, under its own subtree) and keeps no prover data,
 and delegates everything verification uses to the leaf config's PCS. A test checks the

@@ -731,7 +731,7 @@ pub unsafe extern "C" fn wqc_verify_overlap_binding(
 
 use std::panic::AssertUnwindSafe;
 use wqc_sv_stark::born::Sampling;
-use wqc_sv_stark::leaf::{decode_proof, gate_rows, LeafVerifier};
+use wqc_sv_stark::leaf::{gate_rows, LeafVerifier};
 use wqc_sv_stark::wire::{parse_circuit, parse_counts};
 
 /// A v2 leaf's verifier, opaque to C. Verifying through it from several threads at once is
@@ -801,7 +801,8 @@ pub unsafe extern "C" fn wqc_sv_leaf_rows(qubit_count: u32, circuit_json: *const
 /// gate rows (`wqc_sv_leaf_rows`) on `qubit_count` qubits with `shots` (0 for
 /// `statevector_scalar`). The orchestrator compares it with the memory it can spare to decide
 /// which circuits it can verify as v2, so the limit follows the machine (about 2^21 rows in
-/// 1.4 GB, 2^22 in 2 GB). It does not check the arguments.
+/// 1.4 GB, 2^22 in 2 GB). It does not check the arguments; out-of-range ones saturate to
+/// `u64::MAX`.
 #[no_mangle]
 pub extern "C" fn wqc_sv_verifier_peak_bytes(qubit_count: u32, rows: u64, shots: u64) -> u64 {
     wqc_sv_stark::leaf::verifier_peak_bytes(qubit_count as usize, rows as usize, shots)
@@ -915,7 +916,7 @@ unsafe fn leaf_inputs<'a>(
     &'a LeafVerifier,
     wqc_sv_stark::leaf::Dispatch<'a>,
     [u64; 4],
-    wqc_sv_stark::leaf::Proof,
+    &'a [u8],
 )> {
     if leaf.is_null() || digest.is_null() || proof_bytes.is_null() {
         eprintln!("[Rust FFI] {what}: null pointer");
@@ -927,13 +928,8 @@ unsafe fn leaf_inputs<'a>(
         return None;
     };
     let digest: [u64; 4] = slice::from_raw_parts(digest, 4).try_into().ok()?;
-    match decode_proof(slice::from_raw_parts(proof_bytes, proof_len as usize)) {
-        Ok(p) => Some((&(*leaf).0, d, digest, p)),
-        Err(err) => {
-            eprintln!("[Rust FFI] {what}: {err}");
-            None
-        }
-    }
+    let proof = slice::from_raw_parts(proof_bytes, proof_len as usize);
+    Some((&(*leaf).0, d, digest, proof))
 }
 
 /// Verifies a `statevector_scalar` v2 leaf proof for its dispatch and the expected terminal
@@ -972,7 +968,7 @@ pub unsafe extern "C" fn wqc_sv_verify_leaf(
             eprintln!("[Rust FFI] sv_verify_leaf: a sampling leaf needs its seed and counts");
             return 0;
         }
-        match v.verify_dispatch(&proof, &d, digest) {
+        match v.verify_dispatch(proof, &d, digest) {
             Ok(()) => 1,
             Err(err) => {
                 eprintln!("[Rust FFI] sv_verify_leaf: {err}");
@@ -1026,7 +1022,7 @@ pub unsafe extern "C" fn wqc_sv_verify_sampling_leaf(
             return 0;
         };
         let checked = parse_counts(json, sampling)
-            .and_then(|counts| v.verify_sampling(&proof, &d, digest, sample_seed, &counts));
+            .and_then(|counts| v.verify_sampling(proof, &d, digest, sample_seed, &counts));
         match checked {
             Ok(()) => 1,
             Err(err) => {
@@ -1129,6 +1125,10 @@ mod sv_tests {
         assert!(wqc_sv_verifier_peak_bytes(16, 1 << 21, 1 << 16) > 748 << 20);
         assert!(wqc_sv_verifier_peak_bytes(8, 2048, 0) > 4 << 20);
         assert!(wqc_sv_verifier_peak_bytes(16, 1 << 22, 0) < 2 << 30);
+        // Out-of-range arguments saturate instead of wrapping to a small estimate.
+        assert_eq!(wqc_sv_verifier_peak_bytes(64, 0, 0), u64::MAX);
+        assert_eq!(wqc_sv_verifier_peak_bytes(0, u64::MAX, 0), u64::MAX);
+        assert_eq!(wqc_sv_verifier_peak_bytes(0, 0, u64::MAX), u64::MAX);
     }
 
     #[test]

@@ -1615,6 +1615,17 @@ fn build_verifier_verifies_leaf_proofs() {
     let digest = terminal_digest(&execute(3, &g).1);
     v.verify(&p.proof, &statement(CTX, digest).unwrap())
         .unwrap();
+    // A proof's bytes read as the verifier's config type and write back the same, so both
+    // verifiers take the same bytes.
+    let bytes = crate::leaf::encode_proof(&p.proof);
+    let as_verify: p3_circuit_prover::BatchStarkProof<crate::verify_cfg::VerifyCfg> =
+        crate::leaf::decode(&bytes).unwrap();
+    assert_eq!(postcard::to_allocvec(&as_verify).unwrap(), bytes);
+    v.verify(bytes.as_slice(), &statement(CTX, digest).unwrap())
+        .unwrap();
+    l.verify(bytes.as_slice(), &statement(CTX, digest).unwrap())
+        .unwrap();
+    assert!(v.verify(&bytes[1..], &p.statement).is_err());
     let mut wrong = digest;
     wrong[0] ^= 1;
     assert!(v.verify(&p.proof, &statement(CTX, wrong).unwrap()).is_err());
