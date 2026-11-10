@@ -17,7 +17,7 @@ wqc-stark-engine/
 ```
 
 * **`wqc-stark-core`**: Quantum execution AIR over Plonky3 Mersenne31 field types. Supports embedded trace verification, FRI STARKs via Plonky3 Circle PCS, distribution / trajectory segments, Born and shot-sampling AIRs, leaf compose proofs, and recursive aggregation (`RecursiveAggregationAir` v6 with agg/leaf PCS certificates; host-bound Mmcs/FriFold/OOD digests + optional nested group STARKs; Born K≤21, W≤68).
-* **`wqc-stark-ffi`**: Panic-safe C ABI for the Go orchestrator (leaf verify, compose with optional prebuilt leaf PCS, root verify, `wqc_build_leaf_pcs_bundle`, distribution/trajectory binding, scheme detection), and the state-vector (v2) leaf from `wqc-sv-stark`: gate rows for scheduling (`wqc_sv_leaf_rows`), a cached per-circuit verifier (`wqc_sv_leaf_new`), and leaf verify for `statevector_scalar` and `sample_counts`.
+* **`wqc-stark-ffi`**: Panic-safe C ABI for the Go orchestrator (leaf verify, compose with optional prebuilt leaf PCS, root verify, `wqc_build_leaf_pcs_bundle`, distribution/trajectory binding, scheme detection), and the state-vector (v2) leaf from `wqc-sv-stark`: gate rows for scheduling (`wqc_sv_leaf_rows`), a cached per-circuit verifier (`wqc_sv_leaf_new`) and an estimate of its build memory (`wqc_sv_verifier_peak_bytes`), and leaf verify for `statevector_scalar` and `sample_counts`.
 
 ## Public inputs (`StarkContext`)
 

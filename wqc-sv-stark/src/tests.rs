@@ -1600,3 +1600,60 @@ fn recursion_over_a_sampling_leaf() {
     *other.last_mut().unwrap() += F::ONE;
     assert!(verify(&layer.verifier(), &r.proof, &other).is_err());
 }
+
+/// A verifier from `build_verifier` (coset-by-coset commitment, no proving data) accepts the
+/// proofs of the leaf `build` gives and nothing the leaf's own verifier rejects.
+#[test]
+fn build_verifier_verifies_leaf_proofs() {
+    use crate::born::{Measure, Sampling};
+    use crate::leaf::{build_sampling, build_verifier};
+    let level = SecurityLevel::Low;
+    let g = gates();
+    let l = build(level, 3, g.clone()).unwrap();
+    let v = build_verifier(level, 3, g.clone(), None).unwrap();
+    let p = l.prove(CTX).unwrap();
+    let digest = terminal_digest(&execute(3, &g).1);
+    v.verify(&p.proof, &statement(CTX, digest).unwrap())
+        .unwrap();
+    // A proof's bytes read as the verifier's config type and write back the same, so both
+    // verifiers take the same bytes.
+    let bytes = crate::leaf::encode_proof(&p.proof);
+    let as_verify: p3_circuit_prover::BatchStarkProof<crate::verify_cfg::VerifyCfg> =
+        crate::leaf::decode(&bytes).unwrap();
+    assert_eq!(postcard::to_allocvec(&as_verify).unwrap(), bytes);
+    v.verify(bytes.as_slice(), &statement(CTX, digest).unwrap())
+        .unwrap();
+    l.verify(bytes.as_slice(), &statement(CTX, digest).unwrap())
+        .unwrap();
+    assert!(v.verify(&bytes[1..], &p.statement).is_err());
+    let mut wrong = digest;
+    wrong[0] ^= 1;
+    assert!(v.verify(&p.proof, &statement(CTX, wrong).unwrap()).is_err());
+    // Another circuit's or another tier's verifier rejects it.
+    let mut other = g.clone();
+    other.push(Gate::h(1));
+    let ov = build_verifier(level, 3, other, None).unwrap();
+    assert!(ov.verify(&p.proof, &p.statement).is_err());
+    let uv = build_verifier(SecurityLevel::Ultra, 3, g.clone(), None).unwrap();
+    assert!(uv.verify(&p.proof, &p.statement).is_err());
+
+    let s = Sampling {
+        measures: vec![Measure { qubit: 0, cbit: 0 }, Measure { qubit: 2, cbit: 1 }],
+        cbits: 2,
+        shots: 100,
+    };
+    let sl = build_sampling(level, 3, g.clone(), s.clone()).unwrap();
+    let sv = build_verifier(level, 3, g, Some(s)).unwrap();
+    let d = Dispatch {
+        circuit_id: "c",
+        sub_task_id: "s",
+        node_id: "n",
+        slice_id: "",
+    };
+    let (sp, counts) = sl.prove_sampling(d.context(), 9).unwrap();
+    sv.verify_sampling(&sp.proof, &d, digest, 9, &counts)
+        .unwrap();
+    assert!(sv
+        .verify_sampling(&sp.proof, &d, digest, 10, &counts)
+        .is_err());
+}
