@@ -1,9 +1,11 @@
-//! Leaf circuit: build, prove, verify against a `[context, digest]` statement.
+//! Leaf circuit: build, prove, verify against a `[context, digest]` statement, or
+//! `[context, digest, seed, shots, counts digest]` for a sampling leaf.
 //!
-//! The circuit (gate list and qubit count) is part of the prepared relation: its preprocessed
-//! columns are committed at [`build`] time and every verifier derived from the leaf checks
-//! proofs against that commitment. The statement carries only `[context(4), digest(4)]`, so a
-//! statement means nothing without the verifier of the circuit it came from.
+//! The circuit (gate list, qubit count, and for sampling the measurements and shot count) is
+//! part of the prepared relation: its preprocessed columns are committed at [`build`] time and
+//! every verifier derived from the leaf checks proofs against that commitment. The statement
+//! does not name the circuit, so a statement means nothing without the verifier of the circuit
+//! it came from.
 
 use p3_circuit::builder::CircuitBuilder;
 use p3_circuit::{StatementExport, StatementSchema};
@@ -16,6 +18,7 @@ use p3_circuit_prover::{
 };
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 
+use crate::born::{counts_digest, sample, seed_words, Sampling};
 use crate::digest::DIGEST_LEN;
 use crate::exec::*;
 use crate::npo::*;
@@ -23,12 +26,19 @@ use crate::{Cfg, Error, FriParams, SecurityLevel, EF, F, MAX_QUBITS};
 
 /// Statement length: 4 context elements, then the 4-element terminal digest.
 pub const STATEMENT_LEN: usize = 4 + DIGEST_LEN;
+/// Sampling statement length: the above, then the seed (low and high 32 bits), the shot count
+/// and the 4-element counts digest.
+pub const SAMPLING_STATEMENT_LEN: usize = STATEMENT_LEN + 3 + DIGEST_LEN;
 
 /// A prepared leaf circuit.
 pub struct Leaf {
     prepared: PreparedCircuitProver<Cfg>,
     circuit: p3_circuit::Circuit<EF>,
     schema: StatementSchema,
+    n: usize,
+    /// Fused.
+    gates: Vec<Gate>,
+    sampling: Option<Sampling>,
 }
 
 /// A leaf proof with the statement it was proved for.
@@ -42,25 +52,47 @@ pub struct LeafProof {
 /// Builds and prepares the leaf circuit for `gates` on `n` qubits (`1 ≤ n ≤ MAX_QUBITS`) at
 /// `level`, which fixes the FRI parameters ([`FriParams::leaf`]) and so the verifier.
 pub fn build(level: SecurityLevel, n: usize, gates: Vec<Gate>) -> Result<Leaf, Error> {
-    build_with_tamper(FriParams::leaf(level), n, gates, Tamper::None)
+    build_with_tamper(FriParams::leaf(level), n, gates, None, Tamper::None)
+}
+
+/// [`build`] for a `sample_counts` leaf: the circuit ends in `sampling`'s measurements, and a
+/// proof also proves the counts of `sampling.shots` shots drawn under the seed in its
+/// statement (see [`crate::born`]).
+pub fn build_sampling(
+    level: SecurityLevel,
+    n: usize,
+    gates: Vec<Gate>,
+    sampling: Sampling,
+) -> Result<Leaf, Error> {
+    build_with_tamper(
+        FriParams::leaf(level),
+        n,
+        gates,
+        Some(sampling),
+        Tamper::None,
+    )
 }
 
 /// [`build`] with explicit FRI parameters (tests use [`FriParams::TESTING`] for speed).
 #[cfg(test)]
 pub(crate) fn build_with(fri: FriParams, n: usize, gates: Vec<Gate>) -> Result<Leaf, Error> {
-    build_with_tamper(fri, n, gates, Tamper::None)
+    build_with_tamper(fri, n, gates, None, Tamper::None)
 }
 
 pub(crate) fn build_with_tamper(
     fri: FriParams,
     n: usize,
     gates: Vec<Gate>,
+    sampling: Option<Sampling>,
     tamper: Tamper,
 ) -> Result<Leaf, Error> {
     if !(1..=MAX_QUBITS).contains(&n) {
         return Err(Error::InvalidCircuit(format!(
             "{n} qubits, supported 1..={MAX_QUBITS}"
         )));
+    }
+    if let Some(s) = &sampling {
+        s.validate(n)?;
     }
     for g in &gates {
         g.validate(n)?;
@@ -73,8 +105,16 @@ pub(crate) fn build_with_tamper(
     let cfg: Cfg = fri.config();
     let packing = TablePacking::default().with_min_trace_height(fri.min_trace_height());
     let mut b = CircuitBuilder::<EF>::new();
-    b.register_npo(SvGatePlugin { n, gates, tamper });
+    b.register_npo(SvGatePlugin {
+        n,
+        gates: gates.clone(),
+        sampling: sampling.clone(),
+        tamper,
+    });
     for p in gate_chunk_plugins() {
+        b.register_npo(p);
+    }
+    for p in sampling_plugins() {
         b.register_npo(p);
     }
     for p in [
@@ -86,17 +126,32 @@ pub(crate) fn build_with_tamper(
         b.register_npo(p);
     }
     let ctx: Vec<_> = (0..4).map(|_| b.public_input()).collect();
-    let (_, _, outs) = b.push_non_primitive_op_with_outputs(
-        gate_type(),
-        vec![],
-        vec![Some("d0"), Some("d1"), Some("d2"), Some("d3")],
-        None,
-        "sv",
-    );
+    // seed_lo, seed_hi, shots: read by the draw table.
+    let reads: Vec<_> = if sampling.is_some() {
+        (0..3).map(|_| b.public_input()).collect()
+    } else {
+        Vec::new()
+    };
+    const LABELS: [&str; 2 * DIGEST_LEN] = ["d0", "d1", "d2", "d3", "c0", "c1", "c2", "c3"];
+    let labels = LABELS[..outputs_len(sampling.is_some())]
+        .iter()
+        .map(|&l| Some(l))
+        .collect();
+    let inputs = if reads.is_empty() {
+        vec![]
+    } else {
+        vec![reads.clone()]
+    };
+    let (_, _, outs) =
+        b.push_non_primitive_op_with_outputs(gate_type(), inputs, labels, None, "sv");
+    let outs: Vec<_> = outs.into_iter().flatten().collect();
+    let (digest, counts) = outs.split_at(DIGEST_LEN);
     let exports: Vec<StatementExport> = ctx
         .iter()
+        .chain(digest)
+        .chain(&reads)
+        .chain(counts)
         .copied()
-        .chain(outs.into_iter().flatten())
         .map(StatementExport::Base)
         .collect();
     let schema = b
@@ -124,6 +179,9 @@ pub(crate) fn build_with_tamper(
         prepared,
         circuit,
         schema,
+        n,
+        gates,
+        sampling,
     })
 }
 
@@ -202,14 +260,53 @@ pub fn statement(ctx: [u64; 4], digest: [u64; DIGEST_LEN]) -> Result<Vec<F>, Err
         .collect()
 }
 
+/// Sampling statement `[context, digest, seed_lo, seed_hi, shots, counts digest]`, from
+/// canonical values like [`statement`].
+pub fn sampling_statement(
+    ctx: [u64; 4],
+    digest: [u64; DIGEST_LEN],
+    seed: u64,
+    shots: u32,
+    counts_digest: [u64; DIGEST_LEN],
+) -> Result<Vec<F>, Error> {
+    let mut s = statement(ctx, digest)?;
+    s.extend(seed_words(seed).map(F::from_u64));
+    s.push(F::from_u32(shots));
+    s.extend(statement(counts_digest, [0; DIGEST_LEN])?[..DIGEST_LEN].iter());
+    Ok(s)
+}
+
 impl Leaf {
-    /// Proves the circuit under `ctx` (from [`Dispatch::context`]); the returned statement holds the
-    /// terminal digest the circuit exported.
+    /// Proves the circuit under `ctx` (from [`Dispatch::context`]); the returned statement
+    /// holds the terminal digest the circuit exported. A sampling leaf proves with
+    /// [`Leaf::prove_sampling`].
     pub fn prove(&self, ctx: [u64; 4]) -> Result<LeafProof, Error> {
-        let ctx = statement(ctx, [0; DIGEST_LEN])?[..4].to_vec();
+        if self.sampling.is_some() {
+            return Err(Error::Prove("a sampling leaf needs a seed".into()));
+        }
+        self.prove_inputs(statement(ctx, [0; DIGEST_LEN])?[..4].to_vec())
+    }
+
+    /// Proves a sampling leaf under `ctx` and `seed`; also returns the counts (one per
+    /// classical register value, at least four), which the statement binds by their digest.
+    pub fn prove_sampling(&self, ctx: [u64; 4], seed: u64) -> Result<(LeafProof, Vec<u64>), Error> {
+        let Some(sampling) = &self.sampling else {
+            return Err(Error::Prove("not a sampling leaf".into()));
+        };
+        let mut inputs = statement(ctx, [0; DIGEST_LEN])?[..4].to_vec();
+        inputs.extend(seed_words(seed).map(F::from_u64));
+        inputs.push(F::from_u32(sampling.shots));
+        let proof = self.prove_inputs(inputs)?;
+        let plan = plan_fused(self.n, &self.gates);
+        let logical = plan.frame.logical(&run(self.n, &plan).1);
+        let counts = sample(&logical, sampling, seed)?.counts;
+        Ok((proof, counts))
+    }
+
+    fn prove_inputs(&self, inputs: Vec<F>) -> Result<LeafProof, Error> {
         let mut runner = self.circuit.runner();
         runner
-            .set_public_inputs(&ctx)
+            .set_public_inputs(&inputs)
             .map_err(|e| Error::Prove(format!("{e:?}")))?;
         let traces = runner.run().map_err(|e| Error::Prove(format!("{e:?}")))?;
         let proof = self
@@ -248,6 +345,37 @@ impl Leaf {
         digest: [u64; DIGEST_LEN],
     ) -> Result<(), Error> {
         self.verify(proof, &statement(dispatch.context(), digest)?)
+    }
+
+    /// Verifies a sampling leaf's `proof` for `dispatch` with the expected terminal `digest`,
+    /// the dispatched `seed`, and the reported `counts`: [`Leaf::verify`] against
+    /// [`sampling_statement`] with the circuit's shot count and the counts' digest.
+    pub fn verify_sampling(
+        &self,
+        proof: &BatchStarkProof<Cfg>,
+        dispatch: &Dispatch<'_>,
+        digest: [u64; DIGEST_LEN],
+        seed: u64,
+        counts: &[u64],
+    ) -> Result<(), Error> {
+        let Some(sampling) = &self.sampling else {
+            return Err(Error::Verify("not a sampling leaf".into()));
+        };
+        if counts.len() != sampling.counts_len() {
+            return Err(Error::Verify(format!(
+                "{} counts, expected {}",
+                counts.len(),
+                sampling.counts_len()
+            )));
+        }
+        let s = sampling_statement(
+            dispatch.context(),
+            digest,
+            seed,
+            sampling.shots,
+            counts_digest(counts),
+        )?;
+        self.verify(proof, &s)
     }
 
     /// The verifier fixing this circuit's relation and preprocessed commitment.

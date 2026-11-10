@@ -29,7 +29,7 @@ fn gates() -> Vec<Gate> {
 }
 
 fn leaf(tamper: Tamper) -> Leaf {
-    build_with_tamper(FRI, 3, gates(), tamper).unwrap()
+    build_with_tamper(FRI, 3, gates(), None, tamper).unwrap()
 }
 
 fn honest_statement() -> Vec<F> {
@@ -1165,4 +1165,247 @@ fn a_proof_is_bound_to_its_dispatch() {
     let mut longer = full.clone();
     longer.push(F::ZERO);
     assert!(l.verify(&p.proof, &longer).is_err());
+}
+
+fn bell_sampling(shots: u32) -> crate::born::Sampling {
+    use crate::born::{Measure, Sampling};
+    Sampling {
+        measures: vec![Measure { qubit: 0, cbit: 0 }, Measure { qubit: 1, cbit: 1 }],
+        cbits: 2,
+        shots,
+    }
+}
+
+fn sampling_leaf(tamper: Tamper) -> Leaf {
+    let gates = vec![Gate::h(0), Gate::cnot(0, 1), Gate::ry(1, 0.7)];
+    build_with_tamper(FRI, 2, gates, Some(bell_sampling(64)), tamper).unwrap()
+}
+
+/// The sampling leaf proves the counts its native sampling gives, and verifies only for its
+/// dispatch, state digest, seed and counts.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn sampling_leaf_proves_its_counts() {
+    use crate::born::{counts_digest, sample};
+    use crate::leaf::{sampling_statement, SAMPLING_STATEMENT_LEN};
+    let gates = vec![Gate::h(0), Gate::cnot(0, 1), Gate::ry(1, 0.7)];
+    let l = sampling_leaf(Tamper::None);
+    let d = Dispatch {
+        circuit_id: "c",
+        sub_task_id: "s",
+        node_id: "n",
+        slice_id: "0",
+    };
+    let seed = 0xDEAD_BEEF_0123_4567;
+    let (p, counts) = l.prove_sampling(d.context(), seed).unwrap();
+    assert_eq!(p.statement.len(), SAMPLING_STATEMENT_LEN);
+    let fin = execute(2, &gates).1;
+    let digest = terminal_digest(&fin);
+    assert_eq!(
+        counts,
+        sample(&fin, &bell_sampling(64), seed).unwrap().counts
+    );
+    assert_eq!(counts.iter().sum::<u64>(), 64);
+    assert_eq!(
+        p.statement,
+        sampling_statement(d.context(), digest, seed, 64, counts_digest(&counts)).unwrap()
+    );
+    l.verify_sampling(&p.proof, &d, digest, seed, &counts)
+        .unwrap();
+
+    let mut other = counts.clone();
+    let k = other.iter().position(|&c| c > 0).unwrap();
+    other[k] -= 1;
+    other[(k + 1) % 4] += 1;
+    assert!(l
+        .verify_sampling(&p.proof, &d, digest, seed, &other)
+        .is_err());
+    assert!(l
+        .verify_sampling(&p.proof, &d, digest, seed ^ 1, &counts)
+        .is_err());
+    let mut wrong = digest;
+    wrong[0] ^= 1;
+    assert!(l
+        .verify_sampling(&p.proof, &d, wrong, seed, &counts)
+        .is_err());
+    let other_node = Dispatch { node_id: "m", ..d };
+    assert!(l
+        .verify_sampling(&p.proof, &other_node, digest, seed, &counts)
+        .is_err());
+    // The shot count is part of the statement.
+    let mut more = p.statement.clone();
+    more[STATEMENT_LEN + 2] += F::ONE;
+    assert!(l.verify(&p.proof, &more).is_err());
+    // A unitary leaf of the same circuit does not accept it.
+    let unitary = build_with(FRI, 2, gates).unwrap();
+    assert!(unitary
+        .verify(&p.proof, &p.statement[..STATEMENT_LEN])
+        .is_err());
+    assert!(l.prove(d.context()).is_err());
+}
+
+/// Forged samplings are rejected even with the statement the forgery exports.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn forged_samplings_are_rejected() {
+    for t in [Tamper::CountShift, Tamper::DrawMove] {
+        let l = sampling_leaf(t);
+        let (p, _) = l.prove_sampling(CTX, 7).unwrap();
+        assert!(l.verify(&p.proof, &p.statement).is_err(), "{t:?} accepted");
+    }
+}
+
+/// Pins the sampling: draws come from the leaf's Poseidon2 under the seed, so a change there
+/// changes every count.
+#[test]
+fn sampling_known_answer() {
+    use crate::born::sample;
+    let fin = execute(2, &[Gate::h(0), Gate::cnot(0, 1), Gate::ry(1, 0.7)]).1;
+    let run = sample(&fin, &bell_sampling(64), 0xDEAD_BEEF_0123_4567).unwrap();
+    assert!(run.rejects > 0, "the rejection branch is exercised");
+    assert_eq!(run.counts, vec![25, 4, 6, 29]);
+}
+
+/// Each shot picks a basis state with probability `p_b / T`: frequencies over many shots
+/// match the Born probabilities.
+#[test]
+fn sampling_follows_born_probabilities() {
+    use crate::born::{sample, Measure, Sampling};
+    let n = 3;
+    let gates = vec![
+        Gate::ry(0, 1.1),
+        Gate::h(1),
+        Gate::cnot(1, 2),
+        Gate::rx(2, 0.4),
+    ];
+    let fin = execute(n, &gates).1;
+    let shots = 1 << 16;
+    let s = Sampling {
+        measures: (0..n).map(|q| Measure { qubit: q, cbit: q }).collect(),
+        cbits: n,
+        shots,
+    };
+    let counts = sample(&fin, &s, 99).unwrap().counts;
+    let w: Vec<f64> = fin
+        .iter()
+        .map(|&(re, im)| (re as f64).powi(2) + (im as f64).powi(2))
+        .collect();
+    let total: f64 = w.iter().sum();
+    for (b, &c) in counts.iter().enumerate() {
+        let p = w[b] / total;
+        let sd = (shots as f64 * p * (1.0 - p)).sqrt();
+        let dev = (c as f64 - shots as f64 * p).abs();
+        assert!(
+            dev <= 5.0 * sd + 1.0,
+            "basis {b}: {c} vs {:.1}",
+            shots as f64 * p
+        );
+    }
+}
+
+/// Registers: a later measure into the same cbit wins, unmeasured cbits stay 0, and
+/// unmeasured qubits are marginalized.
+#[test]
+fn sampling_outcomes_follow_the_measurements() {
+    use crate::born::{Measure, Sampling};
+    let s = Sampling {
+        measures: vec![
+            Measure { qubit: 0, cbit: 2 },
+            Measure { qubit: 2, cbit: 0 },
+            Measure { qubit: 1, cbit: 0 },
+        ],
+        cbits: 3,
+        shots: 1,
+    };
+    assert_eq!(s.outcome(0b001), 0b100);
+    assert_eq!(s.outcome(0b100), 0b000);
+    assert_eq!(s.outcome(0b010), 0b001);
+    assert_eq!(s.outcome(0b111), 0b101);
+    assert_eq!(s.counts_len(), 8);
+    let one = Sampling {
+        measures: vec![],
+        cbits: 1,
+        shots: 1,
+    };
+    assert_eq!(one.counts_len(), 4);
+    for bad in [
+        Sampling {
+            shots: 0,
+            ..one.clone()
+        },
+        Sampling {
+            shots: (1 << 16) + 1,
+            ..one.clone()
+        },
+        Sampling {
+            cbits: 0,
+            ..one.clone()
+        },
+        Sampling {
+            cbits: 17,
+            ..one.clone()
+        },
+        Sampling {
+            measures: vec![Measure { qubit: 3, cbit: 0 }],
+            ..one.clone()
+        },
+        Sampling {
+            measures: vec![Measure { qubit: 0, cbit: 1 }],
+            ..one.clone()
+        },
+    ] {
+        assert!(
+            build_with_tamper(FRI, 3, vec![Gate::h(0)], Some(bad.clone()), Tamper::None).is_err(),
+            "{bad:?}"
+        );
+    }
+}
+
+/// Small sampling leaves prove in debug builds too, where `prove` checks every constraint: one
+/// qubit (a single counts block for one cbit), and four qubits with one measured.
+#[test]
+fn small_sampling_leaves_satisfy_their_constraints() {
+    use crate::born::{counts_digest, Measure, Sampling};
+    use crate::leaf::sampling_statement;
+    let cases = [
+        (
+            1,
+            vec![Gate::ry(0, 0.9)],
+            vec![Measure { qubit: 0, cbit: 0 }],
+            1,
+        ),
+        (
+            4,
+            vec![Gate::h(0), Gate::cnot(0, 3), Gate::rz(3, 0.3), Gate::h(2)],
+            vec![Measure { qubit: 3, cbit: 1 }],
+            2,
+        ),
+    ];
+    for (n, gates, measures, cbits) in cases {
+        let s = Sampling {
+            measures,
+            cbits,
+            shots: 5,
+        };
+        let l = build_with_tamper(FRI, n, gates.clone(), Some(s), Tamper::None).unwrap();
+        let (p, counts) = l.prove_sampling(CTX, 3).unwrap();
+        let digest = terminal_digest(&execute(n, &gates).1);
+        let want = sampling_statement(CTX, digest, 3, 5, counts_digest(&counts)).unwrap();
+        l.verify(&p.proof, &want).unwrap();
+    }
+}
+
+/// Recursion takes a sampling leaf like any other: the layer verifies against the 15-element
+/// statement.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn recursion_over_a_sampling_leaf() {
+    let l = sampling_leaf(Tamper::None);
+    let (p, _) = l.prove_sampling(CTX, 11).unwrap();
+    let layer = Layer::over_leaf(&l, &p).unwrap();
+    let r = layer.prove(&p.proof, &p.statement).unwrap();
+    verify(&layer.verifier(), &r.proof, &p.statement).unwrap();
+    let mut other = p.statement.clone();
+    *other.last_mut().unwrap() += F::ONE;
+    assert!(verify(&layer.verifier(), &r.proof, &other).is_err());
 }

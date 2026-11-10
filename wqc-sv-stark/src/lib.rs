@@ -8,6 +8,8 @@
 //! The circuit field is Goldilocks (base, `D = 1`): a recursion layer's first input must be a
 //! base-field circuit. Recursion layers run over Goldilocks².
 
+pub mod born;
+mod born_tables;
 pub mod digest;
 pub mod exec;
 pub mod leaf;
