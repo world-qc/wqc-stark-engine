@@ -13,7 +13,8 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   leaf is built. A proof only verifies against the verifier of the circuit it was built for
   (`Leaf::verifier()`), so a verifier must be derived from the expected circuit, never taken
   from the prover.
-- **Statement.** `[context(4), digest(4)]`, eight Goldilocks elements and fixed. The context
+- **Statement.** `[context(4), digest(4)]`, eight Goldilocks elements and fixed (a sampling
+  leaf appends the seed, shot count and counts digest; see [Sampling](#sampling)). The context
   binds the proof to its dispatch (below); the digest is computed in-circuit from the final
   state. Both are public values of the proof, so a proof verifies only against its own. The
   statement does not name the circuit: it is meaningful only together with that circuit's
@@ -112,6 +113,51 @@ although the two commute. Changing the rule changes the result, so the rule is p
 leaf format: before anything consumes these digests, the leaf format will be tied to a
 capability bit or leaf version, and a new rule needs a new one.
 
+## Sampling
+
+`leaf::build_sampling(level, n, gates, sampling)` builds a `sample_counts` leaf: the same
+circuit followed by terminal Z measurements (`Sampling { measures, cbits, shots }`, each
+`Measure { qubit, cbit }`), and a proof also proves the counts of `shots` shots drawn from the
+final state under a seed. The unitary part and its digest are unchanged; the sampling tables
+read the final amplitudes from the boundary table, so one proof covers both.
+
+- **Weights.** `p_b = re_b² + im_b²` of the final logical amplitudes (integers in units of
+  2^-56), with running sums `C_b = p_0 + … + p_b` and total `T = C_{2^n−1}` (about 2^56; it
+  is not exactly 2^56 because of rounding, and nothing is divided by it).
+- **Draws.** Draw `j` is `u_j = r_j mod 2^57`, where `r_j` is word `j mod 4` of the leaf's
+  Poseidon2 permutation of `[seed_lo, seed_hi, ⌊j/4⌋, 0, 0x50524631, 0, 0, 0]`, as a
+  canonical integer below the Goldilocks prime `p`. The words below `2^57 − 2^32 + 1` occur
+  equally often among field elements, and all of `[0, T)` lies below that, so an accepted draw
+  is uniform on `[0, T)`.
+- **Choice.** A draw with `u_j ≥ T` is rejected; otherwise it picks the basis state `b` with
+  `C_{b−1} ≤ u_j < C_b`. Draws continue until `shots` are accepted, so each shot picks `b`
+  with probability `p_b / T`. About half the draws are accepted; the leaf provides
+  `2s + 14⌈√(2s)⌉ + 128` draws (rounded up to a multiple of four) for `s` shots, which run out
+  with probability below 2^-115, and proving fails if they do.
+- **Counts.** A shot of basis state `b` counts toward the classical register its measurements
+  give it: bit `cbit` is the measured qubit's bit, a later measure into the same cbit wins,
+  and unmeasured cbits are 0. The counts are a vector indexed by the register value
+  (`max(2^cbits, 4)` entries), and their digest is a Poseidon2 sponge over that vector, four
+  counts per block from the zero state, the first four state elements (`born::counts_digest`).
+- **Statement.** `[context(4), digest(4), seed_lo, seed_hi, shots, counts_digest(4)]`
+  (`SAMPLING_STATEMENT_LEN = 15`). The measurements and shot count are part of the circuit;
+  the seed is not, so one verifier serves every seed. `Leaf::verify_sampling(proof, &dispatch,
+  digest, seed, &counts)` builds the expected statement from the dispatch, the expected state
+  digest, the dispatched seed and the reported counts. The statement holds only the counts'
+  digest, which reduces each count mod p, so the reported counts must be canonical: a `u64`
+  vector of `counts_len` entries, each at most `shots`, summing to `shots`.
+  `verify_sampling` checks this; a caller building the statement with `sampling_statement`
+  must check it too. Every honest node reports the same counts, so a quorum compares
+  `statement[4..]` once each node's counts pass that check.
+- **Not v1's sampling.** v1 draws `f64` values from `StdRng` (ChaCha12) against `f64`
+  probabilities, which cannot be proved at reasonable cost. The same seed gives different
+  counts here, from the same distribution.
+- **Limits.** `1 ≤ shots ≤ 2^16`, `1 ≤ cbits ≤ 16`, every measure inside `n` and `cbits`.
+- **Cost.** The sampling adds `2^n` weight rows, the draw rows, a quarter as many
+  permutations, and `max(2^cbits, 4)/4` counts rows. On an 8-core machine, a leaf at n = 16
+  with 64 rounding steps, all 16 qubits measured, proves in 35 s with 1024 shots and 42 s with
+  2^16 shots (35 s without sampling); the proof grows by about 80–100 KB.
+
 ## Security levels
 
 The orchestrator's `security_level` sets the leaf's FRI query count: `leaf::build` takes a
@@ -203,6 +249,15 @@ let agg = Aggregation::new((layer.verifier(), &ra), (layer.verifier(), &rb))?;
 let root = agg.prove(&ra, &rb)?;
 let expected_root = [expected_a, leaf::statement(d2.context(), digest)?].concat();
 verify(&agg.verifier(), &root.proof, &expected_root)?;
+```
+
+A sampling leaf proves with a seed and also returns the counts:
+
+```rust,ignore
+let s = Sampling { measures: vec![Measure { qubit: 0, cbit: 0 }, Measure { qubit: 1, cbit: 1 }], cbits: 2, shots: 1024 };
+let bell = leaf::build_sampling(level, 2, gates.clone(), s)?;
+let (p, counts) = bell.prove_sampling(d1.context(), seed)?;
+bell.verify_sampling(&p.proof, &d1, digest, seed, &counts)?;
 ```
 
 Recursion goes through Plonky3-recursion's trusted prepared owners: each layer keeps its

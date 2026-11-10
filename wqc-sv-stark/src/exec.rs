@@ -519,6 +519,12 @@ pub(crate) enum Tamper {
     /// The digest table hashes a different final state than the gate table produced; the
     /// output digest is that other state's (only `fin` can catch it).
     DigestSwap,
+    /// The counts table reports one shot under another register value; the counts digest is
+    /// of those counts (only `out` can catch it).
+    CountShift,
+    /// One accepted draw is credited to another basis state's interval, which its value does
+    /// not lie in; hits and counts follow (only the draw's range checks can catch it).
+    DrawMove,
 }
 
 pub(crate) fn apply_tamper(tamper: Tamper, rows: &mut [PairRow], fin: &mut [C], steps: usize) {
@@ -551,7 +557,7 @@ pub(crate) fn apply_tamper(tamper: Tamper, rows: &mut [PairRow], fin: &mut [C], 
                 fin[idx[q]] = rows[k].b[q];
             }
         }
-        Tamper::DigestSwap => {}
+        Tamper::DigestSwap | Tamper::CountShift | Tamper::DrawMove => {}
         Tamper::Remainder => {
             let k = rows
                 .iter()
