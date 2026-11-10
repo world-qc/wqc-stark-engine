@@ -329,9 +329,24 @@ fn wire_counts_are_canonical() {
         r#"{"counts":{"000":4,"011":1,"110":18446744073709551615},"shots":10}"#,
         r#"{"counts":{"000":10},"shots":10,"seed":1}"#,
         r#"{"counts":{"000":10}}"#,
+        // Same counts, not the canonical bytes.
+        r#"{"counts":{"110":5,"000":4,"011":1},"shots":10}"#,
+        r#"{"counts": {"000":4,"011":1,"110":5},"shots":10}"#,
+        r#"{"shots":10,"counts":{"000":4,"011":1,"110":5}}"#,
+        r#"{"counts":{"000":4,"011":1,"110":5,"110":5},"shots":10}"#,
+        r#"{"counts":{"000":4,"011":1,"110":05},"shots":10}"#,
     ] {
         assert!(parse_counts(bad, &s).is_err(), "{bad}");
     }
+    // A sampling out of range is refused rather than sized.
+    assert!(parse_counts(
+        &json,
+        &Sampling {
+            cbits: 64,
+            ..s.clone()
+        }
+    )
+    .is_err());
 }
 
 #[test]
@@ -1483,12 +1498,17 @@ fn sampling_outcomes_follow_the_measurements() {
     assert_eq!(s.outcome(0b111), 0b101);
     assert_eq!(s.counts_len(), 8);
     let one = Sampling {
-        measures: vec![],
+        measures: vec![Measure { qubit: 0, cbit: 0 }],
         cbits: 1,
         shots: 1,
     };
     assert_eq!(one.counts_len(), 4);
+    assert!(build_with_tamper(FRI, 3, vec![Gate::h(0)], Some(one.clone()), Tamper::None).is_ok());
     for bad in [
+        Sampling {
+            measures: vec![],
+            ..one.clone()
+        },
         Sampling {
             shots: 0,
             ..one.clone()

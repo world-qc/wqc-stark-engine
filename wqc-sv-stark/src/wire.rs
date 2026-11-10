@@ -108,11 +108,14 @@ struct SampleResult {
 }
 
 /// Reads a `SampleResult` JSON into the counts vector of `sampling` (indexed by register
-/// value, [`Sampling::counts_len`] entries). Only the canonical form is accepted, so one
-/// counts vector has one JSON (and one result hash): keys of exactly `cbits` characters `0`
-/// and `1`, no zero counts, `shots` equal to the sampling's and to the sum of the counts.
+/// value, [`Sampling::counts_len`] entries): keys of exactly `cbits` characters `0` and `1`, no
+/// zero counts, `shots` equal to the sampling's and to the sum of the counts. Only the exact
+/// bytes [`counts_json`] writes are accepted (key order, no spaces, no duplicate keys), so one
+/// counts vector has one JSON and one result hash. It errors if `sampling`'s `shots` or
+/// `cbits` is out of range (as [`crate::leaf::build_sampling`] checks).
 pub fn parse_counts(json: &str, sampling: &Sampling) -> Result<Vec<u64>, Error> {
     let bad = |m: String| Error::Verify(format!("counts JSON: {m}"));
+    sampling.validate_counts()?;
     let r: SampleResult = serde_json::from_str(json).map_err(|e| bad(e.to_string()))?;
     let shots = u64::from(sampling.shots);
     if r.shots != shots {
@@ -135,13 +138,22 @@ pub fn parse_counts(json: &str, sampling: &Sampling) -> Result<Vec<u64>, Error> 
     if sum != shots {
         return Err(bad(format!("counts add up to {sum}, expected {shots}")));
     }
+    if counts_json(&counts, sampling.cbits) != json {
+        return Err(bad("not in canonical form".into()));
+    }
     Ok(counts)
 }
 
 /// The canonical `SampleResult` JSON of a counts vector: what wqc-core reports and
 /// [`parse_counts`] accepts, byte for byte the orchestrator's marshaling (keys in order, no
 /// spaces, zero counts omitted).
+///
+/// Every nonzero count must be at an index below `2^cbits` (a register of `cbits` bits).
 pub fn counts_json(counts: &[u64], cbits: usize) -> String {
+    debug_assert!(
+        counts.iter().skip(1 << cbits).all(|&c| c == 0),
+        "a nonzero count past 2^cbits"
+    );
     let mut pairs = Vec::new();
     for (reg, &c) in counts.iter().enumerate() {
         if c > 0 {

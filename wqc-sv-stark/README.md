@@ -66,7 +66,10 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
 - At most `2^22` gate rows (`MAX_ROWS`): rounding steps × `2^(n−1)`, so 128 rounding steps at
   n = 16. `leaf::gate_rows(n, gates)` counts them without building the leaf (it is the work
   `W` a scheduler compares with what a node can prove); `build` rejects a circuit over the
-  limit. At about 4.6 KB per gate row (plus 0.3 GB), a leaf at the limit needs about 20 GB.
+  limit. Proving takes about 4.6 KB per gate row plus 0.3 GB, so a leaf at the limit needs
+  about 20 GB. Building its verifier (`Leaf::leaf_verifier`, see below) peaks at about 0.9 KB
+  per gate row (3.7 GB at the limit), and the verifier then keeps about 40 bytes per row
+  (163 MB).
 - Gates: wqc-core's unitary gate set — H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY, RZ — with the same
   matrices and phases as its dense engine (a test checks each gate against those formulas,
   global phase included, since it changes the digest). Rotation angles become fixed-point
@@ -273,9 +276,12 @@ that verifier rather than read from the proof.
 `wire::parse_circuit` reads wqc-core's gate JSON (`[{"type":"H","params":0},
 {"type":"RZ","params":[0,0.5]}, …]`, terminal `MEASURE`s last; no RESET or IF), and
 `wire::parse_counts` / `wire::counts_json` convert counts to and from the canonical
-`{"counts":{"01":3,…},"shots":N}` (Qiskit key order, zero counts omitted). The prover and the
-verifier both go through these, so they derive the same gates and counts: `serde_json` parses
-with `float_roundtrip`, so an angle is the exact `f64` the orchestrator marshaled. Proofs travel
+`{"counts":{"01":3,…},"shots":N}` (Qiskit key order, zero counts omitted; `parse_counts`
+accepts only the exact bytes `counts_json` writes). They are meant for both sides: the verifier
+(through the FFI) uses them now, and wqc-core is to use them when it proves v2 leaves, so both
+derive the same gates and counts. `serde_json` parses with `float_roundtrip`, so an angle is
+the exact `f64` the orchestrator marshaled; once wqc-core depends on this crate, feature
+unification turns it on for its parsing too. Proofs travel
 as `leaf::encode_proof` / `decode_proof` (postcard, pinned).
 
 `Leaf::leaf_verifier()` returns a `LeafVerifier`: the verifier and the sampling, without the

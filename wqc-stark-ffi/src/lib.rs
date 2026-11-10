@@ -753,12 +753,18 @@ fn cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 
 /// Gate rows `W` of the v2 leaf for `circuit_json` on `qubit_count` qubits (rounding steps ×
 /// 2^(n−1)): the work that sets a leaf's proving time and memory, for scheduling and TTLs.
-/// `circuit_json` is wqc-core's gate list; terminal MEASUREs are allowed and not counted (a
-/// sampling leaf has further tables this does not count). It does not apply the leaf's row
-/// limit (`wqc_sv_max_rows`), so a scheduler can see how far over a circuit is.
+/// `circuit_json` is wqc-core's gate list. Terminal MEASUREs are allowed and their qubits
+/// checked; their cbits are not (the register size is not an argument), so
+/// `wqc_sv_leaf_new` can still reject a circuit this accepts. It does not apply the leaf's
+/// row limit (`wqc_sv_max_rows`), so a scheduler can see how far over a circuit is.
+///
+/// A `sample_counts` leaf has further tables (weights, draws, counts) this does not count;
+/// with many shots and few qubits they outweigh the gate rows, so `W` alone underestimates
+/// such a leaf.
 ///
 /// Returns the row count (≥ 0), `-1` if the circuit has no v2 leaf (bad JSON, RESET or IF,
-/// a qubit outside `qubit_count`, `qubit_count` outside 1..=16), or `-99` on panic.
+/// a gate or MEASURE qubit outside `qubit_count`, `qubit_count` outside 1..=16), or `-99` on
+/// panic.
 ///
 /// # Safety
 ///
@@ -770,7 +776,17 @@ pub unsafe extern "C" fn wqc_sv_leaf_rows(qubit_count: u32, circuit_json: *const
             eprintln!("[Rust FFI] sv_leaf_rows: null or non-UTF-8 circuit");
             return -1;
         };
-        match parse_circuit(json).and_then(|c| gate_rows(qubit_count as usize, &c.gates)) {
+        let n = qubit_count as usize;
+        let rows = parse_circuit(json).and_then(|c| {
+            if let Some(m) = c.measures.iter().find(|m| m.qubit >= n) {
+                return Err(wqc_sv_stark::Error::InvalidCircuit(format!(
+                    "MEASURE of qubit {} with {n} qubits",
+                    m.qubit
+                )));
+            }
+            gate_rows(n, &c.gates)
+        });
+        match rows {
             Ok(rows) => rows as i64,
             Err(err) => {
                 eprintln!("[Rust FFI] sv_leaf_rows: {err}");
@@ -1093,6 +1109,8 @@ mod sv_tests {
             assert_eq!(wqc_sv_leaf_rows(17, c("[]").as_ptr()), -1);
             assert_eq!(wqc_sv_leaf_rows(2, c("not json").as_ptr()), -1);
             assert_eq!(wqc_sv_leaf_rows(2, std::ptr::null()), -1);
+            let far = r#"[{"type":"MEASURE","params":{"qubit":9,"cbit":0}}]"#;
+            assert_eq!(wqc_sv_leaf_rows(2, c(far).as_ptr()), -1);
         }
         assert_eq!(wqc_sv_max_rows(), 1 << 22);
     }
@@ -1106,6 +1124,8 @@ mod sv_tests {
                 (BELL, 2, 0, "nope"),
                 (BELL_MEASURED, 2, 1 << 17, "low"),
                 (BELL_MEASURED, 0, 16, "low"),
+                // core rejects sample_counts without a MEASURE; so does the verifier.
+                (BELL, 2, 16, "low"),
                 (r#"[{"type":"RESET","params":0}]"#, 0, 0, "low"),
             ] {
                 let leaf = wqc_sv_leaf_new(2, c(json).as_ptr(), cbits, shots, c(level).as_ptr());
@@ -1168,6 +1188,16 @@ mod sv_tests {
             other[k] -= 1;
             other[(k + 1) % 4] += 1;
             assert_eq!(verify_sampling(v, seed, &counts_json(&other, 2), &proof), 0);
+            // The same counts, not as the canonical bytes or not canonical as integers.
+            let spaced = json.replacen(':', ": ", 1);
+            assert_eq!(verify_sampling(v, seed, &spaced, &proof), 0);
+            let p = 0xFFFF_FFFF_0000_0001u64;
+            let shifted = format!("{{\"counts\":{{\"00\":{}}},\"shots\":64}}", 64 + p);
+            assert_eq!(verify_sampling(v, seed, &shifted, &proof), 0);
+            let zero = json.replacen("\"counts\":{", "\"counts\":{\"00\":0,", 1);
+            assert_eq!(verify_sampling(v, seed, &zero, &proof), 0);
+            let long_key = json.replacen("\"0", "\"00", 1);
+            assert_eq!(verify_sampling(v, seed, &long_key, &proof), 0);
             assert_eq!(verify(v, IDS[2], digest(), &proof), 0);
             wqc_sv_leaf_free(v);
         }
