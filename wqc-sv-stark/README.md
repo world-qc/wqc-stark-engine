@@ -143,8 +143,12 @@ read the final amplitudes from the boundary table, so one proof covers both.
   (`SAMPLING_STATEMENT_LEN = 15`). The measurements and shot count are part of the circuit;
   the seed is not, so one verifier serves every seed. `Leaf::verify_sampling(proof, &dispatch,
   digest, seed, &counts)` builds the expected statement from the dispatch, the expected state
-  digest, the dispatched seed and the reported counts. Every honest node reports the same
-  counts, so a quorum compares `statement[4..]`.
+  digest, the dispatched seed and the reported counts. The statement holds only the counts'
+  digest, which reduces each count mod p, so the reported counts must be canonical: a `u64`
+  vector of `counts_len` entries, each at most `shots`, summing to `shots`.
+  `verify_sampling` checks this; a caller building the statement with `sampling_statement`
+  must check it too. Every honest node reports the same counts, so a quorum compares
+  `statement[4..]` once each node's counts pass that check.
 - **Not v1's sampling.** v1 draws `f64` values from `StdRng` (ChaCha12) against `f64`
   probabilities, which cannot be proved at reasonable cost. The same seed gives different
   counts here, from the same distribution.

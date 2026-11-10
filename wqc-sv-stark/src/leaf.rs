@@ -246,18 +246,9 @@ pub(crate) fn reduce_words(h: [u8; 32]) -> [u64; 4] {
 /// Statement `[context, digest]` from canonical `u64`s; values at or above the field modulus
 /// are rejected rather than reduced.
 pub fn statement(ctx: [u64; 4], digest: [u64; DIGEST_LEN]) -> Result<Vec<F>, Error> {
-    ctx.iter()
-        .chain(digest.iter())
-        .map(|&x| {
-            if x < F::ORDER_U64 {
-                Ok(F::from_u64(x))
-            } else {
-                Err(Error::InvalidStatement(format!(
-                    "{x} is not below the field modulus"
-                )))
-            }
-        })
-        .collect()
+    let mut s = canonical(ctx)?.to_vec();
+    s.extend(canonical(digest)?);
+    Ok(s)
 }
 
 /// Sampling statement `[context, digest, seed_lo, seed_hi, shots, counts digest]`, from
@@ -272,8 +263,22 @@ pub fn sampling_statement(
     let mut s = statement(ctx, digest)?;
     s.extend(seed_words(seed).map(F::from_u64));
     s.push(F::from_u32(shots));
-    s.extend(statement(counts_digest, [0; DIGEST_LEN])?[..DIGEST_LEN].iter());
+    s.extend(canonical(counts_digest)?);
     Ok(s)
+}
+
+/// Statement words as field elements, rejecting any not below the modulus.
+fn canonical<const N: usize>(words: [u64; N]) -> Result<[F; N], Error> {
+    let mut out = [F::ZERO; N];
+    for (o, &x) in out.iter_mut().zip(&words) {
+        if x >= F::ORDER_U64 {
+            return Err(Error::InvalidStatement(format!(
+                "{x} is not below the field modulus"
+            )));
+        }
+        *o = F::from_u64(x);
+    }
+    Ok(out)
 }
 
 impl Leaf {
@@ -350,6 +355,12 @@ impl Leaf {
     /// Verifies a sampling leaf's `proof` for `dispatch` with the expected terminal `digest`,
     /// the dispatched `seed`, and the reported `counts`: [`Leaf::verify`] against
     /// [`sampling_statement`] with the circuit's shot count and the counts' digest.
+    ///
+    /// # Security
+    ///
+    /// The digest reduces each count mod p, so it binds the counts only as field elements.
+    /// The counts must also be canonical: `counts_len` entries, each at most `shots`, summing
+    /// to `shots`. This checks that; a caller building the statement itself must too.
     pub fn verify_sampling(
         &self,
         proof: &BatchStarkProof<Cfg>,
@@ -366,6 +377,13 @@ impl Leaf {
                 "{} counts, expected {}",
                 counts.len(),
                 sampling.counts_len()
+            )));
+        }
+        // Checking each count first keeps the sum from overflowing.
+        let shots = u64::from(sampling.shots);
+        if counts.iter().any(|&c| c > shots) || counts.iter().sum::<u64>() != shots {
+            return Err(Error::Verify(format!(
+                "counts do not add up to {shots} shots"
             )));
         }
         let s = sampling_statement(

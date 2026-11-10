@@ -48,7 +48,9 @@ pub(crate) const FP: usize = 2;
 const F_WIDTH: usize = 2 * PW;
 
 /// Counts table preprocessed: real, first register value of the block, is_last, then
-/// (output witness index, multiplicity) per digest word.
+/// (output witness index, multiplicity) per digest word. The AIR does not read is_last (the
+/// preprocessor finds the last row by it); the multiplicities are 0 except on the last row,
+/// like the digest table's.
 pub(crate) const CP: usize = 3 + 2 * DIGEST_LEN;
 const C_CNT: usize = 0;
 const C_IN: usize = RATE;
@@ -188,6 +190,11 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for WeightTableAir {
             [b.clone(), cum, nxt.clone(), AB::Expr::ONE],
             Count::provided(mult.clone()),
         );
+        // Both sides of OUT are field multiplicities with no height bound. That is enough:
+        // LogUp makes each register's count equal, in the field, to the hits of the basis
+        // states reporting it, which BORN forces to the number of live draws (below p). The
+        // count columns are only bound as field elements; the verifier checks the published
+        // counts are canonical.
         builder.push_interaction(OUT, [outcome], Count::provided(mult));
         // The last row also provides the rejection interval [T, 2^57), index 2^n.
         builder.push_interaction(

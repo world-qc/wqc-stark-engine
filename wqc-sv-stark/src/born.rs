@@ -237,9 +237,10 @@ pub(crate) fn counts_sponge(counts: &[u64]) -> (Vec<[F; PW]>, Vec<[F; PW]>, [F; 
 }
 
 /// The counts digest a verifier recomputes from the published counts (one per classical
-/// register value, padded with zeros to at least four).
+/// register value, padded with zeros to a nonzero multiple of four). Each count is reduced
+/// mod p, so the digest does not bind counts at or above p: see [`crate::leaf::Leaf::verify_sampling`].
 pub fn counts_digest(counts: &[u64]) -> [u64; DIGEST_LEN] {
     let mut v = counts.to_vec();
-    v.resize(v.len().max(RATE), 0);
+    v.resize(v.len().max(1).next_multiple_of(RATE), 0);
     counts_sponge(&v).2.map(|x| x.as_canonical_u64())
 }

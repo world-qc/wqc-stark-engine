@@ -1220,6 +1220,19 @@ fn sampling_leaf_proves_its_counts() {
     assert!(l
         .verify_sampling(&p.proof, &d, digest, seed, &other)
         .is_err());
+    // Counts congruent mod p have the same digest, but are not canonical.
+    let p_u64 = <F as p3_field::PrimeField64>::ORDER_U64;
+    let shifted: Vec<u64> = counts.iter().map(|&c| c + p_u64).collect();
+    assert_eq!(counts_digest(&shifted), counts_digest(&counts));
+    assert!(l
+        .verify_sampling(&p.proof, &d, digest, seed, &shifted)
+        .is_err());
+    let mut wrapped = counts.clone();
+    wrapped[0] += 1;
+    wrapped[1] += p_u64 - 1;
+    assert!(l
+        .verify_sampling(&p.proof, &d, digest, seed, &wrapped)
+        .is_err());
     assert!(l
         .verify_sampling(&p.proof, &d, digest, seed ^ 1, &counts)
         .is_err());
@@ -1379,6 +1392,17 @@ fn small_sampling_leaves_satisfy_their_constraints() {
             vec![Gate::h(0), Gate::cnot(0, 3), Gate::rz(3, 0.3), Gate::h(2)],
             vec![Measure { qubit: 3, cbit: 1 }],
             2,
+        ),
+        // Eight counts: two sponge blocks.
+        (
+            3,
+            vec![Gate::h(0), Gate::h(1), Gate::ry(2, 1.1)],
+            vec![
+                Measure { qubit: 0, cbit: 0 },
+                Measure { qubit: 1, cbit: 1 },
+                Measure { qubit: 2, cbit: 2 },
+            ],
+            3,
         ),
     ];
     for (n, gates, measures, cbits) in cases {
