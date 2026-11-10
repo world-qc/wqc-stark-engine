@@ -22,6 +22,7 @@ use crate::born::{counts_digest, sample, seed_words, Sampling};
 use crate::digest::DIGEST_LEN;
 use crate::exec::*;
 use crate::npo::*;
+use crate::verify_cfg::VerifyCfg;
 use crate::{Cfg, Error, FriParams, SecurityLevel, EF, F, MAX_QUBITS, MAX_ROWS};
 
 /// Statement length: 4 context elements, then the 4-element terminal digest.
@@ -99,13 +100,22 @@ pub(crate) fn build_with(fri: FriParams, n: usize, gates: Vec<Gate>) -> Result<L
     build_with_tamper(fri, n, gates, None, Tamper::None)
 }
 
-pub(crate) fn build_with_tamper(
+/// A leaf circuit before preparation.
+struct Unprepared {
+    circuit: p3_circuit::Circuit<EF>,
+    schema: StatementSchema,
+    /// Fused.
+    gates: Vec<Gate>,
+    packing: TablePacking,
+}
+
+fn construct(
     fri: FriParams,
     n: usize,
     gates: Vec<Gate>,
-    sampling: Option<Sampling>,
+    sampling: &Option<Sampling>,
     tamper: Tamper,
-) -> Result<Leaf, Error> {
+) -> Result<Unprepared, Error> {
     let gates = validated_fuse(n, &gates)?;
     if let Some(s) = &sampling {
         s.validate(n)?;
@@ -116,7 +126,6 @@ pub(crate) fn build_with_tamper(
             "{rows} gate rows, supported up to {MAX_ROWS}"
         )));
     }
-    let cfg: Cfg = fri.config();
     let packing = TablePacking::default().with_min_trace_height(fri.min_trace_height());
     let mut b = CircuitBuilder::<EF>::new();
     b.register_npo(SvGatePlugin {
@@ -174,27 +183,70 @@ pub(crate) fn build_with_tamper(
     let circuit = b
         .build()
         .map_err(|e| Error::InvalidCircuit(format!("{e:?}")))?;
-    let preps: Vec<Box<dyn NpoPreprocessor<F>>> = vec![
-        Box::new(StatementPreprocessor::new(schema.clone())),
-        Box::new(SvPreprocessor),
-    ];
-    let mut builders: Vec<Box<dyn NpoAirBuilder<Cfg, 1>>> =
-        vec![Box::new(StatementAirBuilder::<1>::new(schema.clone()))];
-    builders.extend(air_builders());
-    let mut prover = BatchStarkProver::new(cfg).with_table_packing(packing);
-    prover.register_table_prover(Box::new(StatementProver::<1>::new(schema.clone())));
-    for p in table_provers() {
-        prover.register_table_prover(p);
-    }
-    let prepared = prover
-        .prepare_circuit::<EF, 1>(&circuit, &preps, &builders, ConstraintProfile::Standard)
-        .map_err(|e| Error::InvalidCircuit(format!("{e:?}")))?;
-    Ok(Leaf {
-        prepared,
+    Ok(Unprepared {
         circuit,
         schema,
-        n,
         gates,
+        packing,
+    })
+}
+
+/// Prepares an [`Unprepared`] leaf with config `$cfg` (a [`Cfg`] or a [`VerifyCfg`]: the same
+/// code, for two config types).
+macro_rules! prepare {
+    ($cfg:expr, $u:expr) => {{
+        let u: &Unprepared = $u;
+        let preps: Vec<Box<dyn NpoPreprocessor<F>>> = vec![
+            Box::new(StatementPreprocessor::new(u.schema.clone())),
+            Box::new(SvPreprocessor),
+        ];
+        let mut builders = vec![Box::new(StatementAirBuilder::<1>::new(u.schema.clone()))
+            as Box<dyn NpoAirBuilder<_, 1>>];
+        builders.extend(air_builders());
+        let mut prover = BatchStarkProver::new($cfg).with_table_packing(u.packing.clone());
+        prover.register_table_prover(Box::new(StatementProver::<1>::new(u.schema.clone())));
+        for p in table_provers() {
+            prover.register_table_prover(p);
+        }
+        prover
+            .prepare_circuit::<EF, 1>(&u.circuit, &preps, &builders, ConstraintProfile::Standard)
+            .map_err(|e| Error::InvalidCircuit(format!("{e:?}")))
+    }};
+}
+
+pub(crate) fn build_with_tamper(
+    fri: FriParams,
+    n: usize,
+    gates: Vec<Gate>,
+    sampling: Option<Sampling>,
+    tamper: Tamper,
+) -> Result<Leaf, Error> {
+    let u = construct(fri, n, gates, &sampling, tamper)?;
+    let prepared = prepare!(fri.config(), &u)?;
+    Ok(Leaf {
+        prepared,
+        circuit: u.circuit,
+        schema: u.schema,
+        n,
+        gates: u.gates,
+        sampling,
+    })
+}
+
+/// The verifier of the leaf [`build`] (or [`build_sampling`], with `sampling`) would give,
+/// built in less memory: the preprocessed commitment is computed one coset at a time and no
+/// proving data is kept (see [`crate::verify_cfg`]). It verifies the same proofs.
+pub fn build_verifier(
+    level: SecurityLevel,
+    n: usize,
+    gates: Vec<Gate>,
+    sampling: Option<Sampling>,
+) -> Result<LeafVerifier, Error> {
+    let fri = FriParams::leaf(level);
+    let u = construct(fri, n, gates, &sampling, Tamper::None)?;
+    let prepared = prepare!(VerifyCfg::new(fri.config()), &u)?;
+    Ok(LeafVerifier {
+        verifier: Verifier::Coset(prepared.verifier()),
         sampling,
     })
 }
@@ -229,6 +281,15 @@ fn rounding_steps(fused: &[Gate]) -> usize {
 pub fn gate_rows(n: usize, gates: &[Gate]) -> Result<usize, Error> {
     let fused = validated_fuse(n, gates)?;
     Ok(rounding_steps(&fused) << (n - 1))
+}
+
+/// An upper estimate of the memory [`build_verifier`] peaks at, in bytes, for a leaf of `rows`
+/// gate rows ([`gate_rows`]) on `n` qubits with `shots` (0 for a unitary leaf): 400 bytes per
+/// gate row, 600 per basis state, 800 per shot and 16 MiB. Measured peaks (live heap, n = 2 to
+/// 16, up to 2^22 rows and 2^16 shots) stay 15–80% below it; at 2^22 rows and n = 16 it is
+/// 1.73 GB against 1.45 GB measured. A scheduler divides the memory it can spare by it.
+pub fn verifier_peak_bytes(n: usize, rows: usize, shots: u64) -> u64 {
+    400 * rows as u64 + 600 * (1u64 << n.min(63)) + 800 * shots + (16 << 20)
 }
 
 /// Domain tag of [`Dispatch::context`]. Its `V1` versions the context encoding only; it is
@@ -411,7 +472,7 @@ impl Leaf {
     /// orchestrator caches one per circuit).
     pub fn leaf_verifier(&self) -> LeafVerifier {
         LeafVerifier {
-            verifier: self.prepared.verifier(),
+            verifier: Verifier::Leaf(self.prepared.verifier()),
             sampling: self.sampling.clone(),
         }
     }
@@ -426,8 +487,15 @@ impl Leaf {
 /// cheaply.
 #[derive(Clone)]
 pub struct LeafVerifier {
-    verifier: CircuitVerifier<Cfg>,
+    verifier: Verifier,
     sampling: Option<Sampling>,
+}
+
+/// The same relation and commitment, from a proving leaf or from [`build_verifier`].
+#[derive(Clone)]
+enum Verifier {
+    Leaf(CircuitVerifier<Cfg>),
+    Coset(CircuitVerifier<VerifyCfg>),
 }
 
 impl LeafVerifier {
@@ -444,9 +512,16 @@ impl LeafVerifier {
     /// signed and the digest it expects (a quorum's, or one recomputed from the result), never
     /// from the prover's [`LeafProof::statement`]. [`LeafVerifier::verify_dispatch`] does this.
     pub fn verify(&self, proof: &BatchStarkProof<Cfg>, statement: &[F]) -> Result<(), Error> {
-        self.verifier
-            .verify(proof, statement)
-            .map_err(|e| Error::Verify(format!("{e:?}")))
+        let checked = match &self.verifier {
+            Verifier::Leaf(v) => v.verify(proof, statement),
+            Verifier::Coset(v) => {
+                // The same proof type under the other config: re-read its bytes.
+                let proof = postcard::from_bytes(&encode_proof(proof))
+                    .map_err(|e| Error::Verify(format!("proof bytes: {e}")))?;
+                v.verify(&proof, statement)
+            }
+        };
+        checked.map_err(|e| Error::Verify(format!("{e:?}")))
     }
 
     /// Verifies `proof` for `dispatch` with the expected terminal `digest`: [`LeafVerifier::verify`]

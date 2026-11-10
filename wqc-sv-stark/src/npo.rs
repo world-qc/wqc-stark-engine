@@ -8,6 +8,7 @@ use crate::born_tables::*;
 use crate::digest::*;
 use crate::exec::*;
 use crate::tables::*;
+use crate::verify_cfg::VerifyCfg;
 use crate::{Cfg, EF, F};
 use p3_circuit::builder::{NonPrimitiveOperationData, NpoCircuitPlugin, NpoLoweringContext};
 use p3_circuit::ops::{
@@ -20,8 +21,8 @@ use p3_circuit::{
 };
 use p3_circuit_prover::common::{BuiltNpoTable, CircuitTableAir, NpoAirBuilder, NpoPreprocessor};
 use p3_circuit_prover::{
-    AirVariant, BatchTableInstance, ConstraintProfile, DynamicAirEntry, NonPrimitiveTableEntry,
-    NpoRelation, TablePacking, TableProver,
+    AirVariant, BatchTableInstance, CloneableBatchAir, ConstraintProfile, DynamicAirEntry,
+    NonPrimitiveTableEntry, NpoRelation, TablePacking, TableProver,
 };
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
@@ -750,7 +751,19 @@ impl SvTable {
     pub fn from_op(op: &NpoTypeId) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.op_type() == *op)
     }
-    fn air(self, prep: Vec<F>, min_height: usize) -> DynamicAirEntry<Cfg> {
+    fn air<SC>(self, prep: Vec<F>, min_height: usize) -> DynamicAirEntry<SC>
+    where
+        SC: p3_uni_stark::StarkGenericConfig,
+        GateTableAir: CloneableBatchAir<SC>,
+        BoundaryTableAir: CloneableBatchAir<SC>,
+        RangeTableAir: CloneableBatchAir<SC>,
+        DigestTableAir: CloneableBatchAir<SC>,
+        PermTableAir: CloneableBatchAir<SC>,
+        WeightTableAir: CloneableBatchAir<SC>,
+        DrawTableAir: CloneableBatchAir<SC>,
+        PrfTableAir: CloneableBatchAir<SC>,
+        CountTableAir: CloneableBatchAir<SC>,
+    {
         match self {
             Self::Gate(_) => DynamicAirEntry::new(Box::new(GateTableAir { prep, min_height })),
             Self::Boundary => DynamicAirEntry::new(Box::new(BoundaryTableAir { prep, min_height })),
@@ -770,222 +783,239 @@ impl SvTable {
 
 pub struct SvProver(pub SvTable);
 
-impl TableProver<Cfg> for SvProver {
-    fn op_type(&self) -> NpoTypeId {
-        self.0.op_type()
-    }
-    fn batch_instance_with_committed_preprocessed(
-        &self,
-        _config: &Cfg,
-        packing: &TablePacking,
-        traces: &[(&NpoTypeId, &dyn Any)],
-        committed: &[F],
-        circuit_extension_degree: u32,
-    ) -> Option<BatchTableInstance<Cfg>> {
-        if circuit_extension_degree != 1 {
-            return None;
-        }
-        let op = self.0.op_type();
-        let trace = traces
-            .iter()
-            .find(|(id, _)| **id == op)?
-            .1
-            .downcast_ref::<SvTrace>()?;
-        let min_height = packing.min_trace_height();
-        let (air, matrix, rows) = match (self.0, trace) {
-            (SvTable::Gate(c), SvTrace::Gate(tc, r)) if c == *tc => {
-                let a = GateTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(r);
-                (DynamicAirEntry::new(Box::new(a)), m, r.len())
-            }
-            (SvTable::Boundary, SvTrace::Boundary(f)) => {
-                let a = BoundaryTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(f);
-                (DynamicAirEntry::new(Box::new(a)), m, f.len())
-            }
-            (SvTable::Range, SvTrace::Range(q)) => {
-                let a = RangeTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(q);
-                (DynamicAirEntry::new(Box::new(a)), m, 1 << LOG_RANGE)
-            }
-            (SvTable::Digest, SvTrace::Digest { hashed, ins, outs }) => {
-                let a = DigestTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(hashed, ins, outs);
-                (DynamicAirEntry::new(Box::new(a)), m, ins.len())
-            }
-            (SvTable::Perm, SvTrace::Perm(ins)) => {
-                let a = PermTableAir::new(committed.to_vec(), min_height);
-                let m = a.main(ins);
-                (DynamicAirEntry::new(Box::new(a)), m, ins.len())
-            }
-            (SvTable::Weight, SvTrace::Weight(b)) => {
-                let a = WeightTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(&b.logical, &b.run);
-                (DynamicAirEntry::new(Box::new(a)), m, b.logical.len())
-            }
-            (SvTable::Draw, SvTrace::Draw(b)) => {
-                let a = DrawTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(b.seed, &b.run);
-                (DynamicAirEntry::new(Box::new(a)), m, b.run.draws.len())
-            }
-            (SvTable::Prf, SvTrace::Prf(b)) => {
-                let a = PrfTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(&b.run);
-                (DynamicAirEntry::new(Box::new(a)), m, b.run.prf_in.len())
-            }
-            (SvTable::Count, SvTrace::Count(b)) => {
-                let a = CountTableAir {
-                    prep: committed.to_vec(),
-                    min_height,
-                };
-                let m = a.main(&b.counts, &b.count_in, &b.count_out);
-                (DynamicAirEntry::new(Box::new(a)), m, b.count_in.len())
-            }
-            _ => return None,
-        };
-        Some(BatchTableInstance {
-            op_type: op,
-            air,
-            trace: matrix,
-            public_values: Vec::new(),
-            rows,
-            lanes: 1,
-        })
-    }
-    fn batch_instance_d1(
-        &self,
-        _: &Cfg,
-        _: &TablePacking,
-        _: &Traces<EF>,
-    ) -> Option<BatchTableInstance<Cfg>> {
-        None
-    }
-    fn batch_instance_d2(
-        &self,
-        _: &Cfg,
-        _: &TablePacking,
-        _: &Traces<BinomialExtensionField<F, 2>>,
-    ) -> Option<BatchTableInstance<Cfg>> {
-        None
-    }
-    fn batch_instance_d4(
-        &self,
-        _: &Cfg,
-        _: &TablePacking,
-        _: &Traces<BinomialExtensionField<F, 4>>,
-    ) -> Option<BatchTableInstance<Cfg>> {
-        None
-    }
-    fn batch_instance_d6(
-        &self,
-        _: &Cfg,
-        _: &TablePacking,
-        _: &Traces<BinomialExtensionField<F, 6>>,
-    ) -> Option<BatchTableInstance<Cfg>> {
-        None
-    }
-    fn batch_instance_d8(
-        &self,
-        _: &Cfg,
-        _: &TablePacking,
-        _: &Traces<BinomialExtensionField<F, 8>>,
-    ) -> Option<BatchTableInstance<Cfg>> {
-        None
-    }
-    fn batch_air_from_table_entry(
-        &self,
-        _: &Cfg,
-        _: usize,
-        _: u32,
-        _: &NonPrimitiveTableEntry<Cfg>,
-    ) -> Result<DynamicAirEntry<Cfg>, String> {
-        Ok(self.0.air(Vec::new(), 1))
-    }
-    fn air_with_committed_preprocessed(
-        &self,
-        committed: Vec<F>,
-        min_height: usize,
-        _lanes: usize,
-        _ext: u32,
-    ) -> Option<DynamicAirEntry<Cfg>> {
-        Some(self.0.air(committed, min_height))
-    }
-}
-
 /// One builder per table: the framework builds at most one AIR per builder, and orders the
 /// AIRs by builder registration (which must match the table prover order).
 pub struct SvAirBuilder(pub SvTable);
 
-impl NpoAirBuilder<Cfg, 1> for SvAirBuilder {
-    fn try_build(
-        &self,
-        op_type: &NpoTypeId,
-        prep: &[F],
-        min_height: usize,
-        _lanes: usize,
-        _p: ConstraintProfile,
-    ) -> Option<(CircuitTableAir<Cfg, 1>, usize)> {
-        let t = SvTable::from_op(op_type).filter(|t| t.op_type() == self.0.op_type())?;
-        Some((
-            CircuitTableAir::Dynamic(t.air(prep.to_vec(), min_height)),
-            t.degree(prep.len(), min_height),
-        ))
-    }
-    fn try_build_trusted(
-        &self,
-        op_type: &NpoTypeId,
-        prep: &[F],
-        min_height: usize,
-        lanes: usize,
-        p: ConstraintProfile,
-    ) -> Option<BuiltNpoTable<Cfg, 1>> {
-        let t = SvTable::from_op(op_type)?;
-        let built = self.try_build(op_type, prep, min_height, lanes, p)?;
-        Some(BuiltNpoTable::new(
-            built.0,
-            built.1,
-            NpoRelation::new(
-                op_type.clone(),
-                prep.len() / t.width(),
-                lanes,
-                AirVariant::Baseline,
-                Vec::new(),
-            ),
-        ))
-    }
+/// The table provers and AIR builders for a config: [`Cfg`] proves and verifies, and
+/// [`VerifyCfg`] builds a verifier in less memory (it never proves).
+macro_rules! sv_npo_impls {
+    ($sc:ty) => {
+        impl TableProver<$sc> for SvProver {
+            fn op_type(&self) -> NpoTypeId {
+                self.0.op_type()
+            }
+            fn batch_instance_with_committed_preprocessed(
+                &self,
+                _config: &$sc,
+                packing: &TablePacking,
+                traces: &[(&NpoTypeId, &dyn Any)],
+                committed: &[F],
+                circuit_extension_degree: u32,
+            ) -> Option<BatchTableInstance<$sc>> {
+                if circuit_extension_degree != 1 {
+                    return None;
+                }
+                let op = self.0.op_type();
+                let trace = traces
+                    .iter()
+                    .find(|(id, _)| **id == op)?
+                    .1
+                    .downcast_ref::<SvTrace>()?;
+                let min_height = packing.min_trace_height();
+                let (air, matrix, rows) = match (self.0, trace) {
+                    (SvTable::Gate(c), SvTrace::Gate(tc, r)) if c == *tc => {
+                        let a = GateTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(r);
+                        (DynamicAirEntry::new(Box::new(a)), m, r.len())
+                    }
+                    (SvTable::Boundary, SvTrace::Boundary(f)) => {
+                        let a = BoundaryTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(f);
+                        (DynamicAirEntry::new(Box::new(a)), m, f.len())
+                    }
+                    (SvTable::Range, SvTrace::Range(q)) => {
+                        let a = RangeTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(q);
+                        (DynamicAirEntry::new(Box::new(a)), m, 1 << LOG_RANGE)
+                    }
+                    (SvTable::Digest, SvTrace::Digest { hashed, ins, outs }) => {
+                        let a = DigestTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(hashed, ins, outs);
+                        (DynamicAirEntry::new(Box::new(a)), m, ins.len())
+                    }
+                    (SvTable::Perm, SvTrace::Perm(ins)) => {
+                        let a = PermTableAir::new(committed.to_vec(), min_height);
+                        let m = a.main(ins);
+                        (DynamicAirEntry::new(Box::new(a)), m, ins.len())
+                    }
+                    (SvTable::Weight, SvTrace::Weight(b)) => {
+                        let a = WeightTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(&b.logical, &b.run);
+                        (DynamicAirEntry::new(Box::new(a)), m, b.logical.len())
+                    }
+                    (SvTable::Draw, SvTrace::Draw(b)) => {
+                        let a = DrawTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(b.seed, &b.run);
+                        (DynamicAirEntry::new(Box::new(a)), m, b.run.draws.len())
+                    }
+                    (SvTable::Prf, SvTrace::Prf(b)) => {
+                        let a = PrfTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(&b.run);
+                        (DynamicAirEntry::new(Box::new(a)), m, b.run.prf_in.len())
+                    }
+                    (SvTable::Count, SvTrace::Count(b)) => {
+                        let a = CountTableAir {
+                            prep: committed.to_vec(),
+                            min_height,
+                        };
+                        let m = a.main(&b.counts, &b.count_in, &b.count_out);
+                        (DynamicAirEntry::new(Box::new(a)), m, b.count_in.len())
+                    }
+                    _ => return None,
+                };
+                Some(BatchTableInstance {
+                    op_type: op,
+                    air,
+                    trace: matrix,
+                    public_values: Vec::new(),
+                    rows,
+                    lanes: 1,
+                })
+            }
+            fn batch_instance_d1(
+                &self,
+                _: &$sc,
+                _: &TablePacking,
+                _: &Traces<EF>,
+            ) -> Option<BatchTableInstance<$sc>> {
+                None
+            }
+            fn batch_instance_d2(
+                &self,
+                _: &$sc,
+                _: &TablePacking,
+                _: &Traces<BinomialExtensionField<F, 2>>,
+            ) -> Option<BatchTableInstance<$sc>> {
+                None
+            }
+            fn batch_instance_d4(
+                &self,
+                _: &$sc,
+                _: &TablePacking,
+                _: &Traces<BinomialExtensionField<F, 4>>,
+            ) -> Option<BatchTableInstance<$sc>> {
+                None
+            }
+            fn batch_instance_d6(
+                &self,
+                _: &$sc,
+                _: &TablePacking,
+                _: &Traces<BinomialExtensionField<F, 6>>,
+            ) -> Option<BatchTableInstance<$sc>> {
+                None
+            }
+            fn batch_instance_d8(
+                &self,
+                _: &$sc,
+                _: &TablePacking,
+                _: &Traces<BinomialExtensionField<F, 8>>,
+            ) -> Option<BatchTableInstance<$sc>> {
+                None
+            }
+            fn batch_air_from_table_entry(
+                &self,
+                _: &$sc,
+                _: usize,
+                _: u32,
+                _: &NonPrimitiveTableEntry<$sc>,
+            ) -> Result<DynamicAirEntry<$sc>, String> {
+                Ok(self.0.air(Vec::new(), 1))
+            }
+            fn air_with_committed_preprocessed(
+                &self,
+                committed: Vec<F>,
+                min_height: usize,
+                _lanes: usize,
+                _ext: u32,
+            ) -> Option<DynamicAirEntry<$sc>> {
+                Some(self.0.air(committed, min_height))
+            }
+        }
+
+        impl NpoAirBuilder<$sc, 1> for SvAirBuilder {
+            fn try_build(
+                &self,
+                op_type: &NpoTypeId,
+                prep: &[F],
+                min_height: usize,
+                _lanes: usize,
+                _p: ConstraintProfile,
+            ) -> Option<(CircuitTableAir<$sc, 1>, usize)> {
+                let t = SvTable::from_op(op_type).filter(|t| t.op_type() == self.0.op_type())?;
+                Some((
+                    CircuitTableAir::Dynamic(t.air(prep.to_vec(), min_height)),
+                    t.degree(prep.len(), min_height),
+                ))
+            }
+            fn try_build_trusted(
+                &self,
+                op_type: &NpoTypeId,
+                prep: &[F],
+                min_height: usize,
+                lanes: usize,
+                p: ConstraintProfile,
+            ) -> Option<BuiltNpoTable<$sc, 1>> {
+                let t = SvTable::from_op(op_type)?;
+                let built = self.try_build(op_type, prep, min_height, lanes, p)?;
+                Some(BuiltNpoTable::new(
+                    built.0,
+                    built.1,
+                    NpoRelation::new(
+                        op_type.clone(),
+                        prep.len() / t.width(),
+                        lanes,
+                        AirVariant::Baseline,
+                        Vec::new(),
+                    ),
+                ))
+            }
+        }
+    };
 }
 
-pub fn air_builders() -> Vec<Box<dyn NpoAirBuilder<Cfg, 1>>> {
+sv_npo_impls!(Cfg);
+sv_npo_impls!(VerifyCfg);
+
+pub fn air_builders<SC: p3_uni_stark::StarkGenericConfig + 'static>(
+) -> Vec<Box<dyn NpoAirBuilder<SC, 1>>>
+where
+    SvAirBuilder: NpoAirBuilder<SC, 1>,
+{
     SvTable::ALL
         .into_iter()
-        .map(|t| Box::new(SvAirBuilder(t)) as Box<dyn NpoAirBuilder<Cfg, 1>>)
+        .map(|t| Box::new(SvAirBuilder(t)) as Box<dyn NpoAirBuilder<SC, 1>>)
         .collect()
 }
 
-pub fn table_provers() -> Vec<Box<dyn TableProver<Cfg>>> {
+pub fn table_provers<SC: p3_uni_stark::StarkGenericConfig + 'static>(
+) -> Vec<Box<dyn TableProver<SC>>>
+where
+    SvProver: TableProver<SC>,
+{
     SvTable::ALL
         .into_iter()
-        .map(|t| Box::new(SvProver(t)) as Box<dyn TableProver<Cfg>>)
+        .map(|t| Box::new(SvProver(t)) as Box<dyn TableProver<SC>>)
         .collect()
 }

@@ -5,6 +5,7 @@ use crate::born::*;
 use crate::digest::*;
 use crate::exec::*;
 use crate::tables::*;
+use crate::verify_cfg::VerifyCfg;
 use crate::{Cfg, F};
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_circuit_prover::BatchAir;
@@ -211,6 +212,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for WeightTableAir {
 }
 
 impl BatchAir<Cfg> for WeightTableAir {}
+impl BatchAir<VerifyCfg> for WeightTableAir {}
 
 /// Draw table: one row per draw, in draw order.
 #[derive(Clone)]
@@ -383,6 +385,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for DrawTableAir {
 }
 
 impl BatchAir<Cfg> for DrawTableAir {}
+impl BatchAir<VerifyCfg> for DrawTableAir {}
 
 /// Sampling permutations: row k provides draws 4k … 4k+3 under the seed in its input.
 #[derive(Clone)]
@@ -454,6 +457,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for PrfTableAir {
 }
 
 impl BatchAir<Cfg> for PrfTableAir {}
+impl BatchAir<VerifyCfg> for PrfTableAir {}
 
 /// Counts table: four register values per row, sponged into the counts digest.
 #[derive(Clone)]
@@ -547,3 +551,4 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for CountTableAir {
 }
 
 impl BatchAir<Cfg> for CountTableAir {}
+impl BatchAir<VerifyCfg> for CountTableAir {}

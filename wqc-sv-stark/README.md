@@ -67,9 +67,10 @@ Status: experimental. Nothing in the network uses it yet; it will ship behind th
   n = 16. `leaf::gate_rows(n, gates)` counts them without building the leaf (it is the work
   `W` a scheduler compares with what a node can prove); `build` rejects a circuit over the
   limit. Proving takes about 4.6 KB per gate row plus 0.3 GB, so a leaf at the limit needs
-  about 20 GB. Building its verifier (`Leaf::leaf_verifier`, see below) peaks at about 0.9 KB
-  per gate row (3.7 GB at the limit), and the verifier then keeps about 40 bytes per row
-  (163 MB).
+  about 20 GB. Building its verifier alone (`leaf::build_verifier`, see below) peaks at about
+  370 bytes per gate row (1.45 GB at the limit) and keeps under 1 MB;
+  `leaf::verifier_peak_bytes(n, rows, shots)` is an upper estimate of that peak, for a
+  scheduler to size what it verifies to its memory.
 - Gates: wqc-core's unitary gate set — H, X, Y, Z, S, T, CNOT, CZ, CCNOT, RX, RY, RZ — with the same
   matrices and phases as its dense engine (a test checks each gate against those formulas,
   global phase included, since it changes the digest). Rotation angles become fixed-point
@@ -284,9 +285,16 @@ the exact `f64` the orchestrator marshaled; once wqc-core depends on this crate,
 unification turns it on for its parsing too. Proofs travel
 as `leaf::encode_proof` / `decode_proof` (postcard, pinned).
 
-`Leaf::leaf_verifier()` returns a `LeafVerifier`: the verifier and the sampling, without the
-proving data, to keep (one per circuit) after the leaf is dropped. The orchestrator reaches it
-through `wqc-stark-ffi` (`wqc_sv_leaf_rows`, `wqc_sv_max_rows`, `wqc_sv_leaf_new` /
+A `LeafVerifier` is a leaf's verifier and sampling without the proving data, to keep (one per
+circuit). `Leaf::leaf_verifier()` takes it from a built leaf; `leaf::build_verifier(level, n,
+gates, sampling)` builds it without one, in less memory: a `VerifyCfg` (`verify_cfg`) prepares
+the same circuit with a PCS that computes the preprocessed commitment 64 runs of LDE rows at a
+time (each run a coset of a smaller subgroup, under its own subtree) and keeps no prover data,
+and delegates everything verification uses to the leaf config's PCS. A test checks the
+commitment against the leaf config's, and verifiers built either way accept the same proofs.
+At n = 16 the peak falls from about 0.94 KB to 0.37 KB per gate row (2^22 rows: 3.7 to 1.45
+GB); what remains is the framework's own copies of the preprocessed columns. The orchestrator
+reaches it through `wqc-stark-ffi` (`wqc_sv_leaf_rows`, `wqc_sv_max_rows`, `wqc_sv_leaf_new` /
 `wqc_sv_leaf_free`, `wqc_sv_verify_leaf`, `wqc_sv_verify_sampling_leaf`).
 
 ## Tests

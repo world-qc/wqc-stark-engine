@@ -7,6 +7,7 @@ use std::borrow::Borrow;
 
 use crate::digest::*;
 use crate::exec::*;
+use crate::verify_cfg::VerifyCfg;
 use crate::{Cfg, F};
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_circuit_prover::BatchAir;
@@ -211,6 +212,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for GateTableAir {
 }
 
 impl BatchAir<Cfg> for GateTableAir {}
+impl BatchAir<VerifyCfg> for GateTableAir {}
 
 #[derive(Clone)]
 pub struct BoundaryTableAir {
@@ -295,6 +297,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for BoundaryTableAir {
 }
 
 impl BatchAir<Cfg> for BoundaryTableAir {}
+impl BatchAir<VerifyCfg> for BoundaryTableAir {}
 
 #[derive(Clone)]
 pub struct RangeTableAir {
@@ -342,6 +345,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for RangeTableAir {
 }
 
 impl BatchAir<Cfg> for RangeTableAir {}
+impl BatchAir<VerifyCfg> for RangeTableAir {}
 
 pub(crate) const D_IN: usize = 0;
 pub(crate) const D_OUT: usize = PW;
@@ -455,6 +459,7 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for DigestTableAir {
 }
 
 impl BatchAir<Cfg> for DigestTableAir {}
+impl BatchAir<VerifyCfg> for DigestTableAir {}
 
 /// Poseidon2 permutation table: provides (input, output) on `wqc_perm` per real row.
 #[derive(Clone)]
@@ -517,3 +522,4 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for PermTableAir {
 }
 
 impl BatchAir<Cfg> for PermTableAir {}
+impl BatchAir<VerifyCfg> for PermTableAir {}
