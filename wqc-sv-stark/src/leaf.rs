@@ -22,7 +22,7 @@ use crate::born::{counts_digest, sample, seed_words, Sampling};
 use crate::digest::DIGEST_LEN;
 use crate::exec::*;
 use crate::npo::*;
-use crate::{Cfg, Error, FriParams, SecurityLevel, EF, F, MAX_QUBITS};
+use crate::{Cfg, Error, FriParams, SecurityLevel, EF, F, MAX_QUBITS, MAX_ROWS};
 
 /// Statement length: 4 context elements, then the 4-element terminal digest.
 pub const STATEMENT_LEN: usize = 4 + DIGEST_LEN;
@@ -47,6 +47,26 @@ pub struct LeafProof {
     /// The prover's own claim. A verifier never verifies against it: it builds the expected
     /// statement itself (see [`Leaf::verify`]).
     pub statement: Vec<F>,
+}
+
+/// A leaf proof, without the prover's statement.
+pub type Proof = BatchStarkProof<Cfg>;
+
+/// A proof's bytes on the wire (postcard), as wqc-core sends them and [`decode_proof`] reads.
+pub fn encode_proof(proof: &BatchStarkProof<Cfg>) -> Vec<u8> {
+    postcard::to_allocvec(proof).expect("a proof serializes")
+}
+
+/// Reads [`encode_proof`]'s bytes; trailing bytes are an error.
+pub fn decode_proof(bytes: &[u8]) -> Result<BatchStarkProof<Cfg>, Error> {
+    match postcard::take_from_bytes(bytes) {
+        Ok((proof, [])) => Ok(proof),
+        Ok((_, rest)) => Err(Error::Verify(format!(
+            "{} trailing bytes after the proof",
+            rest.len()
+        ))),
+        Err(e) => Err(Error::Verify(format!("proof bytes: {e}"))),
+    }
 }
 
 /// Builds and prepares the leaf circuit for `gates` on `n` qubits (`1 ≤ n ≤ MAX_QUBITS`) at
@@ -86,21 +106,15 @@ pub(crate) fn build_with_tamper(
     sampling: Option<Sampling>,
     tamper: Tamper,
 ) -> Result<Leaf, Error> {
-    if !(1..=MAX_QUBITS).contains(&n) {
-        return Err(Error::InvalidCircuit(format!(
-            "{n} qubits, supported 1..={MAX_QUBITS}"
-        )));
-    }
+    let gates = validated_fuse(n, &gates)?;
     if let Some(s) = &sampling {
         s.validate(n)?;
     }
-    for g in &gates {
-        g.validate(n)?;
-    }
-    // The leaf proves the fused circuit; its gates pass the same check.
-    let gates = fuse(n, &gates);
-    for g in &gates {
-        g.validate(n)?;
+    let rows = rounding_steps(&gates) << (n - 1);
+    if rows > MAX_ROWS {
+        return Err(Error::InvalidCircuit(format!(
+            "{rows} gate rows, supported up to {MAX_ROWS}"
+        )));
     }
     let cfg: Cfg = fri.config();
     let packing = TablePacking::default().with_min_trace_height(fri.min_trace_height());
@@ -183,6 +197,38 @@ pub(crate) fn build_with_tamper(
         gates,
         sampling,
     })
+}
+
+/// Checks `n` and the gates, and fuses them. The leaf proves the fused circuit, whose gates
+/// pass the same check.
+fn validated_fuse(n: usize, gates: &[Gate]) -> Result<Vec<Gate>, Error> {
+    if !(1..=MAX_QUBITS).contains(&n) {
+        return Err(Error::InvalidCircuit(format!(
+            "{n} qubits, supported 1..={MAX_QUBITS}"
+        )));
+    }
+    for g in gates {
+        g.validate(n)?;
+    }
+    let fused = fuse(n, gates);
+    for g in &fused {
+        g.validate(n)?;
+    }
+    Ok(fused)
+}
+
+/// Fused gates that round: each is one step of `2^(n−1)` gate rows.
+fn rounding_steps(fused: &[Gate]) -> usize {
+    fused.iter().filter(|g| g.rounds()).count()
+}
+
+/// The leaf's gate rows for `gates` on `n` qubits: rounding steps × `2^(n−1)`, the work `W`
+/// that sets its proving time and memory. Cheap (no circuit is built). It rejects what
+/// [`build`] rejects except more than [`MAX_ROWS`] rows, so a scheduler sees how far over a
+/// circuit is. A sampling leaf has further tables this does not count.
+pub fn gate_rows(n: usize, gates: &[Gate]) -> Result<usize, Error> {
+    let fused = validated_fuse(n, gates)?;
+    Ok(rounding_steps(&fused) << (n - 1))
 }
 
 /// Domain tag of [`Dispatch::context`]. Its `V1` versions the context encoding only; it is
@@ -327,21 +373,83 @@ impl Leaf {
         Ok(LeafProof { proof, statement })
     }
 
+    /// [`LeafVerifier::verify`].
+    pub fn verify(&self, proof: &BatchStarkProof<Cfg>, statement: &[F]) -> Result<(), Error> {
+        self.leaf_verifier().verify(proof, statement)
+    }
+
+    /// [`LeafVerifier::verify_dispatch`].
+    pub fn verify_dispatch(
+        &self,
+        proof: &BatchStarkProof<Cfg>,
+        dispatch: &Dispatch<'_>,
+        digest: [u64; DIGEST_LEN],
+    ) -> Result<(), Error> {
+        self.leaf_verifier()
+            .verify_dispatch(proof, dispatch, digest)
+    }
+
+    /// [`LeafVerifier::verify_sampling`].
+    pub fn verify_sampling(
+        &self,
+        proof: &BatchStarkProof<Cfg>,
+        dispatch: &Dispatch<'_>,
+        digest: [u64; DIGEST_LEN],
+        seed: u64,
+        counts: &[u64],
+    ) -> Result<(), Error> {
+        self.leaf_verifier()
+            .verify_sampling(proof, dispatch, digest, seed, counts)
+    }
+
+    /// The verifier fixing this circuit's relation and preprocessed commitment.
+    pub fn verifier(&self) -> CircuitVerifier<Cfg> {
+        self.prepared.verifier()
+    }
+
+    /// The leaf's verifier without its proving data, to keep after the leaf is dropped (the
+    /// orchestrator caches one per circuit).
+    pub fn leaf_verifier(&self) -> LeafVerifier {
+        LeafVerifier {
+            verifier: self.prepared.verifier(),
+            sampling: self.sampling.clone(),
+        }
+    }
+
+    pub fn schema(&self) -> &StatementSchema {
+        &self.schema
+    }
+}
+
+/// A leaf's verifier: its circuit's relation and preprocessed commitment, and for a sampling
+/// leaf the sampling the statement's counts refer to. It holds no proving data and clones
+/// cheaply.
+#[derive(Clone)]
+pub struct LeafVerifier {
+    verifier: CircuitVerifier<Cfg>,
+    sampling: Option<Sampling>,
+}
+
+impl LeafVerifier {
+    /// The sampling of a `sample_counts` leaf, `None` for a unitary one.
+    pub fn sampling(&self) -> Option<&Sampling> {
+        self.sampling.as_ref()
+    }
+
     /// Verifies `proof` against this circuit and the expected `statement`.
     ///
     /// # Security
     ///
     /// Only an expected statement binds anything: build it from the dispatch the verifier
     /// signed and the digest it expects (a quorum's, or one recomputed from the result), never
-    /// from the prover's [`LeafProof::statement`]. [`Leaf::verify_dispatch`] does this.
+    /// from the prover's [`LeafProof::statement`]. [`LeafVerifier::verify_dispatch`] does this.
     pub fn verify(&self, proof: &BatchStarkProof<Cfg>, statement: &[F]) -> Result<(), Error> {
-        self.prepared
-            .verifier()
+        self.verifier
             .verify(proof, statement)
             .map_err(|e| Error::Verify(format!("{e:?}")))
     }
 
-    /// Verifies `proof` for `dispatch` with the expected terminal `digest`: [`Leaf::verify`]
+    /// Verifies `proof` for `dispatch` with the expected terminal `digest`: [`LeafVerifier::verify`]
     /// against `statement(dispatch.context(), digest)`.
     pub fn verify_dispatch(
         &self,
@@ -353,7 +461,7 @@ impl Leaf {
     }
 
     /// Verifies a sampling leaf's `proof` for `dispatch` with the expected terminal `digest`,
-    /// the dispatched `seed`, and the reported `counts`: [`Leaf::verify`] against
+    /// the dispatched `seed`, and the reported `counts`: [`LeafVerifier::verify`] against
     /// [`sampling_statement`] with the circuit's shot count and the counts' digest.
     ///
     /// # Security
@@ -394,14 +502,5 @@ impl Leaf {
             counts_digest(counts),
         )?;
         self.verify(proof, &s)
-    }
-
-    /// The verifier fixing this circuit's relation and preprocessed commitment.
-    pub fn verifier(&self) -> CircuitVerifier<Cfg> {
-        self.prepared.verifier()
-    }
-
-    pub fn schema(&self) -> &StatementSchema {
-        &self.schema
     }
 }

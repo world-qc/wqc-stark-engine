@@ -180,11 +180,173 @@ fn non_canonical_statement_values_are_rejected() {
 
 #[test]
 fn proof_codec_roundtrip() {
+    use crate::leaf::{decode_proof, encode_proof};
     let l = leaf(Tamper::None);
     let p = l.prove(CTX).unwrap();
-    let bytes = postcard::to_allocvec(&p.proof).unwrap();
-    let back = postcard::from_bytes(&bytes).unwrap();
-    l.verify(&back, &p.statement).unwrap();
+    let mut bytes = encode_proof(&p.proof);
+    let back = decode_proof(&bytes).unwrap();
+    // The verifier outlives the leaf and its proving data.
+    let v = l.leaf_verifier();
+    drop(l);
+    v.verify(&back, &p.statement).unwrap();
+    assert!(v.sampling().is_none());
+    bytes.push(0);
+    assert!(decode_proof(&bytes).is_err());
+    assert!(decode_proof(&bytes[..bytes.len() / 2]).is_err());
+}
+
+/// `gate_rows` counts `2^(n−1)` rows per fused gate that rounds, without building.
+#[test]
+fn gate_rows_count_rounding_steps() {
+    use crate::leaf::gate_rows;
+    let cases: [(usize, Vec<Gate>, usize); 6] = [
+        (4, vec![], 0),
+        (4, vec![Gate::h(0)], 1),
+        // Monomial gates fold into the frame.
+        (
+            4,
+            vec![Gate::x(0), Gate::cnot(0, 1), Gate::cz(1, 2), Gate::s(3)],
+            0,
+        ),
+        // A run of single-qubit gates fuses into one; H·H fuses to the identity.
+        (4, vec![Gate::h(0), Gate::t(0), Gate::rz(0, 0.3)], 1),
+        (4, vec![Gate::h(0), Gate::h(0)], 0),
+        // The CNOT flushes the pending H, so the second H is another step.
+        (4, vec![Gate::h(0), Gate::cnot(0, 1), Gate::h(0)], 2),
+    ];
+    for (n, g, steps) in cases {
+        assert_eq!(gate_rows(n, &g).unwrap(), steps << (n - 1), "{g:?}");
+    }
+    let g = gates();
+    assert_eq!(
+        gate_rows(3, &g).unwrap(),
+        plan(3, &g).steps << 2,
+        "matches the executor's plan"
+    );
+    assert!(gate_rows(0, &[]).is_err());
+    assert!(gate_rows(MAX_QUBITS + 1, &[]).is_err());
+    assert!(gate_rows(2, &[Gate::h(2)]).is_err());
+    assert!(gate_rows(2, &[Gate::rx(0, f64::NAN)]).is_err());
+}
+
+/// `build` refuses more than `MAX_ROWS` gate rows before preparing anything; `gate_rows`
+/// still reports them.
+#[test]
+fn build_rejects_too_many_rows() {
+    use crate::leaf::gate_rows;
+    use crate::MAX_ROWS;
+    let n = MAX_QUBITS;
+    let steps = (MAX_ROWS >> (n - 1)) + 1;
+    let g: Vec<Gate> = (0..steps)
+        .flat_map(|_| [Gate::h(0), Gate::cnot(0, 1)])
+        .collect();
+    assert_eq!(gate_rows(n, &g).unwrap(), steps << (n - 1));
+    let Err(Error::InvalidCircuit(m)) = build(SecurityLevel::Low, n, g) else {
+        panic!("built a leaf over the row limit");
+    };
+    assert!(m.contains("gate rows"), "{m}");
+}
+
+/// The wire circuit is wqc-core's gate JSON and gives the same gates.
+#[test]
+fn wire_circuit_matches_core_gates() {
+    use crate::born::Measure;
+    use crate::wire::parse_circuit;
+    let json = r#"[{"type":"H","params":0},{"type":"CNOT","params":[0,1]},
+        {"type":"CNOT","params":[1,2]},{"type":"RY","params":[2,0.7]},
+        {"type":"CNOT","params":[2,0]},{"type":"RZ","params":[1,1.3]},
+        {"type":"T","params":0},{"type":"H","params":2},
+        {"type":"MEASURE","params":{"qubit":2,"cbit":0}},
+        {"type":"MEASURE","params":{"qubit":0,"cbit":1}}]"#;
+    let c = parse_circuit(json).unwrap();
+    assert_eq!(execute(3, &c.gates).1, execute(3, &gates()).1);
+    assert_eq!(
+        c.measures,
+        [Measure { qubit: 2, cbit: 0 }, Measure { qubit: 0, cbit: 1 }]
+    );
+    let all = r#"[{"type":"X","params":0},{"type":"Y","params":1},{"type":"Z","params":2},
+        {"type":"S","params":0},{"type":"CZ","params":[0,1]},{"type":"RX","params":[1,-0.25]},
+        {"type":"CCNOT","params":[0,1,2]}]"#;
+    let want = [
+        Gate::x(0),
+        Gate::y(1),
+        Gate::z(2),
+        Gate::s(0),
+        Gate::cz(0, 1),
+        Gate::rx(1, -0.25),
+        Gate::ccnot(0, 1, 2),
+    ];
+    assert_eq!(
+        execute(3, &parse_circuit(all).unwrap().gates).1,
+        execute(3, &want).1
+    );
+    // An angle reads to the exact f64 Go marshals (shortest round-trip digits).
+    let a = 0.1f64 + 0.2;
+    let c = parse_circuit(&format!(r#"[{{"type":"RZ","params":[0,{a}]}}]"#)).unwrap();
+    assert_eq!(execute(1, &c.gates).1, execute(1, &[Gate::rz(0, a)]).1);
+    for bad in [
+        r#"[{"type":"RESET","params":0}]"#,
+        r#"[{"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"X","params":0}}}]"#,
+        r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"H","params":0}]"#,
+        r#"[{"type":"U3","params":[0,1,2,3]}]"#,
+        r#"[{"type":"H","params":[0,1]}]"#,
+        r#"{"type":"H","params":0}"#,
+    ] {
+        assert!(parse_circuit(bad).is_err(), "{bad}");
+    }
+}
+
+/// Counts JSON round-trips through the canonical form, and only that form is accepted.
+#[test]
+fn wire_counts_are_canonical() {
+    use crate::born::{Measure, Sampling};
+    use crate::wire::{counts_json, parse_counts};
+    let s = Sampling {
+        measures: vec![Measure { qubit: 0, cbit: 0 }],
+        cbits: 3,
+        shots: 10,
+    };
+    let counts = vec![4, 0, 0, 1, 0, 0, 5, 0];
+    let json = counts_json(&counts, 3);
+    assert_eq!(json, r#"{"counts":{"000":4,"011":1,"110":5},"shots":10}"#);
+    assert_eq!(parse_counts(&json, &s).unwrap(), counts);
+    // One cbit still pads the vector to four entries.
+    let one = Sampling {
+        cbits: 1,
+        ..s.clone()
+    };
+    assert_eq!(
+        parse_counts(r#"{"counts":{"0":3,"1":7},"shots":10}"#, &one).unwrap(),
+        [3, 7, 0, 0]
+    );
+    for bad in [
+        r#"{"counts":{"000":4,"011":1,"110":5},"shots":11}"#,
+        r#"{"counts":{"000":4,"011":1,"110":4},"shots":10}"#,
+        r#"{"counts":{"000":4,"011":1,"110":5,"111":0},"shots":10}"#,
+        r#"{"counts":{"00":4,"011":1,"110":5},"shots":10}"#,
+        r#"{"counts":{"000":4,"012":1,"110":5},"shots":10}"#,
+        r#"{"counts":{"000":4,"+11":1,"110":5},"shots":10}"#,
+        r#"{"counts":{"000":4,"011":1,"110":18446744073709551615},"shots":10}"#,
+        r#"{"counts":{"000":10},"shots":10,"seed":1}"#,
+        r#"{"counts":{"000":10}}"#,
+        // Same counts, not the canonical bytes.
+        r#"{"counts":{"110":5,"000":4,"011":1},"shots":10}"#,
+        r#"{"counts": {"000":4,"011":1,"110":5},"shots":10}"#,
+        r#"{"shots":10,"counts":{"000":4,"011":1,"110":5}}"#,
+        r#"{"counts":{"000":4,"011":1,"110":5,"110":5},"shots":10}"#,
+        r#"{"counts":{"000":4,"011":1,"110":05},"shots":10}"#,
+    ] {
+        assert!(parse_counts(bad, &s).is_err(), "{bad}");
+    }
+    // A sampling out of range is refused rather than sized.
+    assert!(parse_counts(
+        &json,
+        &Sampling {
+            cbits: 64,
+            ..s.clone()
+        }
+    )
+    .is_err());
 }
 
 #[test]
@@ -1336,12 +1498,17 @@ fn sampling_outcomes_follow_the_measurements() {
     assert_eq!(s.outcome(0b111), 0b101);
     assert_eq!(s.counts_len(), 8);
     let one = Sampling {
-        measures: vec![],
+        measures: vec![Measure { qubit: 0, cbit: 0 }],
         cbits: 1,
         shots: 1,
     };
     assert_eq!(one.counts_len(), 4);
+    assert!(build_with_tamper(FRI, 3, vec![Gate::h(0)], Some(one.clone()), Tamper::None).is_ok());
     for bad in [
+        Sampling {
+            measures: vec![],
+            ..one.clone()
+        },
         Sampling {
             shots: 0,
             ..one.clone()

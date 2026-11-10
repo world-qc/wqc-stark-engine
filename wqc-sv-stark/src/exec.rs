@@ -230,6 +230,12 @@ fn unit_phase(u: C) -> Option<u8> {
 }
 
 impl Gate {
+    /// Whether the gate takes a rounding step (gate-table rows) rather than folding into the
+    /// frame (see [`Gate::monomial`]).
+    pub(crate) fn rounds(&self) -> bool {
+        self.monomial().is_none()
+    }
+
     /// A gate whose quantized matrix is monomial maps each amplitude to one other times a unit
     /// phase: X, Y, Z, S, CNOT, CZ, CCNOT, and rotations at angles that quantize to such a
     /// matrix (RX(0), RZ(π), …). Its fixed-point output is exact, so it can be folded into the

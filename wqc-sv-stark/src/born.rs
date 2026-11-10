@@ -44,6 +44,24 @@ pub struct Sampling {
 
 impl Sampling {
     pub(crate) fn validate(&self, n: usize) -> Result<(), crate::Error> {
+        self.validate_counts()?;
+        let bad = |m: String| Err(crate::Error::InvalidCircuit(m));
+        if self.measures.is_empty() {
+            return bad("sampling without a MEASURE".into());
+        }
+        for m in &self.measures {
+            if m.qubit >= n || m.cbit >= self.cbits {
+                return bad(format!(
+                    "measure qubit {} into cbit {} with {n} qubits and {} cbits",
+                    m.qubit, m.cbit, self.cbits
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The limits on `shots` and `cbits`, which bound the counts vector.
+    pub(crate) fn validate_counts(&self) -> Result<(), crate::Error> {
         let bad = |m: String| Err(crate::Error::InvalidCircuit(m));
         if !(1..=MAX_SHOTS).contains(&self.shots) {
             return bad(format!("{} shots, supported 1..={MAX_SHOTS}", self.shots));
@@ -53,14 +71,6 @@ impl Sampling {
                 "{} classical bits, supported 1..={MAX_CBITS}",
                 self.cbits
             ));
-        }
-        for m in &self.measures {
-            if m.qubit >= n || m.cbit >= self.cbits {
-                return bad(format!(
-                    "measure qubit {} into cbit {} with {n} qubits and {} cbits",
-                    m.qubit, m.cbit, self.cbits
-                ));
-            }
         }
         Ok(())
     }

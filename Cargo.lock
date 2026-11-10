@@ -1898,6 +1898,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wqc-stark-core",
+ "wqc-sv-stark",
 ]
 
 [[package]]
@@ -1919,6 +1920,8 @@ dependencies = [
  "p3-uni-stark 0.9.0-rc.2",
  "postcard",
  "rand 0.10.3",
+ "serde",
+ "serde_json",
  "sha3",
 ]
 

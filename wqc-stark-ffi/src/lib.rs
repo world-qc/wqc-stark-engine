@@ -724,3 +724,482 @@ pub unsafe extern "C" fn wqc_verify_overlap_binding(
     });
     unwind_to_ffi_code(result)
 }
+
+// ---------------------------------------------------------------------------------------------
+// State-vector leaf (v2, `wqc-sv-stark`)
+// ---------------------------------------------------------------------------------------------
+
+use std::panic::AssertUnwindSafe;
+use wqc_sv_stark::born::Sampling;
+use wqc_sv_stark::leaf::{decode_proof, gate_rows, LeafVerifier};
+use wqc_sv_stark::wire::{parse_circuit, parse_counts};
+
+/// A v2 leaf's verifier, opaque to C. Verifying through it from several threads at once is
+/// safe; free it once with [`wqc_sv_leaf_free`].
+pub struct WqcSvLeaf(LeafVerifier);
+
+const _: fn() = || {
+    fn shared<T: Send + Sync>() {}
+    shared::<WqcSvLeaf>();
+};
+
+/// A required string: null or invalid UTF-8 is `None` (an empty string is a value).
+fn cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(ptr) }.to_str().ok()
+}
+
+/// Gate rows `W` of the v2 leaf for `circuit_json` on `qubit_count` qubits (rounding steps ×
+/// 2^(n−1)): the work that sets a leaf's proving time and memory, for scheduling and TTLs.
+/// `circuit_json` is wqc-core's gate list. Terminal MEASUREs are allowed and their qubits
+/// checked; their cbits are not (the register size is not an argument), so
+/// `wqc_sv_leaf_new` can still reject a circuit this accepts. It does not apply the leaf's
+/// row limit (`wqc_sv_max_rows`), so a scheduler can see how far over a circuit is.
+///
+/// A `sample_counts` leaf has further tables (weights, draws, counts) this does not count;
+/// with many shots and few qubits they outweigh the gate rows, so `W` alone underestimates
+/// such a leaf.
+///
+/// Returns the row count (≥ 0), `-1` if the circuit has no v2 leaf (bad JSON, RESET or IF,
+/// a gate or MEASURE qubit outside `qubit_count`, `qubit_count` outside 1..=16), or `-99` on
+/// panic.
+///
+/// # Safety
+///
+/// `circuit_json` must be a null-terminated string valid for the duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_leaf_rows(qubit_count: u32, circuit_json: *const c_char) -> i64 {
+    let result = catch_unwind(|| {
+        let Some(json) = cstr(circuit_json) else {
+            eprintln!("[Rust FFI] sv_leaf_rows: null or non-UTF-8 circuit");
+            return -1;
+        };
+        let n = qubit_count as usize;
+        let rows = parse_circuit(json).and_then(|c| {
+            if let Some(m) = c.measures.iter().find(|m| m.qubit >= n) {
+                return Err(wqc_sv_stark::Error::InvalidCircuit(format!(
+                    "MEASURE of qubit {} with {n} qubits",
+                    m.qubit
+                )));
+            }
+            gate_rows(n, &c.gates)
+        });
+        match rows {
+            Ok(rows) => rows as i64,
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_leaf_rows: {err}");
+                -1
+            }
+        }
+    });
+    result.unwrap_or(-99)
+}
+
+/// The most gate rows a v2 leaf may have (`2^22`); a circuit over it has no v2 leaf.
+#[no_mangle]
+pub extern "C" fn wqc_sv_max_rows() -> i64 {
+    wqc_sv_stark::MAX_ROWS as i64
+}
+
+/// Builds the verifier of a v2 leaf, to cache per circuit. Building prepares the whole leaf
+/// circuit: about 0.9 KB of memory per gate row at its peak and 3.2 µs per row on an 8-core
+/// machine (3.7 GB and 13 s at the 2^22-row limit). The handle keeps only the verifier, about
+/// 40 bytes per gate row (160 MB at the limit).
+///
+/// - `shots == 0`: a `statevector_scalar` leaf; `circuit_json` must have no MEASURE.
+/// - `shots > 0`: a `sample_counts` leaf over the circuit's terminal MEASUREs, with
+///   `classical_bit_count` classical bits (1..=16) and `shots` (at most 2^16).
+///
+/// `security_level` is the dispatched tier (`low|normal|high|ultra`, empty = `ultra`); a proof
+/// made at another tier fails this verifier. Returns null on any error.
+///
+/// # Safety
+///
+/// `circuit_json` and `security_level` must be null-terminated strings valid for the duration
+/// of this call.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_leaf_new(
+    qubit_count: u32,
+    circuit_json: *const c_char,
+    classical_bit_count: u32,
+    shots: u64,
+    security_level: *const c_char,
+) -> *mut WqcSvLeaf {
+    let result = catch_unwind(|| {
+        let (Some(json), Some(level)) = (cstr(circuit_json), cstr(security_level)) else {
+            eprintln!("[Rust FFI] sv_leaf_new: null or non-UTF-8 argument");
+            return std::ptr::null_mut();
+        };
+        let Some(level) = wqc_sv_stark::SecurityLevel::parse(level) else {
+            eprintln!("[Rust FFI] sv_leaf_new: unknown security level {level:?}");
+            return std::ptr::null_mut();
+        };
+        let built = parse_circuit(json).and_then(|c| {
+            let n = qubit_count as usize;
+            if shots == 0 {
+                if !c.measures.is_empty() {
+                    return Err(wqc_sv_stark::Error::InvalidCircuit(
+                        "MEASURE in a circuit without shots".into(),
+                    ));
+                }
+                return wqc_sv_stark::leaf::build(level, n, c.gates);
+            }
+            let shots = u32::try_from(shots)
+                .map_err(|_| wqc_sv_stark::Error::InvalidCircuit(format!("{shots} shots")))?;
+            let sampling = Sampling {
+                measures: c.measures,
+                cbits: classical_bit_count as usize,
+                shots,
+            };
+            wqc_sv_stark::leaf::build_sampling(level, n, c.gates, sampling)
+        });
+        match built {
+            Ok(leaf) => Box::into_raw(Box::new(WqcSvLeaf(leaf.leaf_verifier()))),
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_leaf_new: {err}");
+                std::ptr::null_mut()
+            }
+        }
+    });
+    result.unwrap_or(std::ptr::null_mut())
+}
+
+/// Frees a verifier from [`wqc_sv_leaf_new`]. Null is a no-op.
+///
+/// # Safety
+///
+/// `leaf` must come from [`wqc_sv_leaf_new`], be freed once, and not be in use.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_leaf_free(leaf: *mut WqcSvLeaf) {
+    if !leaf.is_null() {
+        drop(Box::from_raw(leaf));
+    }
+}
+
+/// The dispatch a leaf proof is bound to, as the orchestrator signed it (no normalization).
+unsafe fn dispatch<'a>(
+    circuit_id: *const c_char,
+    sub_task_id: *const c_char,
+    node_id: *const c_char,
+    slice_id: *const c_char,
+) -> Option<wqc_sv_stark::leaf::Dispatch<'a>> {
+    Some(wqc_sv_stark::leaf::Dispatch {
+        circuit_id: cstr(circuit_id)?,
+        sub_task_id: cstr(sub_task_id)?,
+        node_id: cstr(node_id)?,
+        slice_id: cstr(slice_id)?,
+    })
+}
+
+/// Shared checks of the two verify calls: the handle, the dispatch, the digest and the proof.
+unsafe fn leaf_inputs<'a>(
+    what: &str,
+    leaf: *const WqcSvLeaf,
+    dispatch_fields: [*const c_char; 4],
+    digest: *const u64,
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> Option<(
+    &'a LeafVerifier,
+    wqc_sv_stark::leaf::Dispatch<'a>,
+    [u64; 4],
+    wqc_sv_stark::leaf::Proof,
+)> {
+    if leaf.is_null() || digest.is_null() || proof_bytes.is_null() {
+        eprintln!("[Rust FFI] {what}: null pointer");
+        return None;
+    }
+    let [c, s, n, sl] = dispatch_fields;
+    let Some(d) = dispatch(c, s, n, sl) else {
+        eprintln!("[Rust FFI] {what}: null or non-UTF-8 dispatch field");
+        return None;
+    };
+    let digest: [u64; 4] = slice::from_raw_parts(digest, 4).try_into().ok()?;
+    match decode_proof(slice::from_raw_parts(proof_bytes, proof_len as usize)) {
+        Ok(p) => Some((&(*leaf).0, d, digest, p)),
+        Err(err) => {
+            eprintln!("[Rust FFI] {what}: {err}");
+            None
+        }
+    }
+}
+
+/// Verifies a `statevector_scalar` v2 leaf proof for its dispatch and the expected terminal
+/// state digest (four canonical words: the quorum's, never the prover's own claim).
+///
+/// Returns `1` = valid, `0` = invalid proof or arguments (including a sampling verifier),
+/// `-99` = panic.
+///
+/// # Safety
+///
+/// `leaf` must be a live handle from [`wqc_sv_leaf_new`]. String pointers must be
+/// null-terminated. `digest` must point to 4 `u64`s and `proof_bytes` to `proof_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_verify_leaf(
+    leaf: *const WqcSvLeaf,
+    circuit_id: *const c_char,
+    sub_task_id: *const c_char,
+    node_id: *const c_char,
+    slice_id: *const c_char,
+    digest: *const u64,
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let Some((v, d, digest, proof)) = leaf_inputs(
+            "sv_verify_leaf",
+            leaf,
+            [circuit_id, sub_task_id, node_id, slice_id],
+            digest,
+            proof_bytes,
+            proof_len,
+        ) else {
+            return 0;
+        };
+        if v.sampling().is_some() {
+            eprintln!("[Rust FFI] sv_verify_leaf: a sampling leaf needs its seed and counts");
+            return 0;
+        }
+        match v.verify_dispatch(&proof, &d, digest) {
+            Ok(()) => 1,
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_verify_leaf: {err}");
+                0
+            }
+        }
+    }));
+    unwind_to_ffi_code(result)
+}
+
+/// Verifies a `sample_counts` v2 leaf proof for its dispatch, the expected terminal state
+/// digest, the dispatched `sample_seed`, and the reported counts. `counts_json` must be the
+/// canonical `{"counts":{...},"shots":N}` (keys of exactly `classical_bit_count` bits, no zero
+/// counts, `shots` and the sum equal to the verifier's shots).
+///
+/// Returns `1` = valid, `0` = invalid proof or arguments, `-99` = panic.
+///
+/// # Safety
+///
+/// As [`wqc_sv_verify_leaf`]; `counts_json` must be null-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_verify_sampling_leaf(
+    leaf: *const WqcSvLeaf,
+    circuit_id: *const c_char,
+    sub_task_id: *const c_char,
+    node_id: *const c_char,
+    slice_id: *const c_char,
+    digest: *const u64,
+    sample_seed: u64,
+    counts_json: *const c_char,
+    proof_bytes: *const u8,
+    proof_len: u32,
+) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let Some((v, d, digest, proof)) = leaf_inputs(
+            "sv_verify_sampling_leaf",
+            leaf,
+            [circuit_id, sub_task_id, node_id, slice_id],
+            digest,
+            proof_bytes,
+            proof_len,
+        ) else {
+            return 0;
+        };
+        let Some(sampling) = v.sampling() else {
+            eprintln!("[Rust FFI] sv_verify_sampling_leaf: not a sampling leaf");
+            return 0;
+        };
+        let Some(json) = cstr(counts_json) else {
+            eprintln!("[Rust FFI] sv_verify_sampling_leaf: null or non-UTF-8 counts");
+            return 0;
+        };
+        let checked = parse_counts(json, sampling)
+            .and_then(|counts| v.verify_sampling(&proof, &d, digest, sample_seed, &counts));
+        match checked {
+            Ok(()) => 1,
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_verify_sampling_leaf: {err}");
+                0
+            }
+        }
+    }));
+    unwind_to_ffi_code(result)
+}
+
+#[cfg(test)]
+mod sv_tests {
+    use super::*;
+    use std::ffi::CString;
+    use wqc_sv_stark::digest::terminal_digest;
+    use wqc_sv_stark::exec::execute;
+    use wqc_sv_stark::leaf::{encode_proof, Dispatch};
+    use wqc_sv_stark::wire::counts_json;
+
+    const BELL: &str = r#"[{"type":"H","params":0},{"type":"CNOT","params":[0,1]},
+        {"type":"RY","params":[1,0.7]}]"#;
+    const BELL_MEASURED: &str = r#"[{"type":"H","params":0},{"type":"CNOT","params":[0,1]},
+        {"type":"RY","params":[1,0.7]},{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+        {"type":"MEASURE","params":{"qubit":1,"cbit":1}}]"#;
+    const IDS: [&str; 4] = ["circuit", "sub", "node", "0"];
+
+    fn c(s: &str) -> CString {
+        CString::new(s).unwrap()
+    }
+
+    fn digest() -> [u64; 4] {
+        let gates = parse_circuit(BELL).unwrap().gates;
+        terminal_digest(&execute(2, &gates).1)
+    }
+
+    fn dispatch() -> Dispatch<'static> {
+        Dispatch {
+            circuit_id: IDS[0],
+            sub_task_id: IDS[1],
+            node_id: IDS[2],
+            slice_id: IDS[3],
+        }
+    }
+
+    unsafe fn verify(leaf: *const WqcSvLeaf, node: &str, digest: [u64; 4], proof: &[u8]) -> i32 {
+        let ids = [IDS[0], IDS[1], node, IDS[3]].map(c);
+        wqc_sv_verify_leaf(
+            leaf,
+            ids[0].as_ptr(),
+            ids[1].as_ptr(),
+            ids[2].as_ptr(),
+            ids[3].as_ptr(),
+            digest.as_ptr(),
+            proof.as_ptr(),
+            proof.len() as u32,
+        )
+    }
+
+    unsafe fn verify_sampling(
+        leaf: *const WqcSvLeaf,
+        seed: u64,
+        counts: &str,
+        proof: &[u8],
+    ) -> i32 {
+        let ids = IDS.map(c);
+        let counts = c(counts);
+        wqc_sv_verify_sampling_leaf(
+            leaf,
+            ids[0].as_ptr(),
+            ids[1].as_ptr(),
+            ids[2].as_ptr(),
+            ids[3].as_ptr(),
+            digest().as_ptr(),
+            seed,
+            counts.as_ptr(),
+            proof.as_ptr(),
+            proof.len() as u32,
+        )
+    }
+
+    #[test]
+    fn sv_leaf_rows_reads_core_json() {
+        unsafe {
+            // H and RY round (the CNOT flushes H first): two steps of 2^(n−1) rows.
+            assert_eq!(wqc_sv_leaf_rows(2, c(BELL).as_ptr()), 4);
+            assert_eq!(wqc_sv_leaf_rows(16, c(BELL).as_ptr()), 2 << 15);
+            assert_eq!(wqc_sv_leaf_rows(2, c(BELL_MEASURED).as_ptr()), 4);
+            assert_eq!(wqc_sv_leaf_rows(1, c(BELL).as_ptr()), -1);
+            assert_eq!(wqc_sv_leaf_rows(17, c("[]").as_ptr()), -1);
+            assert_eq!(wqc_sv_leaf_rows(2, c("not json").as_ptr()), -1);
+            assert_eq!(wqc_sv_leaf_rows(2, std::ptr::null()), -1);
+            let far = r#"[{"type":"MEASURE","params":{"qubit":9,"cbit":0}}]"#;
+            assert_eq!(wqc_sv_leaf_rows(2, c(far).as_ptr()), -1);
+        }
+        assert_eq!(wqc_sv_max_rows(), 1 << 22);
+    }
+
+    #[test]
+    fn sv_leaf_new_rejects_what_has_no_leaf() {
+        let low = c("low");
+        unsafe {
+            for (json, cbits, shots, level) in [
+                (BELL_MEASURED, 0, 0, "low"),
+                (BELL, 2, 0, "nope"),
+                (BELL_MEASURED, 2, 1 << 17, "low"),
+                (BELL_MEASURED, 0, 16, "low"),
+                // core rejects sample_counts without a MEASURE; so does the verifier.
+                (BELL, 2, 16, "low"),
+                (r#"[{"type":"RESET","params":0}]"#, 0, 0, "low"),
+            ] {
+                let leaf = wqc_sv_leaf_new(2, c(json).as_ptr(), cbits, shots, c(level).as_ptr());
+                assert!(leaf.is_null(), "{json} {cbits} {shots} {level}");
+            }
+            assert!(wqc_sv_leaf_new(2, std::ptr::null(), 0, 0, low.as_ptr()).is_null());
+            wqc_sv_leaf_free(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn sv_verify_leaf_through_ffi() {
+        let level = wqc_sv_stark::SecurityLevel::Low;
+        let gates = parse_circuit(BELL).unwrap().gates;
+        let leaf = wqc_sv_stark::leaf::build(level, 2, gates).unwrap();
+        let proof = encode_proof(&leaf.prove(dispatch().context()).unwrap().proof);
+        unsafe {
+            let v = wqc_sv_leaf_new(2, c(BELL).as_ptr(), 0, 0, c("LOW").as_ptr());
+            assert!(!v.is_null());
+            assert_eq!(verify(v, IDS[2], digest(), &proof), 1);
+            assert_eq!(verify(v, "other", digest(), &proof), 0);
+            let mut wrong = digest();
+            wrong[3] ^= 1;
+            assert_eq!(verify(v, IDS[2], wrong, &proof), 0);
+            assert_eq!(verify(v, IDS[2], digest(), &proof[1..]), 0);
+            assert_eq!(
+                verify_sampling(v, 1, r#"{"counts":{},"shots":0}"#, &proof),
+                0
+            );
+            // A verifier at another tier rejects the proof.
+            let ultra = wqc_sv_leaf_new(2, c(BELL).as_ptr(), 0, 0, c("").as_ptr());
+            assert!(!ultra.is_null());
+            assert_eq!(verify(ultra, IDS[2], digest(), &proof), 0);
+            wqc_sv_leaf_free(ultra);
+            wqc_sv_leaf_free(v);
+        }
+    }
+
+    #[test]
+    fn sv_verify_sampling_leaf_through_ffi() {
+        let level = wqc_sv_stark::SecurityLevel::Low;
+        let circuit = parse_circuit(BELL_MEASURED).unwrap();
+        let sampling = Sampling {
+            measures: circuit.measures,
+            cbits: 2,
+            shots: 64,
+        };
+        let leaf = wqc_sv_stark::leaf::build_sampling(level, 2, circuit.gates, sampling).unwrap();
+        let seed = 0xDEAD_BEEF;
+        let (p, counts) = leaf.prove_sampling(dispatch().context(), seed).unwrap();
+        let proof = encode_proof(&p.proof);
+        let json = counts_json(&counts, 2);
+        unsafe {
+            let v = wqc_sv_leaf_new(2, c(BELL_MEASURED).as_ptr(), 2, 64, c("low").as_ptr());
+            assert!(!v.is_null());
+            assert_eq!(verify_sampling(v, seed, &json, &proof), 1);
+            assert_eq!(verify_sampling(v, seed + 1, &json, &proof), 0);
+            let mut other = counts.clone();
+            let k = other.iter().position(|&x| x > 0).unwrap();
+            other[k] -= 1;
+            other[(k + 1) % 4] += 1;
+            assert_eq!(verify_sampling(v, seed, &counts_json(&other, 2), &proof), 0);
+            // The same counts, not as the canonical bytes or not canonical as integers.
+            let spaced = json.replacen(':', ": ", 1);
+            assert_eq!(verify_sampling(v, seed, &spaced, &proof), 0);
+            let p = 0xFFFF_FFFF_0000_0001u64;
+            let shifted = format!("{{\"counts\":{{\"00\":{}}},\"shots\":64}}", 64 + p);
+            assert_eq!(verify_sampling(v, seed, &shifted, &proof), 0);
+            let zero = json.replacen("\"counts\":{", "\"counts\":{\"00\":0,", 1);
+            assert_eq!(verify_sampling(v, seed, &zero, &proof), 0);
+            let long_key = json.replacen("\"0", "\"00", 1);
+            assert_eq!(verify_sampling(v, seed, &long_key, &proof), 0);
+            assert_eq!(verify(v, IDS[2], digest(), &proof), 0);
+            wqc_sv_leaf_free(v);
+        }
+    }
+}
