@@ -58,6 +58,17 @@ pub fn encode_proof(proof: &BatchStarkProof<Cfg>) -> Vec<u8> {
     postcard::to_allocvec(proof).expect("a proof serializes")
 }
 
+/// The statement `proof` claims: the prover's own, to prove a recursion layer over the proof
+/// (a verifier builds the expected statement instead, see [`LeafVerifier::verify`]).
+pub fn claimed_statement(proof: &BatchStarkProof<Cfg>) -> Result<Vec<F>, Error> {
+    proof
+        .non_primitives
+        .iter()
+        .find(|e| e.op_type == p3_circuit::ops::NpoTypeId::statement())
+        .map(|e| e.public_values.clone())
+        .ok_or_else(|| Error::Prove("proof carries no statement table".into()))
+}
+
 /// Reads [`encode_proof`]'s bytes; trailing bytes are an error.
 pub fn decode_proof(bytes: &[u8]) -> Result<BatchStarkProof<Cfg>, Error> {
     decode(bytes)
@@ -441,12 +452,7 @@ impl Leaf {
             .prepared
             .prove(&traces)
             .map_err(|e| Error::Prove(format!("{e:?}")))?;
-        let statement = proof
-            .non_primitives
-            .iter()
-            .find(|e| e.op_type == p3_circuit::ops::NpoTypeId::statement())
-            .map(|e| e.public_values.clone())
-            .ok_or_else(|| Error::Prove("proof carries no statement table".into()))?;
+        let statement = claimed_statement(&proof)?;
         Ok(LeafProof { proof, statement })
     }
 
@@ -598,27 +604,40 @@ impl LeafVerifier {
         let Some(sampling) = &self.sampling else {
             return Err(Error::Verify("not a sampling leaf".into()));
         };
-        if counts.len() != sampling.counts_len() {
-            return Err(Error::Verify(format!(
-                "{} counts, expected {}",
-                counts.len(),
-                sampling.counts_len()
-            )));
-        }
-        // Checking each count first keeps the sum from overflowing.
-        let shots = u64::from(sampling.shots);
-        if counts.iter().any(|&c| c > shots) || counts.iter().sum::<u64>() != shots {
-            return Err(Error::Verify(format!(
-                "counts do not add up to {shots} shots"
-            )));
-        }
-        let s = sampling_statement(
-            dispatch.context(),
-            digest,
-            seed,
-            sampling.shots,
-            counts_digest(counts),
-        )?;
+        let s = expected_sampling_statement(sampling, dispatch, digest, seed, counts)?;
         self.verify(proof, &s)
     }
+}
+
+/// The statement a sampling leaf of `sampling` must prove for `dispatch`, the expected terminal
+/// `digest`, the dispatched `seed` and the reported `counts`, after checking the counts are
+/// canonical (see [`LeafVerifier::verify_sampling`]).
+pub fn expected_sampling_statement(
+    sampling: &Sampling,
+    dispatch: &Dispatch<'_>,
+    digest: [u64; DIGEST_LEN],
+    seed: u64,
+    counts: &[u64],
+) -> Result<Vec<F>, Error> {
+    if counts.len() != sampling.counts_len() {
+        return Err(Error::Verify(format!(
+            "{} counts, expected {}",
+            counts.len(),
+            sampling.counts_len()
+        )));
+    }
+    // Checking each count first keeps the sum from overflowing.
+    let shots = u64::from(sampling.shots);
+    if counts.iter().any(|&c| c > shots) || counts.iter().sum::<u64>() != shots {
+        return Err(Error::Verify(format!(
+            "counts do not add up to {shots} shots"
+        )));
+    }
+    sampling_statement(
+        dispatch.context(),
+        digest,
+        seed,
+        sampling.shots,
+        counts_digest(counts),
+    )
 }

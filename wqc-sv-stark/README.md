@@ -297,6 +297,25 @@ GB); what remains is the framework's own copies of the preprocessed columns. The
 reaches it through `wqc-stark-ffi` (`wqc_sv_leaf_rows`, `wqc_sv_max_rows`, `wqc_sv_leaf_new` /
 `wqc_sv_leaf_free`, `wqc_sv_verify_leaf`, `wqc_sv_verify_sampling_leaf`).
 
+### A task's root
+
+`root::prove_root` puts one layer over each leaf, then aggregates neighbours level by level,
+carrying an odd last node up unchanged, so the root verifies against the leaf statements
+concatenated in leaf order (`root::root_statement`). Nothing else is bound: the verifier
+matches its manifest against those statements outside the proof. A `root::RootProof` carries
+every recursion proof (`root::encode_root`, postcard), layers first, the root last; a single
+leaf's root is its layer. `root::verify_root` rebuilds each layer and aggregation from the
+leaves' circuits, checks each carried proof against the verifier its children give, and uses
+it only to fix the next level's shape. The expected leaf statements come from the verifier
+(`leaf::expected_sampling_statement` for a sampling leaf); `leaf::claimed_statement` reads a
+proof's own, for the prover.
+
+A layer needs its leaf's verifier with the leaf config, so both sides prepare each leaf with
+its proving data: about 1 KB per gate row, plus about 180 MB for the layer and 350 MB more to
+prove it (8-core Mac, 2^11 to 2^20 rows; layers take about 0.5 s to prepare and 1.6 s to prove
+whatever the leaf). `VerifyCfg` cannot stand in yet: recursion needs the recursion traits of
+the child config's PCS. The FFI has `wqc_sv_verify_root` and `wqc_sv_root_peak_bytes`.
+
 ## Tests
 
 Run in release:

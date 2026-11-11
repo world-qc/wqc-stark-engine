@@ -30,6 +30,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "blake3"
 version = "1.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -39,7 +45,7 @@ dependencies = [
  "cc",
  "cfg-if",
  "constant_time_eq",
- "cpufeatures 0.3.1",
+ "cpufeatures 0.3.0",
 ]
 
 [[package]]
@@ -80,7 +86,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.1",
+ "cpufeatures 0.3.0",
  "rand_core 0.10.1",
 ]
 
@@ -110,9 +116,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.3.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
+checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
 ]
@@ -496,7 +502,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35aabf212b15e3d81815ffb4c6a756d092c79ff1c125a4752fe2b07a18233ab7"
 dependencies = [
  "blake3",
- "cpufeatures 0.3.1",
+ "cpufeatures 0.3.0",
  "p3-symmetric 0.9.0-rc.2",
  "p3-util 0.9.0-rc.2",
 ]
@@ -855,7 +861,7 @@ version = "0.9.0-rc.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b70bd62db2f6dd68e8dd949bab9a88e2c77b69fa5ccec7398f5239581374c06"
 dependencies = [
- "cpufeatures 0.3.1",
+ "cpufeatures 0.3.0",
  "p3-symmetric 0.9.0-rc.2",
  "p3-util 0.9.0-rc.2",
  "tiny-keccak",
@@ -1895,6 +1901,7 @@ dependencies = [
 name = "wqc-stark-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "serde",
  "serde_json",
  "wqc-stark-core",

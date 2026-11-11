@@ -12,3 +12,5 @@ wqc-stark-core = { path = "../wqc-stark-core", features = ["plonky3-stark"] }
 wqc-sv-stark = { path = "../wqc-sv-stark" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Leaf proofs in `wqc_sv_verify_root`'s JSON: Go's encoding/json writes []byte as standard base64.
+base64 = "0.22"
