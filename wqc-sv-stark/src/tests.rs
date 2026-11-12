@@ -1657,3 +1657,60 @@ fn build_verifier_verifies_leaf_proofs() {
         .verify_sampling(&sp.proof, &d, digest, 10, &counts)
         .is_err());
 }
+
+/// A root over one sampling leaf is that leaf's layer, and verifies only against the leaf's
+/// expected statement.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn a_root_over_one_leaf_binds_its_statement() {
+    use crate::root::{decode_root, encode_root, prove_root_with, verify_root_with};
+    let l = sampling_leaf(Tamper::None);
+    let (p, _) = l.prove_sampling(CTX, 5).unwrap();
+    let (root, st) = prove_root_with(&[(&l, &p)], FRI).unwrap();
+    assert_eq!(root.proofs.len(), 1);
+    assert_eq!(st, p.statement);
+    let root = decode_root(&encode_root(&root)).unwrap();
+    verify_root_with(&[(&l, &p)], &root, FRI).unwrap();
+
+    let mut wrong = LeafProof {
+        proof: crate::leaf::decode_proof(&crate::leaf::encode_proof(&p.proof)).unwrap(),
+        statement: p.statement.clone(),
+    };
+    wrong.statement[STATEMENT_LEN] += F::ONE;
+    assert!(verify_root_with(&[(&l, &wrong)], &root, FRI).is_err());
+    let mut bytes = encode_root(&root);
+    bytes.push(0);
+    assert!(decode_root(&bytes).is_err());
+}
+
+/// Three leaves: two layers aggregate, the third is carried up, and the root verifies against
+/// the statements in leaf order only.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn a_root_over_three_leaves_keeps_their_order() {
+    use crate::root::{prove_root_with, root_statement, verify_root_with, RootProof};
+    let l = leaf(Tamper::None);
+    let ps: Vec<LeafProof> = (0..3u64)
+        .map(|i| l.prove([i, i + 1, i + 2, i + 3]).unwrap())
+        .collect();
+    let leaves: Vec<_> = ps.iter().map(|p| (&l, p)).collect();
+    let (root, st) = prove_root_with(&leaves, FRI).unwrap();
+    assert_eq!(root.proofs.len(), 5, "3 layers, then 2 aggregations");
+    let statements: Vec<_> = ps.iter().map(|p| p.statement.clone()).collect();
+    assert_eq!(st, root_statement(&statements));
+    verify_root_with(&leaves, &root, FRI).unwrap();
+
+    let swapped = [leaves[1], leaves[0], leaves[2]];
+    assert!(verify_root_with(&swapped, &root, FRI).is_err());
+    assert!(verify_root_with(&leaves[..2], &root, FRI).is_err());
+    let short = RootProof {
+        proofs: root.proofs[..4].to_vec(),
+    };
+    assert!(verify_root_with(&leaves, &short, FRI).is_err());
+    // An intermediate proof swapped for another level's fails where it is checked.
+    let mut moved = RootProof {
+        proofs: root.proofs.clone(),
+    };
+    moved.proofs.swap(0, 1);
+    assert!(verify_root_with(&leaves, &moved, FRI).is_err());
+}

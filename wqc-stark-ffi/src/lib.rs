@@ -1034,6 +1034,146 @@ pub unsafe extern "C" fn wqc_sv_verify_sampling_leaf(
     unwind_to_ffi_code(result)
 }
 
+/// One leaf of [`wqc_sv_verify_root`]: its circuit, as for [`wqc_sv_leaf_new`], and the
+/// dispatch and result the orchestrator accepted, as for [`wqc_sv_verify_sampling_leaf`]
+/// (`shots == 0`: a `statevector_scalar` leaf, without seed and counts).
+#[derive(serde::Deserialize)]
+struct RootLeaf {
+    qubit_count: u32,
+    circuit: String,
+    #[serde(default)]
+    classical_bit_count: u32,
+    #[serde(default)]
+    shots: u64,
+    security_level: String,
+    circuit_id: String,
+    sub_task_id: String,
+    node_id: String,
+    slice_id: String,
+    digest: [u64; 4],
+    #[serde(default)]
+    sample_seed: u64,
+    #[serde(default)]
+    counts: String,
+    /// The leaf proof (standard base64): it fixes the layer's shape, the expected statement
+    /// is built from the fields above.
+    proof: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RootInput {
+    leaves: Vec<RootLeaf>,
+}
+
+/// Prepares `l`'s leaf with its proof and the statement the orchestrator expects of it.
+fn root_leaf(
+    l: &RootLeaf,
+) -> Result<(wqc_sv_stark::leaf::Leaf, wqc_sv_stark::leaf::LeafProof), wqc_sv_stark::Error> {
+    use base64::Engine as _;
+    use wqc_sv_stark::leaf::{self, Dispatch, LeafProof};
+    use wqc_sv_stark::Error;
+    let level = wqc_sv_stark::SecurityLevel::parse(&l.security_level).ok_or_else(|| {
+        Error::InvalidCircuit(format!("unknown security level {:?}", l.security_level))
+    })?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&l.proof)
+        .map_err(|e| Error::Verify(format!("leaf proof base64: {e}")))?;
+    let proof = leaf::decode_proof(&bytes)?;
+    let c = parse_circuit(&l.circuit)?;
+    let n = l.qubit_count as usize;
+    let d = Dispatch {
+        circuit_id: &l.circuit_id,
+        sub_task_id: &l.sub_task_id,
+        node_id: &l.node_id,
+        slice_id: &l.slice_id,
+    };
+    if l.shots == 0 {
+        if !c.measures.is_empty() {
+            return Err(Error::InvalidCircuit(
+                "MEASURE in a circuit without shots".into(),
+            ));
+        }
+        let statement = leaf::statement(d.context(), l.digest)?;
+        return Ok((
+            leaf::build(level, n, c.gates)?,
+            LeafProof { proof, statement },
+        ));
+    }
+    let shots =
+        u32::try_from(l.shots).map_err(|_| Error::InvalidCircuit(format!("{} shots", l.shots)))?;
+    let sampling = Sampling {
+        measures: c.measures,
+        cbits: l.classical_bit_count as usize,
+        shots,
+    };
+    let counts = parse_counts(&l.counts, &sampling)?;
+    let statement =
+        leaf::expected_sampling_statement(&sampling, &d, l.digest, l.sample_seed, &counts)?;
+    let built = leaf::build_sampling(level, n, c.gates, sampling)?;
+    Ok((built, LeafProof { proof, statement }))
+}
+
+/// An upper estimate, in bytes, of the memory `wqc_sv_verify_root` peaks at per leaf of `rows`
+/// gate rows on `qubit_count` qubits with `shots`: it prepares each leaf with its proving data
+/// (about 1 KB per gate row) and a recursion layer over it (about 180 MB). Out-of-range
+/// arguments saturate to `u64::MAX`.
+#[no_mangle]
+pub extern "C" fn wqc_sv_root_peak_bytes(qubit_count: u32, rows: u64, shots: u64) -> u64 {
+    wqc_sv_stark::root::verify_peak_bytes(qubit_count as usize, rows as usize, shots)
+}
+
+/// Verifies a task's v2 root (`root::encode_root` bytes, from the composer) over its leaves.
+/// `leaves_json` is `{"leaves":[...]}`, in the order the composer was given them, each with
+/// the circuit, the dispatch, the digest, seed and canonical counts the orchestrator accepted,
+/// and the leaf proof (base64): the root verifies against the statements built from those
+/// fields, never against a prover's claim.
+///
+/// This prepares every leaf with its proving data and a layer over it; see
+/// [`wqc_sv_root_peak_bytes`] for the memory.
+///
+/// Returns `1` = valid, `0` = invalid root or arguments, `-99` = panic.
+///
+/// # Safety
+///
+/// `leaves_json` must be null-terminated; `root_bytes` must point to `root_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_verify_root(
+    leaves_json: *const c_char,
+    root_bytes: *const u8,
+    root_len: u32,
+) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let Some(json) = cstr(leaves_json) else {
+            eprintln!("[Rust FFI] sv_verify_root: null or non-UTF-8 leaves");
+            return 0;
+        };
+        if root_bytes.is_null() {
+            eprintln!("[Rust FFI] sv_verify_root: null root");
+            return 0;
+        }
+        let root = slice::from_raw_parts(root_bytes, root_len as usize);
+        let checked = serde_json::from_str::<RootInput>(json)
+            .map_err(|e| wqc_sv_stark::Error::Verify(format!("leaves JSON: {e}")))
+            .and_then(|input| {
+                let leaves = input
+                    .leaves
+                    .iter()
+                    .map(root_leaf)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
+                wqc_sv_stark::root::verify_root(&refs, &wqc_sv_stark::root::decode_root(root)?)
+            });
+        match checked {
+            Ok(()) => 1,
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_verify_root: {err}");
+                0
+            }
+        }
+    }));
+    unwind_to_ffi_code(result)
+}
+
 #[cfg(test)]
 mod sv_tests {
     use super::*;
@@ -1217,5 +1357,58 @@ mod sv_tests {
             assert_eq!(verify(v, IDS[2], digest(), &proof), 0);
             wqc_sv_leaf_free(v);
         }
+    }
+
+    #[test]
+    fn sv_verify_root_through_ffi() {
+        use base64::Engine as _;
+        let level = wqc_sv_stark::SecurityLevel::Low;
+        let circuit = parse_circuit(BELL_MEASURED).unwrap();
+        let sampling = Sampling {
+            measures: circuit.measures,
+            cbits: 2,
+            shots: 64,
+        };
+        let leaf = wqc_sv_stark::leaf::build_sampling(level, 2, circuit.gates, sampling).unwrap();
+        let seed = 7;
+        let (p, counts) = leaf.prove_sampling(dispatch().context(), seed).unwrap();
+        let (root, _) = wqc_sv_stark::root::prove_root(&[(&leaf, &p)]).unwrap();
+        let root = wqc_sv_stark::root::encode_root(&root);
+        let input = |node: &str, seed: u64, counts: &str| {
+            serde_json::json!({"leaves": [{
+                "qubit_count": 2,
+                "circuit": BELL_MEASURED,
+                "classical_bit_count": 2,
+                "shots": 64,
+                "security_level": "low",
+                "circuit_id": IDS[0],
+                "sub_task_id": IDS[1],
+                "node_id": node,
+                "slice_id": IDS[3],
+                "digest": digest(),
+                "sample_seed": seed,
+                "counts": counts,
+                "proof": base64::engine::general_purpose::STANDARD.encode(encode_proof(&p.proof)),
+            }]})
+            .to_string()
+        };
+        let json = counts_json(&counts, 2);
+        let verify = |leaves: String, root: &[u8]| unsafe {
+            wqc_sv_verify_root(c(&leaves).as_ptr(), root.as_ptr(), root.len() as u32)
+        };
+        assert_eq!(verify(input(IDS[2], seed, &json), &root), 1);
+        assert_eq!(verify(input("other", seed, &json), &root), 0);
+        assert_eq!(verify(input(IDS[2], seed + 1, &json), &root), 0);
+        let mut other = counts.clone();
+        let k = other.iter().position(|&x| x > 0).unwrap();
+        other[k] -= 1;
+        other[(k + 1) % 4] += 1;
+        assert_eq!(
+            verify(input(IDS[2], seed, &counts_json(&other, 2)), &root),
+            0
+        );
+        assert_eq!(verify(input(IDS[2], seed, &json), &root[1..]), 0);
+        assert_eq!(verify(r#"{"leaves":[]}"#.into(), &root), 0);
+        assert!(wqc_sv_root_peak_bytes(2, 1, 64) > 256 << 20);
     }
 }

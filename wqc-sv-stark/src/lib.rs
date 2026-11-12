@@ -15,6 +15,7 @@ pub mod exec;
 pub mod leaf;
 mod npo;
 pub mod recursion;
+pub mod root;
 mod tables;
 pub(crate) mod verify_cfg;
 pub mod wire;
