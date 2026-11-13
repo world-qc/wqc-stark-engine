@@ -4,8 +4,8 @@ State-vector STARK leaf (v2). A leaf proves that applying a circuit to |0…0⟩
 state vector with a given terminal digest, and leaves recurse and aggregate into a root of
 roughly constant size.
 
-Status: experimental. Nothing in the network uses it yet; it will ship behind the
-`feat_sv_stark_v2` capability bit.
+Status: proves terminal `sample_counts` tasks on the network (capability bit 5); mid-circuit
+circuits ship behind bit 6 (see [Mid-circuit measurement](#mid-circuit-measurement)).
 
 ## What a proof means
 
@@ -165,6 +165,35 @@ read the final amplitudes from the boundary table, so one proof covers both.
   permutations, and `max(2^cbits, 4)/4` counts rows. On an 8-core machine, a leaf at n = 16
   with 64 rounding steps, all 16 qubits measured, proves in 35 s with 1024 shots and 42 s with
   2^16 shots (35 s without sampling); the proof grows by about 80–100 KB.
+
+## Mid-circuit measurement
+
+`wire::parse_leaf(json, n)` reads a circuit with mid-circuit semantics (a RESET, an IF, or a
+unitary gate after a MEASURE) as a unitary circuit with terminal measurements, by deferring the
+measurements. The rewritten circuit is what the leaf proves, so the rule is part of the leaf
+format (capability bit 6 in the protocol); a circuit without mid-circuit semantics is read
+exactly as `parse_circuit` reads it.
+
+- `MEASURE q → c` emits nothing; `c` is now held by `q`.
+- `IF(c == v) U` emits `U` with the qubit holding `c` added to its controls, between two X on
+  that qubit when `v == 0`. A cbit never measured is 0: `U` is emitted unchanged when `v == 0`
+  and dropped when `v == 1`. `U` is a one-qubit gate, CNOT or CZ (an IF of CCNOT, MEASURE,
+  RESET or IF is rejected), so a controlled `U` has at most two controls.
+- `RESET q` emits nothing when `q` is fresh (untouched by any gate, MEASURE or IF since the
+  start or its last RESET). Otherwise it adds an ancilla `a` (numbered from `n`) and emits
+  `CNOT(q, a)`, `CNOT(a, q)`: `q` is back in `|0⟩` and every cbit `q` held is now held by `a`,
+  which nothing touches again.
+- Each measured cbit is measured at the end from the qubit holding it, in cbit order.
+
+It rejects a gate (or an IF's gate) on a measured qubit before its RESET, as wqc-core does.
+That rule is what makes deferring exact: a measured qubit stays frozen in the Z basis, so
+measuring it at the end, or using it as a quantum control, gives the distribution measuring it
+at once and controlling classically gives; an ancilla left unmeasured is traced out, which is
+what RESET does to the old value. A test follows every measurement branch of random dynamic
+circuits in `f64` and compares the register distribution with the rewritten circuit's within
+1e-9. Each ancilla doubles the gate rows; the limits on qubits (ancillas included) and rows
+apply as for any leaf. Counts differ from wqc-core's shot-by-shot sampler for the same seed,
+from the same distribution.
 
 ## Security levels
 

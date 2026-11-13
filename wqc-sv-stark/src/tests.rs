@@ -1714,3 +1714,338 @@ fn a_root_over_three_leaves_keeps_their_order() {
     moved.proofs.swap(0, 1);
     assert!(verify_root_with(&leaves, &moved, FRI).is_err());
 }
+
+/// A small f64 state vector for checking [`crate::wire::parse_leaf`] against the circuit it
+/// rewrites: `(re, im)` amplitudes, qubit `q` is bit `q` of the index.
+type Sv = Vec<(f64, f64)>;
+
+fn apply_f64(st: &mut Sv, g: &Gate) {
+    let mul = |a: (f64, f64), b: (f64, f64)| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+    let add = |a: (f64, f64), b: (f64, f64)| (a.0 + b.0, a.1 + b.1);
+    let t = 1usize << g.target;
+    for i in 0..st.len() {
+        if i & t != 0 || g.controls.iter().any(|&c| i >> c & 1 == 0) {
+            continue;
+        }
+        let (a0, a1) = (st[i], st[i | t]);
+        st[i] = add(mul(g.f[0], a0), mul(g.f[1], a1));
+        st[i | t] = add(mul(g.f[2], a0), mul(g.f[3], a1));
+    }
+}
+
+/// The exact distribution of the classical register of a dynamic circuit, by following every
+/// measurement branch: what wqc-core samples shot by shot.
+fn branch_distribution(json: &str, n: usize, cbits: usize) -> Vec<f64> {
+    let wire: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
+    let one = |g: &serde_json::Value| {
+        crate::wire::parse_circuit(&format!("[{g}]")).unwrap().gates[0].clone()
+    };
+    let mut start = vec![(0.0, 0.0); 1 << n];
+    start[0] = (1.0, 0.0);
+    // (weight, normalized state, register)
+    let mut branches = vec![(1.0f64, start, 0usize)];
+    let split = |branches: Vec<(f64, Sv, usize)>, q: usize| {
+        let mut out = Vec::new();
+        for (w, st, reg) in branches {
+            for bit in 0..2 {
+                let p: f64 = st
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i >> q & 1 == bit)
+                    .map(|(_, a)| a.0 * a.0 + a.1 * a.1)
+                    .sum();
+                if p < 1e-15 {
+                    continue;
+                }
+                let s = p.sqrt();
+                let next: Sv = st
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        if i >> q & 1 == bit {
+                            (a.0 / s, a.1 / s)
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    })
+                    .collect();
+                out.push((w * p, next, reg, bit));
+            }
+        }
+        out
+    };
+    for g in &wire {
+        let p = &g["params"];
+        match g["type"].as_str().unwrap() {
+            "MEASURE" => {
+                let (q, c) = (
+                    p["qubit"].as_u64().unwrap() as usize,
+                    p["cbit"].as_u64().unwrap() as usize,
+                );
+                branches = split(branches, q)
+                    .into_iter()
+                    .map(|(w, st, reg, bit)| (w, st, (reg & !(1 << c)) | (bit << c)))
+                    .collect();
+            }
+            "RESET" => {
+                let q = p.as_u64().unwrap() as usize;
+                branches = split(branches, q)
+                    .into_iter()
+                    .map(|(w, mut st, reg, bit)| {
+                        if bit == 1 {
+                            apply_f64(&mut st, &Gate::x(q));
+                        }
+                        (w, st, reg)
+                    })
+                    .collect();
+            }
+            "IF" => {
+                let (c, v) = (
+                    p["cbit"].as_u64().unwrap() as usize,
+                    p["value"].as_u64().unwrap() as usize,
+                );
+                let u = one(&p["gate"]);
+                for (_, st, reg) in branches.iter_mut() {
+                    if *reg >> c & 1 == v {
+                        apply_f64(st, &u);
+                    }
+                }
+            }
+            _ => {
+                let u = one(g);
+                for (_, st, _) in branches.iter_mut() {
+                    apply_f64(st, &u);
+                }
+            }
+        }
+    }
+    let mut dist = vec![0.0; 1 << cbits];
+    for (w, _, reg) in branches {
+        dist[reg] += w;
+    }
+    dist
+}
+
+/// The register distribution of [`crate::wire::parse_leaf`]'s unitary circuit and terminal
+/// measurements.
+fn leaf_distribution(json: &str, n: usize, cbits: usize) -> (usize, Vec<f64>) {
+    let c = crate::wire::parse_leaf(json, n).unwrap();
+    let mut st = vec![(0.0, 0.0); 1 << c.qubits];
+    st[0] = (1.0, 0.0);
+    for g in &c.gates {
+        apply_f64(&mut st, g);
+    }
+    let sampling = crate::born::Sampling {
+        measures: c.measures,
+        cbits,
+        shots: 1,
+    };
+    let mut dist = vec![0.0; 1 << cbits];
+    for (b, a) in st.iter().enumerate() {
+        dist[sampling.outcome(b)] += a.0 * a.0 + a.1 * a.1;
+    }
+    (c.qubits, dist)
+}
+
+/// A random dynamic circuit as wqc-core accepts it: no gate on a measured qubit until its
+/// RESET, IF gates of one qubit or CNOT / CZ.
+fn random_dynamic(n: usize, cbits: usize, count: usize, seed: u64) -> String {
+    let mut s = seed | 1;
+    let mut next = move |m: usize| {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        (s % m as u64) as usize
+    };
+    let mut measured = vec![false; n];
+    let mut out = Vec::new();
+    for _ in 0..count {
+        let free: Vec<usize> = (0..n).filter(|&q| !measured[q]).collect();
+        let unitary = |next: &mut dyn FnMut(usize) -> usize| -> Option<String> {
+            if free.is_empty() {
+                return None;
+            }
+            let t = free[next(free.len())];
+            let c = free[next(free.len())];
+            let th = (next(10_000) as f64 / 10_000.0 - 0.5) * std::f64::consts::TAU;
+            Some(match next(8) {
+                0 => format!(r#"{{"type":"H","params":{t}}}"#),
+                1 => format!(r#"{{"type":"X","params":{t}}}"#),
+                2 => format!(r#"{{"type":"T","params":{t}}}"#),
+                3 => format!(r#"{{"type":"RY","params":[{t},{th}]}}"#),
+                4 => format!(r#"{{"type":"RX","params":[{t},{th}]}}"#),
+                5 if c != t => format!(r#"{{"type":"CNOT","params":[{c},{t}]}}"#),
+                6 if c != t => format!(r#"{{"type":"CZ","params":[{c},{t}]}}"#),
+                _ => format!(r#"{{"type":"S","params":{t}}}"#),
+            })
+        };
+        match next(10) {
+            0 | 1 => {
+                let q = next(n);
+                measured[q] = true;
+                out.push(format!(
+                    r#"{{"type":"MEASURE","params":{{"qubit":{q},"cbit":{}}}}}"#,
+                    next(cbits)
+                ));
+            }
+            2 => {
+                let q = next(n);
+                measured[q] = false;
+                out.push(format!(r#"{{"type":"RESET","params":{q}}}"#));
+            }
+            3 | 4 => {
+                if let Some(u) = unitary(&mut next) {
+                    out.push(format!(
+                        r#"{{"type":"IF","params":{{"cbit":{},"value":{},"gate":{u}}}}}"#,
+                        next(cbits),
+                        next(2)
+                    ));
+                }
+            }
+            _ => {
+                if let Some(u) = unitary(&mut next) {
+                    out.push(u);
+                }
+            }
+        }
+    }
+    for (q, &m) in measured.iter().enumerate().take(cbits) {
+        if !m {
+            out.push(format!(
+                r#"{{"type":"MEASURE","params":{{"qubit":{q},"cbit":{q}}}}}"#
+            ));
+        }
+    }
+    format!("[{}]", out.join(","))
+}
+
+/// Deferring the measurements gives the register the distribution that following every
+/// measurement branch gives.
+#[test]
+fn parse_leaf_keeps_the_register_distribution() {
+    let mut checked = 0;
+    for seed in 1..400u64 {
+        let n = 1 + (seed % 4) as usize;
+        let cbits = 1 + (seed % 3) as usize;
+        let json = random_dynamic(n, cbits, 12, seed * 104_729);
+        let (qubits, got) = leaf_distribution(&json, n, cbits);
+        if qubits > 10 {
+            continue;
+        }
+        let want = branch_distribution(&json, n, cbits);
+        for (r, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert!((g - w).abs() < 1e-9, "{json}: register {r}: {g} vs {w}");
+        }
+        checked += 1;
+    }
+    assert!(checked > 300, "{checked} circuits checked");
+}
+
+/// The rewriting rules, gate by gate.
+#[test]
+fn parse_leaf_rewrites_mid_circuit_gates() {
+    use crate::born::Measure;
+    use crate::wire::{parse_circuit, parse_leaf};
+    // A terminal circuit is read as parse_circuit reads it.
+    let terminal = r#"[{"type":"H","params":0},{"type":"MEASURE","params":{"qubit":0,"cbit":1}},
+        {"type":"MEASURE","params":{"qubit":0,"cbit":0}}]"#;
+    let (a, b) = (
+        parse_leaf(terminal, 2).unwrap(),
+        parse_circuit(terminal).unwrap(),
+    );
+    assert_eq!(a.qubits, 2);
+    assert_eq!(execute(2, &a.gates).1, execute(2, &b.gates).1);
+    assert_eq!(a.measures, b.measures);
+
+    // keepalive's sample_mid: the IF becomes a CNOT and needs no ancilla.
+    let mid = r#"[{"type":"H","params":0},{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+        {"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"X","params":2}}},
+        {"type":"MEASURE","params":{"qubit":2,"cbit":1}}]"#;
+    let c = parse_leaf(mid, 3).unwrap();
+    assert_eq!(c.qubits, 3);
+    assert_eq!(
+        execute(3, &c.gates).1,
+        execute(3, &[Gate::h(0), Gate::cnot(0, 2)]).1
+    );
+    assert_eq!(
+        c.measures,
+        [Measure { qubit: 0, cbit: 0 }, Measure { qubit: 2, cbit: 1 }]
+    );
+
+    // value 0 wraps the control in X; a never-measured cbit is 0.
+    let zero = r#"[{"type":"H","params":0},{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+        {"type":"IF","params":{"cbit":0,"value":0,"gate":{"type":"X","params":1}}},
+        {"type":"IF","params":{"cbit":1,"value":0,"gate":{"type":"H","params":2}}},
+        {"type":"IF","params":{"cbit":1,"value":1,"gate":{"type":"X","params":2}}},
+        {"type":"MEASURE","params":{"qubit":1,"cbit":1}}]"#;
+    let c = parse_leaf(zero, 3).unwrap();
+    let want = [
+        Gate::h(0),
+        Gate::x(0),
+        Gate::cnot(0, 1),
+        Gate::x(0),
+        Gate::h(2),
+    ];
+    assert_eq!(execute(3, &c.gates).1, execute(3, &want).1);
+
+    // RESET of a fresh qubit is free; of a used one, it takes an ancilla that keeps the cbit.
+    let reset = r#"[{"type":"RESET","params":1},{"type":"H","params":0},
+        {"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"RESET","params":0},
+        {"type":"RESET","params":0},{"type":"H","params":0},
+        {"type":"MEASURE","params":{"qubit":0,"cbit":1}}]"#;
+    let c = parse_leaf(reset, 2).unwrap();
+    assert_eq!(c.qubits, 3);
+    assert_eq!(
+        c.measures,
+        [Measure { qubit: 2, cbit: 0 }, Measure { qubit: 0, cbit: 1 }]
+    );
+
+    for bad in [
+        // a gate, or an IF's gate, on a measured qubit before its RESET
+        r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"H","params":0}]"#,
+        r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+            {"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"X","params":0}}}]"#,
+        r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+            {"type":"CNOT","params":[1,0]}]"#,
+        // IF value, IF gate kinds
+        r#"[{"type":"IF","params":{"cbit":0,"value":2,"gate":{"type":"X","params":0}}}]"#,
+        r#"[{"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"CCNOT","params":[0,1,2]}}}]"#,
+        r#"[{"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"RESET","params":0}}}]"#,
+        r#"[{"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"MEASURE","params":{"qubit":0,"cbit":0}}}}]"#,
+        // qubits outside the register
+        r#"[{"type":"RESET","params":3}]"#,
+        r#"[{"type":"RESET","params":0},{"type":"H","params":5}]"#,
+    ] {
+        assert!(parse_leaf(bad, 3).is_err(), "{bad}");
+    }
+}
+
+/// A rewritten mid-circuit circuit proves and verifies as a sampling leaf.
+#[test]
+fn mid_circuit_sampling_leaf_proves() {
+    use crate::born::Sampling;
+    use crate::leaf::build_sampling;
+    let json = r#"[{"type":"RY","params":[0,0.9]},{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+        {"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"RY","params":[1,0.4]}}},
+        {"type":"RESET","params":0},{"type":"H","params":0},
+        {"type":"MEASURE","params":{"qubit":0,"cbit":1}},{"type":"MEASURE","params":{"qubit":1,"cbit":2}}]"#;
+    let c = crate::wire::parse_leaf(json, 2).unwrap();
+    assert_eq!(c.qubits, 3);
+    let sampling = Sampling {
+        measures: c.measures,
+        cbits: 3,
+        shots: 128,
+    };
+    let l = build_sampling(SecurityLevel::Low, c.qubits, c.gates, sampling).unwrap();
+    let d = Dispatch {
+        circuit_id: "c",
+        sub_task_id: "s",
+        node_id: "n",
+        slice_id: "0",
+    };
+    let (p, counts) = l.prove_sampling(d.context(), 9).unwrap();
+    let digest: [u64; DIGEST_LEN] =
+        std::array::from_fn(|i| p3_field::PrimeField64::as_canonical_u64(&p.statement[4 + i]));
+    l.verify_sampling(&p.proof, &d, digest, 9, &counts).unwrap();
+    assert_eq!(counts.iter().sum::<u64>(), 128);
+}

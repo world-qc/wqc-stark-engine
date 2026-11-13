@@ -732,7 +732,7 @@ pub unsafe extern "C" fn wqc_verify_overlap_binding(
 use std::panic::AssertUnwindSafe;
 use wqc_sv_stark::born::Sampling;
 use wqc_sv_stark::leaf::{gate_rows, LeafVerifier};
-use wqc_sv_stark::wire::{parse_circuit, parse_counts};
+use wqc_sv_stark::wire::{parse_circuit, parse_counts, parse_leaf};
 
 /// A v2 leaf's verifier, opaque to C. Verifying through it from several threads at once is
 /// safe; free it once with [`wqc_sv_leaf_free`].
@@ -753,7 +753,9 @@ fn cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 
 /// Gate rows `W` of the v2 leaf for `circuit_json` on `qubit_count` qubits (rounding steps ×
 /// 2^(n−1)): the work that sets a leaf's proving time and memory, for scheduling and TTLs.
-/// `circuit_json` is wqc-core's gate list. Terminal MEASUREs are allowed and their qubits
+/// `circuit_json` is wqc-core's gate list, read by `wire::parse_leaf`: a mid-circuit circuit
+/// (RESET, IF, a gate after a MEASURE) is counted as its rewritten unitary circuit, whose `n`
+/// includes one ancilla per RESET that needs one. MEASUREs are allowed and their qubits
 /// checked; their cbits are not (the register size is not an argument), so
 /// `wqc_sv_leaf_new` can still reject a circuit this accepts. It does not apply the leaf's
 /// row limit (`wqc_sv_max_rows`), so a scheduler can see how far over a circuit is.
@@ -762,9 +764,9 @@ fn cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 /// with many shots and few qubits they outweigh the gate rows, so `W` alone underestimates
 /// such a leaf.
 ///
-/// Returns the row count (≥ 0), `-1` if the circuit has no v2 leaf (bad JSON, RESET or IF,
-/// a gate or MEASURE qubit outside `qubit_count`, `qubit_count` outside 1..=16), or `-99` on
-/// panic.
+/// Returns the row count (≥ 0), `-1` if the circuit has no v2 leaf (bad JSON, a gate on a
+/// measured qubit before its RESET, an IF of CCNOT or of a non-unitary gate, a gate or MEASURE
+/// qubit outside `qubit_count`, more than 16 qubits with ancillas), or `-99` on panic.
 ///
 /// # Safety
 ///
@@ -777,14 +779,14 @@ pub unsafe extern "C" fn wqc_sv_leaf_rows(qubit_count: u32, circuit_json: *const
             return -1;
         };
         let n = qubit_count as usize;
-        let rows = parse_circuit(json).and_then(|c| {
-            if let Some(m) = c.measures.iter().find(|m| m.qubit >= n) {
+        let rows = parse_leaf(json, n).and_then(|c| {
+            if let Some(m) = c.measures.iter().find(|m| m.qubit >= c.qubits) {
                 return Err(wqc_sv_stark::Error::InvalidCircuit(format!(
                     "MEASURE of qubit {} with {n} qubits",
                     m.qubit
                 )));
             }
-            gate_rows(n, &c.gates)
+            gate_rows(c.qubits, &c.gates)
         });
         match rows {
             Ok(rows) => rows as i64,
@@ -820,8 +822,10 @@ pub extern "C" fn wqc_sv_max_rows() -> i64 {
 /// and 16 s at the 2^22-row limit); the handle keeps under 1 MB.
 ///
 /// - `shots == 0`: a `statevector_scalar` leaf; `circuit_json` must have no MEASURE.
-/// - `shots > 0`: a `sample_counts` leaf over the circuit's terminal MEASUREs, with
-///   `classical_bit_count` classical bits (1..=16) and `shots` (at most 2^16).
+/// - `shots > 0`: a `sample_counts` leaf over the circuit as `wire::parse_leaf` reads it
+///   (mid-circuit MEASURE, RESET and IF rewritten into unitary gates and terminal MEASUREs on
+///   `qubit_count` qubits plus ancillas), with `classical_bit_count` classical bits (1..=16)
+///   and `shots` (at most 2^16).
 ///
 /// `security_level` is the dispatched tier (`low|normal|high|ultra`, empty = `ultra`); a proof
 /// made at another tier fails this verifier. Returns null on any error.
@@ -847,25 +851,28 @@ pub unsafe extern "C" fn wqc_sv_leaf_new(
             eprintln!("[Rust FFI] sv_leaf_new: unknown security level {level:?}");
             return std::ptr::null_mut();
         };
-        let built = parse_circuit(json).and_then(|c| {
-            let n = qubit_count as usize;
-            if shots == 0 {
+        let n = qubit_count as usize;
+        let built = if shots == 0 {
+            parse_circuit(json).and_then(|c| {
                 if !c.measures.is_empty() {
                     return Err(wqc_sv_stark::Error::InvalidCircuit(
                         "MEASURE in a circuit without shots".into(),
                     ));
                 }
-                return wqc_sv_stark::leaf::build_verifier(level, n, c.gates, None);
-            }
-            let shots = u32::try_from(shots)
-                .map_err(|_| wqc_sv_stark::Error::InvalidCircuit(format!("{shots} shots")))?;
-            let sampling = Sampling {
-                measures: c.measures,
-                cbits: classical_bit_count as usize,
-                shots,
-            };
-            wqc_sv_stark::leaf::build_verifier(level, n, c.gates, Some(sampling))
-        });
+                wqc_sv_stark::leaf::build_verifier(level, n, c.gates, None)
+            })
+        } else {
+            parse_leaf(json, n).and_then(|c| {
+                let shots = u32::try_from(shots)
+                    .map_err(|_| wqc_sv_stark::Error::InvalidCircuit(format!("{shots} shots")))?;
+                let sampling = Sampling {
+                    measures: c.measures,
+                    cbits: classical_bit_count as usize,
+                    shots,
+                };
+                wqc_sv_stark::leaf::build_verifier(level, c.qubits, c.gates, Some(sampling))
+            })
+        };
         match built {
             Ok(verifier) => Box::into_raw(Box::new(WqcSvLeaf(verifier))),
             Err(err) => {
@@ -1079,7 +1086,6 @@ fn root_leaf(
         .decode(&l.proof)
         .map_err(|e| Error::Verify(format!("leaf proof base64: {e}")))?;
     let proof = leaf::decode_proof(&bytes)?;
-    let c = parse_circuit(&l.circuit)?;
     let n = l.qubit_count as usize;
     let d = Dispatch {
         circuit_id: &l.circuit_id,
@@ -1088,6 +1094,7 @@ fn root_leaf(
         slice_id: &l.slice_id,
     };
     if l.shots == 0 {
+        let c = parse_circuit(&l.circuit)?;
         if !c.measures.is_empty() {
             return Err(Error::InvalidCircuit(
                 "MEASURE in a circuit without shots".into(),
@@ -1099,6 +1106,7 @@ fn root_leaf(
             LeafProof { proof, statement },
         ));
     }
+    let c = parse_leaf(&l.circuit, n)?;
     let shots =
         u32::try_from(l.shots).map_err(|_| Error::InvalidCircuit(format!("{} shots", l.shots)))?;
     let sampling = Sampling {
@@ -1109,7 +1117,7 @@ fn root_leaf(
     let counts = parse_counts(&l.counts, &sampling)?;
     let statement =
         leaf::expected_sampling_statement(&sampling, &d, l.digest, l.sample_seed, &counts)?;
-    let built = leaf::build_sampling(level, n, c.gates, sampling)?;
+    let built = leaf::build_sampling(level, c.qubits, c.gates, sampling)?;
     Ok((built, LeafProof { proof, statement }))
 }
 
@@ -1257,6 +1265,16 @@ mod sv_tests {
             assert_eq!(wqc_sv_leaf_rows(2, std::ptr::null()), -1);
             let far = r#"[{"type":"MEASURE","params":{"qubit":9,"cbit":0}}]"#;
             assert_eq!(wqc_sv_leaf_rows(2, c(far).as_ptr()), -1);
+            // Mid-circuit: the IF becomes a controlled X (no rows) and the RESET of a used
+            // qubit an ancilla, so the H and RY count on three qubits.
+            let mid = r#"[{"type":"H","params":0},{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+                {"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"X","params":1}}},
+                {"type":"RESET","params":0},{"type":"RY","params":[0,0.4]},
+                {"type":"MEASURE","params":{"qubit":0,"cbit":1}}]"#;
+            assert_eq!(wqc_sv_leaf_rows(2, c(mid).as_ptr()), 2 << 2);
+            let after =
+                r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"H","params":0}]"#;
+            assert_eq!(wqc_sv_leaf_rows(2, c(after).as_ptr()), -1);
         }
         assert_eq!(wqc_sv_max_rows(), 1 << 22);
         // Above the measured peaks: 1.45 GB at 2^22 rows on 16 qubits, 0.75 GB at 2^21 with

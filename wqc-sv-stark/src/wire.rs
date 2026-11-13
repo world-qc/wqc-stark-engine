@@ -4,8 +4,9 @@
 //!
 //! - Circuit: wqc-core's gate list, `[{"type":"H","params":0}, {"type":"CNOT","params":[0,1]},
 //!   {"type":"RZ","params":[0,0.5]}, …]`, optionally ending in terminal measurements
-//!   `{"type":"MEASURE","params":{"qubit":0,"cbit":0}}`. RESET, IF and mid-circuit
-//!   measurements have no v2 leaf.
+//!   `{"type":"MEASURE","params":{"qubit":0,"cbit":0}}`. [`parse_circuit`] reads only that
+//!   form; [`parse_leaf`] also reads mid-circuit measurements, RESET and IF, rewriting them
+//!   into unitary gates and terminal measurements (see there).
 //! - Counts: `{"counts":{"01":3,…},"shots":N}`, keys of `cbits` characters in Qiskit order
 //!   (cbit 0 rightmost), as wqc-core and the orchestrator marshal a `SampleResult`.
 
@@ -41,13 +42,50 @@ enum WireGate {
     RZ(usize, f64),
     CCNOT(usize, usize, usize),
     MEASURE(MeasureParams),
-    RESET(serde::de::IgnoredAny),
-    IF(serde::de::IgnoredAny),
+    RESET(usize),
+    IF(IfParams),
+}
+
+#[derive(Deserialize)]
+struct IfParams {
+    cbit: usize,
+    value: u8,
+    gate: Box<WireGate>,
+}
+
+impl WireGate {
+    /// The unitary gate, or `None` for MEASURE, RESET and IF.
+    fn unitary(&self) -> Option<Gate> {
+        Some(match *self {
+            WireGate::H(t) => Gate::h(t),
+            WireGate::X(t) => Gate::x(t),
+            WireGate::Y(t) => Gate::y(t),
+            WireGate::Z(t) => Gate::z(t),
+            WireGate::T(t) => Gate::t(t),
+            WireGate::S(t) => Gate::s(t),
+            WireGate::CNOT(c, t) => Gate::cnot(c, t),
+            WireGate::CZ(c, t) => Gate::cz(c, t),
+            WireGate::RX(t, a) => Gate::rx(t, a),
+            WireGate::RY(t, a) => Gate::ry(t, a),
+            WireGate::RZ(t, a) => Gate::rz(t, a),
+            WireGate::CCNOT(c1, c2, t) => Gate::ccnot(c1, c2, t),
+            WireGate::MEASURE(_) | WireGate::RESET(_) | WireGate::IF(_) => return None,
+        })
+    }
 }
 
 /// A circuit read from the wire: the unitary gates and the terminal measurements.
 #[derive(Clone, Debug)]
 pub struct Circuit {
+    pub gates: Vec<Gate>,
+    pub measures: Vec<Measure>,
+}
+
+/// A circuit as a leaf proves it ([`parse_leaf`]): on `qubits` qubits, the register's plus one
+/// ancilla per RESET that needs one.
+#[derive(Clone, Debug)]
+pub struct LeafCircuit {
+    pub qubits: usize,
     pub gates: Vec<Gate>,
     pub measures: Vec<Measure>,
 }
@@ -73,31 +111,192 @@ pub fn parse_circuit(json: &str) -> Result<Circuit, Error> {
                 continue;
             }
             WireGate::RESET(_) | WireGate::IF(_) => {
-                return Err(invalid(format!(
-                    "gate {k}: RESET and IF have no state-vector leaf"
-                )))
+                return Err(invalid(format!("gate {k}: RESET and IF need parse_leaf")))
             }
             _ if !measures.is_empty() => {
                 return Err(invalid(format!(
-                    "gate {k}: a unitary gate after a MEASURE has no state-vector leaf"
+                    "gate {k}: a unitary gate after a MEASURE needs parse_leaf"
                 )))
             }
-            WireGate::H(t) => Gate::h(t),
-            WireGate::X(t) => Gate::x(t),
-            WireGate::Y(t) => Gate::y(t),
-            WireGate::Z(t) => Gate::z(t),
-            WireGate::T(t) => Gate::t(t),
-            WireGate::S(t) => Gate::s(t),
-            WireGate::CNOT(c, t) => Gate::cnot(c, t),
-            WireGate::CZ(c, t) => Gate::cz(c, t),
-            WireGate::RX(t, a) => Gate::rx(t, a),
-            WireGate::RY(t, a) => Gate::ry(t, a),
-            WireGate::RZ(t, a) => Gate::rz(t, a),
-            WireGate::CCNOT(c1, c2, t) => Gate::ccnot(c1, c2, t),
+            g => g.unitary().expect("a unitary gate"),
         };
         gates.push(gate);
     }
     Ok(Circuit { gates, measures })
+}
+
+/// Reads a wqc-core gate list on `n` qubits as the circuit a leaf proves.
+///
+/// A circuit whose MEASUREs all come after its unitary gates, with no RESET or IF, is read as
+/// [`parse_circuit`] reads it, on `n` qubits. Any other circuit (mid-circuit semantics) is
+/// rewritten by deferring its measurements, which gives the same distribution of the classical
+/// register:
+///
+/// - `MEASURE q → c` emits nothing; `c` now holds what `q` holds.
+/// - `IF(c == v) U` emits `U` with one more control, the qubit holding `c`, between two X on
+///   that qubit when `v == 0`. If `c` was never measured it is 0: `U` is emitted as is when
+///   `v == 0`, and nothing when `v == 1`. `U` is a one-qubit gate, CNOT or CZ, so a controlled
+///   `U` has at most two controls.
+/// - `RESET q` emits nothing when `q` is fresh (no gate, MEASURE or IF has touched it since the
+///   start or its last RESET), since it is still `|0⟩`. Otherwise it swaps `q` with a new
+///   ancilla in `|0⟩` (`CNOT(q, a)`, `CNOT(a, q)`); `q` is `|0⟩` again and every cbit `q` held
+///   is now held by `a`, which no gate touches again.
+/// - At the end, each cbit that was measured is measured from the qubit that holds it, in cbit
+///   order. Values that were overwritten or left on an ancilla are not measured.
+///
+/// Deferring is exact because, as wqc-core requires, no gate touches a measured qubit until it
+/// is RESET: its value stays frozen in the Z basis, so measuring it later, or using it as a
+/// quantum control, gives what measuring it then and controlling classically would. An
+/// ancilla that is never measured is traced out, which is what RESET does to the old value.
+///
+/// It rejects a gate (or an IF's gate) on a measured qubit before its RESET, an IF value other
+/// than 0 or 1, an IF whose gate is a MEASURE, RESET, IF or CCNOT, and qubits outside `n`.
+/// Ancillas are numbered from `n`; [`crate::leaf::build`] bounds the total.
+pub fn parse_leaf(json: &str, n: usize) -> Result<LeafCircuit, Error> {
+    let wire: Vec<WireGate> =
+        serde_json::from_str(json).map_err(|e| invalid(format!("circuit JSON: {e}")))?;
+    if !is_dynamic(&wire) {
+        let c = parse_circuit(json)?;
+        return Ok(LeafCircuit {
+            qubits: n,
+            gates: c.gates,
+            measures: c.measures,
+        });
+    }
+    let mut d = Deferred {
+        n,
+        qubits: n,
+        gates: Vec::new(),
+        fresh: vec![true; n],
+        measured: vec![false; n],
+        holder: BTreeMap::new(),
+    };
+    for (k, g) in wire.iter().enumerate() {
+        d.apply(g).map_err(|m| invalid(format!("gate {k}: {m}")))?;
+    }
+    let measures = d
+        .holder
+        .iter()
+        .map(|(&cbit, &qubit)| Measure { qubit, cbit })
+        .collect();
+    Ok(LeafCircuit {
+        qubits: d.qubits,
+        gates: d.gates,
+        measures,
+    })
+}
+
+/// Whether the circuit has a RESET, an IF, or a unitary gate after a MEASURE.
+fn is_dynamic(wire: &[WireGate]) -> bool {
+    let mut measured = false;
+    for g in wire {
+        match g {
+            WireGate::RESET(_) | WireGate::IF(_) => return true,
+            WireGate::MEASURE(_) => measured = true,
+            _ if measured => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The state of [`parse_leaf`]'s rewriting.
+struct Deferred {
+    /// The register's qubits.
+    n: usize,
+    /// Register plus ancillas so far.
+    qubits: usize,
+    gates: Vec<Gate>,
+    fresh: Vec<bool>,
+    measured: Vec<bool>,
+    /// cbit → the qubit (or ancilla) holding its last measurement.
+    holder: BTreeMap<usize, usize>,
+}
+
+impl Deferred {
+    fn qubit(&self, q: usize) -> Result<usize, String> {
+        if q < self.n {
+            Ok(q)
+        } else {
+            Err(format!("qubit {q} with {} qubits", self.n))
+        }
+    }
+
+    /// Checks a unitary gate's qubits and marks them touched.
+    fn touch(&mut self, g: &Gate) -> Result<(), String> {
+        for &q in g.controls().iter().chain([g.target()].iter()) {
+            let q = self.qubit(q)?;
+            if self.measured[q] {
+                return Err(format!(
+                    "qubit {q} is used after its MEASURE without a RESET"
+                ));
+            }
+            self.fresh[q] = false;
+        }
+        Ok(())
+    }
+
+    fn apply(&mut self, g: &WireGate) -> Result<(), String> {
+        match g {
+            WireGate::MEASURE(m) => {
+                let q = self.qubit(m.qubit)?;
+                self.fresh[q] = false;
+                self.measured[q] = true;
+                self.holder.insert(m.cbit, q);
+            }
+            WireGate::RESET(q) => {
+                let q = self.qubit(*q)?;
+                if !self.fresh[q] {
+                    let a = self.qubits;
+                    self.qubits += 1;
+                    self.gates.push(Gate::cnot(q, a));
+                    self.gates.push(Gate::cnot(a, q));
+                    for h in self.holder.values_mut() {
+                        if *h == q {
+                            *h = a;
+                        }
+                    }
+                }
+                self.fresh[q] = true;
+                self.measured[q] = false;
+            }
+            WireGate::IF(p) => {
+                if p.value > 1 {
+                    return Err(format!("IF value {}", p.value));
+                }
+                let u = match p.gate.as_ref() {
+                    WireGate::CCNOT(..) => {
+                        return Err("an IF of CCNOT has no state-vector leaf".into())
+                    }
+                    other => other
+                        .unitary()
+                        .ok_or("an IF's gate must be a unitary gate")?,
+                };
+                self.touch(&u)?;
+                match self.holder.get(&p.cbit).copied() {
+                    None if p.value == 0 => self.gates.push(u),
+                    None => {}
+                    Some(h) => {
+                        let mut cu = u;
+                        cu.controls.push(h);
+                        if p.value == 0 {
+                            self.gates.push(Gate::x(h));
+                            self.gates.push(cu);
+                            self.gates.push(Gate::x(h));
+                        } else {
+                            self.gates.push(cu);
+                        }
+                    }
+                }
+            }
+            other => {
+                let u = other.unitary().expect("a unitary gate");
+                self.touch(&u)?;
+                self.gates.push(u);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
