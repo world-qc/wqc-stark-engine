@@ -99,6 +99,10 @@ fn invalid(m: impl Into<String>) -> Error {
 pub fn parse_circuit(json: &str) -> Result<Circuit, Error> {
     let wire: Vec<WireGate> =
         serde_json::from_str(json).map_err(|e| invalid(format!("circuit JSON: {e}")))?;
+    terminal(wire)
+}
+
+fn terminal(wire: Vec<WireGate>) -> Result<Circuit, Error> {
     let mut gates = Vec::new();
     let mut measures = Vec::new();
     for (k, g) in wire.into_iter().enumerate() {
@@ -140,7 +144,8 @@ pub fn parse_circuit(json: &str) -> Result<Circuit, Error> {
 /// - `RESET q` emits nothing when `q` is fresh (no gate, MEASURE or IF has touched it since the
 ///   start or its last RESET), since it is still `|0⟩`. Otherwise it swaps `q` with a new
 ///   ancilla in `|0⟩` (`CNOT(q, a)`, `CNOT(a, q)`); `q` is `|0⟩` again and every cbit `q` held
-///   is now held by `a`, which no gate touches again.
+///   is now held by `a`. No gate targets `a` again; it can only be the control an IF on one of
+///   those cbits adds.
 /// - At the end, each cbit that was measured is measured from the qubit that holds it, in cbit
 ///   order. Values that were overwritten or left on an ancilla are not measured.
 ///
@@ -156,7 +161,7 @@ pub fn parse_leaf(json: &str, n: usize) -> Result<LeafCircuit, Error> {
     let wire: Vec<WireGate> =
         serde_json::from_str(json).map_err(|e| invalid(format!("circuit JSON: {e}")))?;
     if !is_dynamic(&wire) {
-        let c = parse_circuit(json)?;
+        let c = terminal(wire)?;
         return Ok(LeafCircuit {
             qubits: n,
             gates: c.gates,
@@ -246,6 +251,10 @@ impl Deferred {
             }
             WireGate::RESET(q) => {
                 let q = self.qubit(*q)?;
+                // Deliberately conservative: a qubit counts as used once anything names it,
+                // even as a control that left it in |0⟩, so such a RESET still takes an
+                // ancilla. Proving a qubit is still |0⟩ would need the state, and the rule is
+                // part of the leaf format, so it stays this simple.
                 if !self.fresh[q] {
                     let a = self.qubits;
                     self.qubits += 1;

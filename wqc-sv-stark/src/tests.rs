@@ -2000,6 +2000,30 @@ fn parse_leaf_rewrites_mid_circuit_gates() {
         [Measure { qubit: 2, cbit: 0 }, Measure { qubit: 0, cbit: 1 }]
     );
 
+    // An IF of CNOT or CZ gains the cbit's holder as a second control (a Toffoli, or a
+    // doubly controlled Z), between X for value 0.
+    let two = r#"[{"type":"H","params":0},{"type":"H","params":1},
+        {"type":"MEASURE","params":{"qubit":0,"cbit":0}},
+        {"type":"IF","params":{"cbit":0,"value":1,"gate":{"type":"CNOT","params":[1,2]}}},
+        {"type":"IF","params":{"cbit":0,"value":0,"gate":{"type":"CZ","params":[1,2]}}},
+        {"type":"MEASURE","params":{"qubit":2,"cbit":1}}]"#;
+    let c = parse_leaf(two, 3).unwrap();
+    assert_eq!(c.qubits, 3);
+    let mut ccz = Gate::cz(1, 2);
+    ccz.controls.push(0);
+    let want = [
+        Gate::h(0),
+        Gate::h(1),
+        Gate::ccnot(1, 0, 2),
+        Gate::x(0),
+        ccz,
+        Gate::x(0),
+    ];
+    assert_eq!(c.gates.len(), want.len());
+    for (g, w) in c.gates.iter().zip(&want) {
+        assert_eq!((g.target, &g.controls, g.m), (w.target, &w.controls, w.m));
+    }
+
     for bad in [
         // a gate, or an IF's gate, on a measured qubit before its RESET
         r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"H","params":0}]"#,

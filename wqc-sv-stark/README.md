@@ -181,8 +181,10 @@ exactly as `parse_circuit` reads it.
   RESET or IF is rejected), so a controlled `U` has at most two controls.
 - `RESET q` emits nothing when `q` is fresh (untouched by any gate, MEASURE or IF since the
   start or its last RESET). Otherwise it adds an ancilla `a` (numbered from `n`) and emits
-  `CNOT(q, a)`, `CNOT(a, q)`: `q` is back in `|0⟩` and every cbit `q` held is now held by `a`,
-  which nothing touches again.
+  `CNOT(q, a)`, `CNOT(a, q)`: `q` is back in `|0⟩` and every cbit `q` held is now held by `a`.
+  No gate targets `a` again; it can only be the control an IF on one of those cbits adds.
+  "Touched" is conservative: a qubit used only as a control still counts, so its RESET takes
+  an ancilla even if it is still `|0⟩`.
 - Each measured cbit is measured at the end from the qubit holding it, in cbit order.
 
 It rejects a gate (or an IF's gate) on a measured qubit before its RESET, as wqc-core does.

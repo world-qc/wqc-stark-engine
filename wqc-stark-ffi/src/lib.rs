@@ -1275,6 +1275,11 @@ mod sv_tests {
             let after =
                 r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"H","params":0}]"#;
             assert_eq!(wqc_sv_leaf_rows(2, c(after).as_ptr()), -1);
+            // 16 qubits are the limit; a RESET that takes an ancilla makes 17.
+            let full = r#"[{"type":"H","params":0},{"type":"RESET","params":0},
+                {"type":"H","params":0},{"type":"MEASURE","params":{"qubit":0,"cbit":0}}]"#;
+            assert_eq!(wqc_sv_leaf_rows(15, c(full).as_ptr()), 2 << 15);
+            assert_eq!(wqc_sv_leaf_rows(16, c(full).as_ptr()), -1);
         }
         assert_eq!(wqc_sv_max_rows(), 1 << 22);
         // Above the measured peaks: 1.45 GB at 2^22 rows on 16 qubits, 0.75 GB at 2^21 with
