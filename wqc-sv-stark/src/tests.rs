@@ -1,7 +1,7 @@
 //! Run in release: debug builds assert AIR constraints inside `prove`, so the forgery tests
 //! are ignored there.
 
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{PrimeCharacteristicRing, PrimeField64};
 
 use crate::digest::*;
 use crate::exec::*;
@@ -2212,4 +2212,180 @@ fn observable_sums_terms_in_order_then_snaps() {
     assert!(check_terms(2, &[]).is_err());
     assert!(check_terms(2, &[term("Z", 1.0, 0.0)]).is_err());
     assert!(check_terms(2, &[term("ZA", 1.0, 0.0)]).is_err());
+}
+
+/// The SNARK's Poseidon2, written out step by step, is the recursion's permutation.
+#[test]
+fn snark_poseidon2_reference_matches_the_recursion_permutation() {
+    use crate::snark::{poseidon2_constants, poseidon2_reference};
+    use p3_symmetric::Permutation;
+    let c = poseidon2_constants();
+    let perm = p3_recursion::builtin_config::fixed_goldilocks_poseidon2_8();
+    for seed in 0..20u64 {
+        let mut s: [F; 8] = core::array::from_fn(|i| {
+            F::from_u64(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (i as u64) << 61)
+        });
+        let mut r = s;
+        perm.permute_mut(&mut s);
+        poseidon2_reference(&c, &mut r);
+        assert_eq!(s, r);
+    }
+}
+
+/// Wraps the root over `leaves` at the production parameters; returns the root's verifier and
+/// proof, the wrap proof and its verified top.
+#[cfg(not(debug_assertions))]
+fn wrapped(
+    leaves: &[(&Leaf, &LeafProof)],
+) -> (
+    p3_circuit_prover::batch_stark_prover::CircuitVerifier<crate::Cfg>,
+    RecursionProof,
+    crate::wrap::WrapProof,
+    crate::wrap::Wrapped,
+) {
+    use crate::root::{prove_root, verified_root};
+    use crate::wrap::{prove_wrap, verify_wrap};
+    let (root, _) = prove_root(leaves).unwrap();
+    let (rv, rp) = verified_root(leaves, &root).unwrap();
+    let (wrap, top) = prove_wrap(rv.clone(), &rp).unwrap();
+    let checked = verify_wrap(rv.clone(), &rp, &wrap).unwrap();
+    assert_eq!(checked.proof.statement, top.proof.statement);
+    (rv, rp, wrap, top)
+}
+
+/// Two tasks with different leaves, tiers and trees wrap to the same SNARK circuit, whose
+/// constraints their witnesses meet; the public inputs are the root's digest and the top
+/// commitment, and any change to them, a slot or a Poseidon2 input is caught.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn the_wrap_reaches_one_snark_circuit() {
+    use crate::snark::{check, snark_inputs};
+    use crate::wrap::{snark_public_inputs, statement_digest};
+    let small = build(SecurityLevel::Low, 3, gates()).unwrap();
+    let p = small.prove(CTX).unwrap();
+    let (rv1, rp1, _, top1) = wrapped(&[(&small, &p)]);
+    let big = build(SecurityLevel::Ultra, 4, random_circuit(4, 12, 3)).unwrap();
+    let ps: Vec<LeafProof> = (0..3u64)
+        .map(|i| big.prove([i, 7, 7, 7]).unwrap())
+        .collect();
+    let leaves: Vec<_> = ps.iter().map(|p| (&big, p)).collect();
+    let (rv2, rp2, _, top2) = wrapped(&leaves);
+
+    let (c1, w1) = snark_inputs(&top1).unwrap();
+    let (c2, w2) = snark_inputs(&top2).unwrap();
+    assert!(c1 == c2, "both tasks wrap to the same SNARK circuit");
+    for (rv, rp, top, w) in [(&rv1, &rp1, &top1, &w1), (&rv2, &rp2, &top2, &w2)] {
+        let public = snark_public_inputs(top).unwrap();
+        assert_eq!(public, w.exposed(&c1));
+        let digest = statement_digest(rv, &rp.statement).unwrap();
+        assert_eq!(public[..4], digest.map(|v| v.as_canonical_u64()));
+        check(&c1, w, &public).unwrap();
+    }
+    assert_ne!(
+        snark_public_inputs(&top1).unwrap()[4..],
+        snark_public_inputs(&top2).unwrap()[4..],
+        "the top commitment depends on the root's shape"
+    );
+
+    let public = snark_public_inputs(&top1).unwrap();
+    let mut bad = public.clone();
+    bad[0] ^= 1;
+    assert!(check(&c1, &w1, &bad).is_err());
+    let mut bad = public.clone();
+    bad[7] ^= 1;
+    assert!(check(&c1, &w1, &bad).is_err());
+    let mut bad = w1.clone();
+    let o = c1.alu[c1.alu.len() / 2].out as usize;
+    bad.w[o][1] = (bad.w[o][1] + 1) % F::ORDER_U64;
+    assert!(check(&c1, &bad, &public).is_err());
+    let mut bad = w1.clone();
+    bad.poseidon2_inputs[1][3][2] ^= 1;
+    assert!(check(&c1, &bad, &public).is_err());
+    let mut bad = w1.clone();
+    bad.poseidon2_inputs[0][10][7] ^= 1;
+    assert!(check(&c1, &bad, &public).is_err());
+}
+
+/// The digest binds the root's statement and its relation: another statement, or a root of
+/// another circuit, gives another digest, and the wrap fails against a wrong statement.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn the_wrap_binds_the_root() {
+    use crate::wrap::{statement_digest, verify_wrap};
+    let l = build(SecurityLevel::Low, 3, gates()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    let (rv, rp, wrap, _) = wrapped(&[(&l, &p)]);
+    let mut other = rp.statement.clone();
+    other[0] += F::ONE;
+    assert_ne!(
+        statement_digest(&rv, &rp.statement).unwrap(),
+        statement_digest(&rv, &other).unwrap()
+    );
+    let wrong = RecursionProof {
+        proof: crate::leaf::decode_proof(&crate::leaf::encode_proof(&rp.proof)).unwrap(),
+        statement: other,
+    };
+    assert!(verify_wrap(rv.clone(), &wrong, &wrap).is_err());
+
+    let l2 = build(SecurityLevel::Low, 3, random_circuit(3, 8, 9)).unwrap();
+    let p2 = l2.prove(CTX).unwrap();
+    let (root2, _) = crate::root::prove_root(&[(&l2, &p2)]).unwrap();
+    let (rv2, rp2) = crate::root::verified_root(&[(&l2, &p2)], &root2).unwrap();
+    assert_ne!(
+        statement_digest(&rv, &rp.statement).unwrap(),
+        statement_digest(&rv2, &rp2.statement).unwrap(),
+        "same context, another circuit"
+    );
+    assert!(verify_wrap(rv2, &rp2, &wrap).is_err());
+}
+
+/// Writes the SNARK fixtures wqc-snark-wrap tests against into `$WQC_SNARK_FIXTURES`: the
+/// circuit, one task's witness and public inputs, and the Poseidon2 constants with vectors.
+#[test]
+#[ignore = "writes fixtures; run with WQC_SNARK_FIXTURES=<dir>"]
+fn write_snark_fixtures() {
+    use crate::snark::{poseidon2_constants, snark_inputs};
+    use crate::wrap::snark_public_inputs;
+    use p3_symmetric::Permutation;
+    let dir = std::path::PathBuf::from(std::env::var("WQC_SNARK_FIXTURES").unwrap());
+    let l = build(SecurityLevel::Low, 3, gates()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    let (root, _) = crate::root::prove_root(&[(&l, &p)]).unwrap();
+    let (rv, rp) = crate::root::verified_root(&[(&l, &p)], &root).unwrap();
+    let (_, top) = crate::wrap::prove_wrap(rv, &rp).unwrap();
+    let (c, w) = snark_inputs(&top).unwrap();
+    let public = snark_public_inputs(&top).unwrap();
+    let write = |name: &str, v: &dyn erased::Json| {
+        std::fs::write(dir.join(name), v.json()).unwrap();
+    };
+    write("circuit.json", &c);
+    write("witness.json", &w);
+    write("public.json", &public);
+    let consts = poseidon2_constants();
+    let perm = p3_recursion::builtin_config::fixed_goldilocks_poseidon2_8();
+    let vectors: Vec<([u64; 8], [u64; 8])> = (0..8u64)
+        .map(|k| {
+            let s: [F; 8] =
+                core::array::from_fn(|i| F::from_u64(k * 1_000_003 + i as u64 * 0xffff_ffff));
+            let mut o = s;
+            perm.permute_mut(&mut o);
+            (
+                s.map(|v| v.as_canonical_u64()),
+                o.map(|v| v.as_canonical_u64()),
+            )
+        })
+        .collect();
+    write("poseidon2.json", &(consts, vectors));
+}
+
+#[cfg(test)]
+mod erased {
+    pub trait Json {
+        fn json(&self) -> Vec<u8>;
+    }
+    impl<T: serde::Serialize> Json for T {
+        fn json(&self) -> Vec<u8> {
+            serde_json::to_vec(self).unwrap()
+        }
+    }
 }
