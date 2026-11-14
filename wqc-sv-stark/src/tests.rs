@@ -2182,3 +2182,34 @@ fn state_check_needs_the_proved_digest() {
     assert!(decode_state(&bytes, 4).is_err());
     assert!(decode_state(&[], 0).is_err());
 }
+
+/// An observable sums its terms in order with complex coefficients and rounds once: the value
+/// is `snap(Σ re_k·e_k)`, `snap(Σ im_k·e_k)` over the single-term expectations, as wqc-core
+/// accumulates them.
+#[test]
+fn observable_sums_terms_in_order_then_snaps() {
+    use crate::outputs::{check_terms, observable, pauli_expectation, snap, Coeff, PauliTerm};
+    let term = |label: &str, real: f64, imag: f64| PauliTerm {
+        label: label.into(),
+        coeff: Coeff { real, imag },
+    };
+    for seed in 1..20u64 {
+        let fin = execute(2, &random_circuit(2, 20, seed * 11 + 1)).1;
+        let terms = [
+            term("ZZ", 0.3, -1.25),
+            term("XI", -0.7, 0.5),
+            term("IY", 1e-7, 2.0),
+        ];
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for t in &terms {
+            let e = pauli_expectation(&fin, 2, &t.label).unwrap();
+            re += t.coeff.real * e;
+            im += t.coeff.imag * e;
+        }
+        assert_eq!(observable(&fin, 2, &terms).unwrap(), (snap(re), snap(im)));
+    }
+    assert!(check_terms(2, &[term("ZZ", 1.0, 0.0)]).is_ok());
+    assert!(check_terms(2, &[]).is_err());
+    assert!(check_terms(2, &[term("Z", 1.0, 0.0)]).is_err());
+    assert!(check_terms(2, &[term("ZA", 1.0, 0.0)]).is_err());
+}

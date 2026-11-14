@@ -144,11 +144,31 @@ pub struct Coeff {
     pub imag: f64,
 }
 
-/// `Σ coeff_k · ⟨ψ|P_k|ψ⟩` in term order, accumulated as wqc-core does, on the published grid.
-pub fn observable(fin: &[C], n: usize, terms: &[PauliTerm]) -> Result<(f64, f64), Error> {
+/// Checks an observable before anything is proved: at least one term, each label `n`
+/// characters of `I`, `X`, `Y`, `Z`.
+pub fn check_terms(n: usize, terms: &[PauliTerm]) -> Result<(), Error> {
     if terms.is_empty() {
         return Err(Error::Verify("observable with no terms".into()));
     }
+    for t in terms {
+        if t.label.len() != n
+            || !t
+                .label
+                .bytes()
+                .all(|b| matches!(b, b'I' | b'X' | b'Y' | b'Z'))
+        {
+            return Err(Error::Verify(format!(
+                "pauli label {:?} on {n} qubits",
+                t.label
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `Σ coeff_k · ⟨ψ|P_k|ψ⟩` in term order, accumulated as wqc-core does, on the published grid.
+pub fn observable(fin: &[C], n: usize, terms: &[PauliTerm]) -> Result<(f64, f64), Error> {
+    check_terms(n, terms)?;
     let (mut real, mut imag) = (0.0f64, 0.0f64);
     for t in terms {
         let e = pauli_expectation(fin, n, &t.label)?;
@@ -156,9 +176,4 @@ pub fn observable(fin: &[C], n: usize, terms: &[PauliTerm]) -> Result<(f64, f64)
         imag += t.coeff.imag * e;
     }
     Ok((snap(real), snap(imag)))
-}
-
-/// Reads an observable's terms from wqc-core's JSON (`[{"label":"ZZ","coeff":{"real":1,"imag":0}}]`).
-pub fn parse_terms(json: &str) -> Result<Vec<PauliTerm>, Error> {
-    serde_json::from_str(json).map_err(|e| Error::Verify(format!("observable terms JSON: {e}")))
 }
