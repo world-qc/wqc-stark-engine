@@ -2234,7 +2234,6 @@ fn snark_poseidon2_reference_matches_the_recursion_permutation() {
 
 /// Wraps the root over `leaves` at the production parameters; returns the root's verifier and
 /// proof, the wrap proof and its verified top.
-#[cfg(not(debug_assertions))]
 fn wrapped(
     leaves: &[(&Leaf, &LeafProof)],
 ) -> (
