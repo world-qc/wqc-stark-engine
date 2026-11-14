@@ -370,6 +370,28 @@ prove it (8-core Mac, 2^11 to 2^20 rows; layers take about 0.5 s to prepare and 
 whatever the leaf). `VerifyCfg` cannot stand in yet: recursion needs the recursion traits of
 the child config's PCS. The FFI has `wqc_sv_verify_root` and `wqc_sv_root_peak_bytes`.
 
+### The SNARK wrap
+
+A root's verifier depends on the task, and its statement's length on the leaves; the SNARK
+(wqc-snark-wrap, Groth16 over BN254) is one fixed circuit. `wrap::prove_wrap` takes a verified
+root (`root::verified_root`) through three steps:
+
+1. `wrap::DigestLayer` verifies the root with its relation read from the proof's shape and its
+   preprocessed commitment as an input, and exports a 4-element Poseidon2 digest of every table's
+   public values (the root statement among them) and that commitment
+   (`wrap::statement_digest`).
+2. `wrap::NORMALIZE_LAYERS` (2) recursion layers. From here every proof has one shape
+   (`wrap::FIXED_ROWS`, `wrap::FIXED_DEGREE_BITS`), whatever the leaves, tiers and tree.
+3. A top layer at `FriParams::WRAP` (rate 1/64, 14 queries): fewer Merkle paths for the SNARK.
+
+`wrap::verify_wrap` checks a `wrap::WrapProof` the way `root::verify_root` checks a root. The
+SNARK re-runs the top proof's verifier circuit: `snark::snark_inputs` exports it
+(`snark::SnarkCircuit`, the same for every task) and its witness, and `snark::check` is the
+reference for every constraint the SNARK states. Its public inputs
+(`wrap::snark_public_inputs`) are the digest and the top layer's preprocessed commitment, which
+depends on the root's shape. Measured (8-core Mac): the chain takes about 20 s; the top
+verifier circuit has 4,755 Poseidon2 rows, 20,583 ALU operations and 35,915 slots.
+
 ## Tests
 
 Run in release:

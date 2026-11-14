@@ -17,9 +17,11 @@ mod npo;
 pub mod outputs;
 pub mod recursion;
 pub mod root;
+pub mod snark;
 mod tables;
 pub(crate) mod verify_cfg;
 pub mod wire;
+pub mod wrap;
 
 #[cfg(test)]
 mod tests;
@@ -144,6 +146,16 @@ impl FriParams {
         log_final_poly_len: 0,
         max_log_arity: 2,
         num_queries: 28,
+        query_pow_bits: 16,
+    };
+
+    /// The wrap chain's top layer (see [`wrap`]): rate 1/64 and 14 queries, so the SNARK opens
+    /// half the Merkle paths of [`FriParams::RECURSION`] at the same simple estimate (100 bits).
+    pub const WRAP: Self = Self {
+        log_blowup: 6,
+        log_final_poly_len: 0,
+        max_log_arity: 2,
+        num_queries: 14,
         query_pow_bits: 16,
     };
 

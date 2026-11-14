@@ -62,6 +62,15 @@ pub fn prove_root(leaves: &[(&Leaf, &LeafProof)]) -> Result<(RootProof, Vec<F>),
 /// the verifier accepted (see [`crate::leaf::LeafVerifier::verify_sampling`]), never from a
 /// prover's claim. The leaf proofs only fix the layers' shape.
 pub fn verify_root(leaves: &[(&Leaf, &LeafProof)], root: &RootProof) -> Result<(), Error> {
+    verify_root_with(leaves, root, FriParams::RECURSION).map(|_| ())
+}
+
+/// [`verify_root`], returning the root's verifier and its proof (the input to the SNARK wrap,
+/// see [`crate::wrap`]). The same security note applies.
+pub fn verified_root(
+    leaves: &[(&Leaf, &LeafProof)],
+    root: &RootProof,
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
     verify_root_with(leaves, root, FriParams::RECURSION)
 }
 
@@ -86,7 +95,7 @@ pub(crate) fn prove_root_with(
         proofs.push(encode_proof(&out.proof));
         level.push((layer.verifier(), out));
     }
-    let root = reduce(level, fri, |agg, left, right| {
+    let (_, root) = reduce(level, fri, |agg, left, right| {
         let out = agg.prove(left, right)?;
         proofs.push(encode_proof(&out.proof));
         Ok(out)
@@ -98,7 +107,7 @@ pub(crate) fn verify_root_with(
     leaves: &[(&Leaf, &LeafProof)],
     root: &RootProof,
     fri: FriParams,
-) -> Result<(), Error> {
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
     let expected = leaves.len().max(1) * 2 - 1;
     if leaves.is_empty() || root.proofs.len() != expected {
         return Err(Error::Verify(format!(
@@ -126,11 +135,11 @@ pub(crate) fn verify_root_with(
             &agg.verifier(),
             root_statement(&[left.statement.clone(), right.statement.clone()]),
         )
-    })?;
-    Ok(())
+    })
 }
 
 /// Folds one level at a time until one node is left; `step` gives an aggregation's proof.
+/// Returns the last node's verifier and proof.
 fn reduce(
     mut level: Vec<(CircuitVerifier<Cfg>, RecursionProof)>,
     fri: FriParams,
@@ -139,7 +148,7 @@ fn reduce(
         &RecursionProof,
         &RecursionProof,
     ) -> Result<RecursionProof, Error>,
-) -> Result<RecursionProof, Error> {
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
     if level.is_empty() {
         return Err(Error::Prove("a root needs at least one leaf".into()));
     }
@@ -157,5 +166,5 @@ fn reduce(
         }
         level = up;
     }
-    Ok(level.pop().expect("one node left").1)
+    Ok(level.pop().expect("one node left"))
 }
