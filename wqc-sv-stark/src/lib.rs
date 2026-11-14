@@ -14,6 +14,7 @@ pub mod digest;
 pub mod exec;
 pub mod leaf;
 mod npo;
+pub mod outputs;
 pub mod recursion;
 pub mod root;
 mod tables;

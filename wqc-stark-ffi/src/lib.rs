@@ -816,6 +816,106 @@ pub extern "C" fn wqc_sv_max_rows() -> i64 {
     wqc_sv_stark::MAX_ROWS as i64
 }
 
+/// The results of a `statevector_scalar` or `expectation` v2 leaf from the final state the
+/// node published (`wqc_sv_stark::outputs`): checks the state hashes to `digest`, the digest
+/// the leaf proof binds, then computes the values from it.
+///
+/// - `state`: `16 · 2^qubit_count` bytes, each amplitude `re` then `im` as `i64`
+///   little-endian in units of `2^-28`.
+/// - `observables_json`: the task's observables' terms in task order, as a JSON array of
+///   arrays (`[[{"label":"ZZ","coeff":{"real":1,"imag":0}}], …]`); null or `[]` for none.
+/// - `out_scalar`: 2 doubles, the `|0…0⟩` amplitude (re, im).
+/// - `out_values`: `2 · out_count` doubles, each observable's value (re, im) in order;
+///   `out_count` must equal the number of observables.
+///
+/// Every value is on wqc-core's `1e-6` grid, as a published `ComplexResult`.
+///
+/// Returns `0` = ok, `-1` = the state does not hash to `digest` or an argument is invalid,
+/// `-99` = panic.
+///
+/// # Safety
+///
+/// `state` must point to `state_len` bytes and `digest` to 4 `u64`s. `observables_json` must be
+/// null or a null-terminated string. `out_scalar` must point to 2 writable doubles and
+/// `out_values` to `2 · out_count` (it may be null when `out_count` is 0).
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_state_outputs(
+    qubit_count: u32,
+    state: *const u8,
+    state_len: usize,
+    digest: *const u64,
+    observables_json: *const c_char,
+    out_scalar: *mut f64,
+    out_values: *mut f64,
+    out_count: usize,
+) -> i32 {
+    use wqc_sv_stark::outputs::{amplitude_zero, check_state, observable, PauliTerm};
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if state.is_null() || digest.is_null() || out_scalar.is_null() {
+            eprintln!("[Rust FFI] sv_state_outputs: null argument");
+            return -1;
+        }
+        if out_count > 0 && out_values.is_null() {
+            eprintln!("[Rust FFI] sv_state_outputs: null out_values");
+            return -1;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(state, state_len) };
+        let digest: [u64; 4] = unsafe { std::slice::from_raw_parts(digest, 4) }
+            .try_into()
+            .expect("4 words");
+        let terms: Vec<Vec<PauliTerm>> = if observables_json.is_null() {
+            Vec::new()
+        } else {
+            let Some(json) = cstr(observables_json) else {
+                eprintln!("[Rust FFI] sv_state_outputs: non-UTF-8 observables");
+                return -1;
+            };
+            match serde_json::from_str(json) {
+                Ok(t) => t,
+                Err(err) => {
+                    eprintln!("[Rust FFI] sv_state_outputs: observables JSON: {err}");
+                    return -1;
+                }
+            }
+        };
+        if terms.len() != out_count {
+            eprintln!(
+                "[Rust FFI] sv_state_outputs: {} observables, {out_count} slots",
+                terms.len()
+            );
+            return -1;
+        }
+        let n = qubit_count as usize;
+        let fin = match check_state(bytes, n, digest) {
+            Ok(fin) => fin,
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_state_outputs: {err}");
+                return -1;
+            }
+        };
+        let mut values = Vec::with_capacity(2 * out_count);
+        for t in &terms {
+            match observable(&fin, n, t) {
+                Ok((re, im)) => values.extend([re, im]),
+                Err(err) => {
+                    eprintln!("[Rust FFI] sv_state_outputs: {err}");
+                    return -1;
+                }
+            }
+        }
+        let (re, im) = amplitude_zero(&fin);
+        unsafe {
+            *out_scalar = re;
+            *out_scalar.add(1) = im;
+            if out_count > 0 {
+                std::ptr::copy_nonoverlapping(values.as_ptr(), out_values, values.len());
+            }
+        }
+        0
+    }));
+    result.unwrap_or(-99)
+}
+
 /// Builds the verifier of a v2 leaf, to cache per circuit (`leaf::build_verifier`: the
 /// preprocessed commitment a run of rows at a time, no proving data). Building peaks at about
 /// 370 bytes of memory per gate row and takes about 4 µs per row on an 8-core machine (1.45 GB
@@ -1433,5 +1533,57 @@ mod sv_tests {
         assert_eq!(verify(input(IDS[2], seed, &json), &root[1..]), 0);
         assert_eq!(verify(r#"{"leaves":[]}"#.into(), &root), 0);
         assert!(wqc_sv_root_peak_bytes(2, 1, 64) > 256 << 20);
+    }
+
+    /// The published state gives the scalar and expectation values once its digest matches.
+    #[test]
+    fn sv_state_outputs() {
+        use wqc_sv_stark::digest::terminal_digest;
+        use wqc_sv_stark::exec::{execute, Gate};
+        use wqc_sv_stark::outputs::encode_state;
+        // (|00> + i|11>)/sqrt2
+        let fin = execute(2, &[Gate::h(0), Gate::s(0), Gate::cnot(0, 1)]).1;
+        let state = encode_state(&fin);
+        let digest = terminal_digest(&fin);
+        let obs = c(r#"[[{"label":"XY","coeff":{"real":1,"imag":0}}],
+            [{"label":"ZZ","coeff":{"real":0.5,"imag":0}},{"label":"ZI","coeff":{"real":0,"imag":2}}]]"#);
+        let (mut scalar, mut values) = ([0f64; 2], [0f64; 4]);
+        let call = |digest: &[u64; 4],
+                    obs: *const c_char,
+                    scalar: &mut [f64; 2],
+                    values: &mut [f64],
+                    count| unsafe {
+            wqc_sv_state_outputs(
+                2,
+                state.as_ptr(),
+                state.len(),
+                digest.as_ptr(),
+                obs,
+                scalar.as_mut_ptr(),
+                values.as_mut_ptr(),
+                count,
+            )
+        };
+        assert_eq!(call(&digest, obs.as_ptr(), &mut scalar, &mut values, 2), 0);
+        // 1/sqrt2 on the 1e-6 grid.
+        assert_eq!(
+            scalar,
+            [
+                wqc_sv_stark::outputs::snap(std::f64::consts::FRAC_1_SQRT_2),
+                0.0
+            ]
+        );
+        assert_eq!(values, [1.0, 0.0, 0.5, 0.0]);
+        // Scalar only.
+        assert_eq!(call(&digest, std::ptr::null(), &mut scalar, &mut [], 0), 0);
+        // A state that does not hash to the proved digest, and a wrong slot count.
+        let mut other = digest;
+        other[0] ^= 1;
+        assert_eq!(call(&other, obs.as_ptr(), &mut scalar, &mut values, 2), -1);
+        assert_eq!(call(&digest, obs.as_ptr(), &mut scalar, &mut values, 1), -1);
+        assert_eq!(
+            call(&digest, c("not json").as_ptr(), &mut scalar, &mut [], 0),
+            -1
+        );
     }
 }
