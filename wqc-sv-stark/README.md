@@ -197,6 +197,29 @@ circuits in `f64` and compares the register distribution with the rewritten circ
 apply as for any leaf. Counts differ from wqc-core's shot-by-shot sampler for the same seed,
 from the same distribution.
 
+## Scalar and expectation outputs
+
+A unitary leaf (`leaf::build`) proves the final state's digest, not the value a
+`statevector_scalar` or `expectation` task reports. `outputs` closes that gap without changing
+the leaf: the node publishes the final integer state with its proof, and a verifier checks
+that it hashes to the proved digest (`check_state`) and computes the values from it. Every
+party calls the same functions, so a value is bit-identical wherever it is computed.
+
+- **State bytes.** The `2^n` logical amplitudes in index order, each `re` then `im` as `i64`
+  little-endian in units of `2^-28`: 16 bytes per amplitude, 1 MiB at n = 16
+  (`encode_state`, `decode_state`).
+- **Scalar.** The amplitude of `|0…0⟩`, divided by `S` (`amplitude_zero`).
+- **Expectation.** For a Pauli string `P` in Qiskit order (rightmost character on qubit 0),
+  with `P|i⟩ = phase_i |P(i)⟩`: the real part of `Σ_i conj(ψ_{P(i)}) · phase_i · ψ_i`, summed
+  exactly in `i128` and scaled once by `S²` (`pauli_expectation`; the sum is real up to
+  nothing, since the terms for `i` and `P(i)` are conjugates). An observable
+  `Σ coeff_k · P_k` accumulates its terms in order in `f64` (`observable`).
+- **Grid.** Values are rounded onto wqc-core's published `1e-6` grid, half away from zero, as
+  every `ComplexResult` is before it is hashed or compared (`snap`).
+
+FFI: `wqc_sv_state_outputs(n, state, digest, observables)` does the check and returns the
+scalar and each observable's value in one call, so the state is hashed once.
+
 ## Security levels
 
 The orchestrator's `security_level` sets the leaf's FRI query count: `leaf::build` takes a

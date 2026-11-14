@@ -2073,3 +2073,112 @@ fn mid_circuit_sampling_leaf_proves() {
     l.verify_sampling(&p.proof, &d, digest, 9, &counts).unwrap();
     assert_eq!(counts.iter().sum::<u64>(), 128);
 }
+
+/// `⟨ψ|P|ψ⟩` in f64, as the reference for the integer version: `conj(ψ_{P(i)}) · phase_i · ψ_i`.
+fn pauli_reference(fin: &[C], label: &str) -> f64 {
+    let n = label.len();
+    let (mut re, mut _im) = (0.0f64, 0.0f64);
+    for i in 0..fin.len() {
+        let mut j = i;
+        let (mut pr, mut pi) = (1.0f64, 0.0f64);
+        for q in 0..n {
+            let ch = label.as_bytes()[n - 1 - q];
+            let bit = (i >> q) & 1;
+            match ch {
+                b'Z' if bit == 1 => {
+                    pr = -pr;
+                    pi = -pi;
+                }
+                b'X' => j ^= 1 << q,
+                b'Y' => {
+                    j ^= 1 << q;
+                    let s = if bit == 0 { 1.0 } else { -1.0 };
+                    (pr, pi) = (-pi * s, pr * s);
+                }
+                _ => {}
+            }
+        }
+        let a = (fin[i].0 as f64 / S as f64, fin[i].1 as f64 / S as f64);
+        let b = (fin[j].0 as f64 / S as f64, fin[j].1 as f64 / S as f64);
+        // conj(b) · phase · a
+        let (cr, ci) = (b.0 * pr + b.1 * pi, b.0 * pi - b.1 * pr);
+        re += cr * a.0 - ci * a.1;
+        _im += cr * a.1 + ci * a.0;
+    }
+    re
+}
+
+/// The integer expectation matches the f64 reference, and known states give known values
+/// (Y on |+i⟩ is +1).
+#[test]
+fn outputs_follow_core_expectations() {
+    use crate::outputs::{amplitude_zero, observable, pauli_expectation, Coeff, PauliTerm};
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    let zero = execute(1, &[]).1;
+    assert_eq!(pauli_expectation(&zero, 1, "Z").unwrap(), 1.0);
+    assert_eq!(amplitude_zero(&zero), (1.0, 0.0));
+    let plus = execute(1, &[Gate::h(0)]).1;
+    assert!(near(pauli_expectation(&plus, 1, "X").unwrap(), 1.0));
+    assert!(near(pauli_expectation(&plus, 1, "Z").unwrap(), 0.0));
+    let plus_i = execute(1, &[Gate::h(0), Gate::s(0)]).1;
+    assert!(near(pauli_expectation(&plus_i, 1, "Y").unwrap(), 1.0));
+    let bell = execute(2, &[Gate::h(0), Gate::cnot(0, 1)]).1;
+    assert!(near(pauli_expectation(&bell, 2, "ZZ").unwrap(), 1.0));
+    assert!(near(pauli_expectation(&bell, 2, "ZI").unwrap(), 0.0));
+    let (r, i) = observable(
+        &bell,
+        2,
+        &[
+            PauliTerm {
+                label: "ZZ".into(),
+                coeff: Coeff {
+                    real: 0.5,
+                    imag: 0.0,
+                },
+            },
+            PauliTerm {
+                label: "XX".into(),
+                coeff: Coeff {
+                    real: 0.25,
+                    imag: 1.0,
+                },
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!((r, i), (0.75, 1.0));
+    assert!(pauli_expectation(&bell, 2, "Z").is_err());
+    assert!(pauli_expectation(&bell, 2, "ZQ").is_err());
+    assert!(observable(&bell, 2, &[]).is_err());
+
+    for seed in 1..40u64 {
+        let n = 1 + (seed % 5) as usize;
+        let fin = execute(n, &random_circuit(n, 30, seed * 7 + 3)).1;
+        for label_seed in 0..6u64 {
+            let label: String = (0..n)
+                .map(|q| b"IXYZ"[((seed + label_seed * 13 + q as u64 * 5) % 4) as usize] as char)
+                .collect();
+            let got = pauli_expectation(&fin, n, &label).unwrap();
+            let want = pauli_reference(&fin, &label);
+            assert!((got - want).abs() < 1e-9, "{label}: {got} vs {want}");
+        }
+    }
+}
+
+/// The published state round-trips and must hash to the proved digest.
+#[test]
+fn state_check_needs_the_proved_digest() {
+    use crate::outputs::{check_state, decode_state, encode_state};
+    let fin = execute(3, &gates()).1;
+    let bytes = encode_state(&fin);
+    assert_eq!(bytes.len(), 16 << 3);
+    assert_eq!(decode_state(&bytes, 3).unwrap(), fin);
+    let digest = terminal_digest(&fin);
+    assert_eq!(check_state(&bytes, 3, digest).unwrap(), fin);
+    let mut other = bytes.clone();
+    other[0] ^= 1;
+    assert!(check_state(&other, 3, digest).is_err());
+    assert!(check_state(&bytes[..bytes.len() - 16], 3, digest).is_err());
+    assert!(decode_state(&bytes, 4).is_err());
+    assert!(decode_state(&[], 0).is_err());
+}
