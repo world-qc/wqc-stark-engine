@@ -1282,6 +1282,91 @@ pub unsafe extern "C" fn wqc_sv_verify_root(
     unwind_to_ffi_code(result)
 }
 
+/// Verifies a task's v2 root, as [`wqc_sv_verify_root`], then its wrap chain
+/// (`wrap::encode_wrap` bytes, from the composer), and writes the wrap digest (four Goldilocks
+/// elements, the SNARK's public input and SettlementV4's `wrapDigest`) to `digest_out`.
+///
+/// This rebuilds the root's layers and the wrap chain's (two stages and a top): a few seconds
+/// more than [`wqc_sv_verify_root`], about the same memory.
+///
+/// More than `wrap::MAX_LEAVES` leaves are refused before any verifying.
+///
+/// Returns `1` = valid (digest written), `0` = invalid root, wrap or arguments, `-99` = panic;
+/// on `0` and `-99` a non-null `digest_out` holds zeros.
+///
+/// # Safety
+///
+/// `leaves_json` must be null-terminated; `root_bytes` must point to `root_len` bytes,
+/// `wrap_bytes` to `wrap_len` bytes, and `digest_out` to four writable `u64`s.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_verify_wrap(
+    leaves_json: *const c_char,
+    root_bytes: *const u8,
+    root_len: u32,
+    wrap_bytes: *const u8,
+    wrap_len: u32,
+    digest_out: *mut u64,
+) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let Some(json) = cstr(leaves_json) else {
+            eprintln!("[Rust FFI] sv_verify_wrap: null or non-UTF-8 leaves");
+            return 0;
+        };
+        if digest_out.is_null() {
+            eprintln!("[Rust FFI] sv_verify_wrap: null argument");
+            return 0;
+        }
+        let digest_out = slice::from_raw_parts_mut(digest_out, 4);
+        digest_out.fill(0);
+        if root_bytes.is_null() || wrap_bytes.is_null() {
+            eprintln!("[Rust FFI] sv_verify_wrap: null argument");
+            return 0;
+        }
+        let root = slice::from_raw_parts(root_bytes, root_len as usize);
+        let wrap = slice::from_raw_parts(wrap_bytes, wrap_len as usize);
+        let checked = serde_json::from_str::<RootInput>(json)
+            .map_err(|e| wqc_sv_stark::Error::Verify(format!("leaves JSON: {e}")))
+            .and_then(|input| {
+                if input.leaves.len() > wqc_sv_stark::wrap::MAX_LEAVES {
+                    return Err(wqc_sv_stark::Error::Verify(format!(
+                        "{} leaves, more than {}",
+                        input.leaves.len(),
+                        wqc_sv_stark::wrap::MAX_LEAVES
+                    )));
+                }
+                let leaves = input
+                    .leaves
+                    .iter()
+                    .map(root_leaf)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
+                let root = wqc_sv_stark::root::decode_root(root)?;
+                let (rv, rp) = wqc_sv_stark::root::verified_root(&refs, &root)?;
+                let wrap = wqc_sv_stark::wrap::decode_wrap(wrap)?;
+                let top = wqc_sv_stark::wrap::verify_wrap(rv, &rp, &wrap)?;
+                Ok(wqc_sv_stark::wrap::snark_public_inputs(&top))
+            });
+        match checked {
+            Ok(digest) if digest.len() == 4 => {
+                digest_out.copy_from_slice(&digest);
+                1
+            }
+            Ok(digest) => {
+                eprintln!(
+                    "[Rust FFI] sv_verify_wrap: {} digest elements",
+                    digest.len()
+                );
+                0
+            }
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_verify_wrap: {err}");
+                0
+            }
+        }
+    }));
+    unwind_to_ffi_code(result)
+}
+
 #[cfg(test)]
 mod sv_tests {
     use super::*;
@@ -1533,6 +1618,78 @@ mod sv_tests {
         assert_eq!(verify(input(IDS[2], seed, &json), &root[1..]), 0);
         assert_eq!(verify(r#"{"leaves":[]}"#.into(), &root), 0);
         assert!(wqc_sv_root_peak_bytes(2, 1, 64) > 256 << 20);
+    }
+
+    /// The wrap digest comes back for the leaves the orchestrator accepted, and zeros for
+    /// another node, a changed or cut wrap, or more than `wrap::MAX_LEAVES` leaves. That a wrap
+    /// of another root fails is `wqc_sv_stark`'s `the_wrap_binds_the_root`.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "release only: proves a wrap chain")]
+    fn sv_verify_wrap_through_ffi() {
+        use base64::Engine as _;
+        let level = wqc_sv_stark::SecurityLevel::Low;
+        let circuit = parse_circuit(BELL_MEASURED).unwrap();
+        let sampling = Sampling {
+            measures: circuit.measures,
+            cbits: 2,
+            shots: 64,
+        };
+        let leaf = wqc_sv_stark::leaf::build_sampling(level, 2, circuit.gates, sampling).unwrap();
+        let seed = 7;
+        let (p, counts) = leaf.prove_sampling(dispatch().context(), seed).unwrap();
+        let (root, _) = wqc_sv_stark::root::prove_root(&[(&leaf, &p)]).unwrap();
+        let (rv, rp) = wqc_sv_stark::root::verified_root(&[(&leaf, &p)], &root).unwrap();
+        let (wrap, top) = wqc_sv_stark::wrap::prove_wrap(rv, &rp).unwrap();
+        let want = wqc_sv_stark::wrap::snark_public_inputs(&top);
+        let root = wqc_sv_stark::root::encode_root(&root);
+        let wrap = wqc_sv_stark::wrap::encode_wrap(&wrap);
+        let input = |node: &str, copies: usize| {
+            let leaf = serde_json::json!({
+                "qubit_count": 2,
+                "circuit": BELL_MEASURED,
+                "classical_bit_count": 2,
+                "shots": 64,
+                "security_level": "low",
+                "circuit_id": IDS[0],
+                "sub_task_id": IDS[1],
+                "node_id": node,
+                "slice_id": IDS[3],
+                "digest": digest(),
+                "sample_seed": seed,
+                "counts": counts_json(&counts, 2),
+                "proof": base64::engine::general_purpose::STANDARD.encode(encode_proof(&p.proof)),
+            });
+            serde_json::json!({"leaves": vec![leaf; copies]}).to_string()
+        };
+        let verify = |leaves: String, wrap: &[u8]| {
+            let mut out = [u64::MAX; 4];
+            let code = unsafe {
+                wqc_sv_verify_wrap(
+                    c(&leaves).as_ptr(),
+                    root.as_ptr(),
+                    root.len() as u32,
+                    wrap.as_ptr(),
+                    wrap.len() as u32,
+                    out.as_mut_ptr(),
+                )
+            };
+            (code, out)
+        };
+        let (code, out) = verify(input(IDS[2], 1), &wrap);
+        assert_eq!(code, 1);
+        assert_eq!(out.to_vec(), want);
+        let mut changed = wrap.clone();
+        let mid = changed.len() / 2;
+        changed[mid] ^= 1;
+        let too_many = wqc_sv_stark::wrap::MAX_LEAVES + 1;
+        for (leaves, wrap) in [
+            (input("other", 1), &wrap[..]),
+            (input(IDS[2], 1), &changed[..]),
+            (input(IDS[2], 1), &wrap[1..]),
+            (input(IDS[2], too_many), &wrap[..]),
+        ] {
+            assert_eq!(verify(leaves, wrap), (0, [0; 4]));
+        }
     }
 
     /// The published state gives the scalar and expectation values once its digest matches.

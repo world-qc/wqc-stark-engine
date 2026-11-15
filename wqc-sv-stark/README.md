@@ -368,7 +368,7 @@ A layer needs its leaf's verifier with the leaf config, so both sides prepare ea
 its proving data: about 1 KB per gate row, plus about 180 MB for the layer and 350 MB more to
 prove it (8-core Mac, 2^11 to 2^20 rows; layers take about 0.5 s to prepare and 1.6 s to prove
 whatever the leaf). `VerifyCfg` cannot stand in yet: recursion needs the recursion traits of
-the child config's PCS. The FFI has `wqc_sv_verify_root` and `wqc_sv_root_peak_bytes`.
+the child config's PCS. The FFI has `wqc_sv_verify_root`, `wqc_sv_root_peak_bytes` and `wqc_sv_verify_wrap` (below).
 
 ### The SNARK wrap
 
@@ -393,6 +393,11 @@ top's statement is the task's wrap digest, the SNARK's only public input
 (`wrap::snark_public_inputs`). `snark::snark_inputs` exports the top proof's verifier circuit
 (`snark::SnarkCircuit`, the same for every task, the top commitment included as constants) and
 its witness, and `snark::check` is the reference for every constraint the SNARK states.
+
+A `wrap::WrapProof` travels as `wrap::encode_wrap` bytes (postcard; `wrap::decode_wrap` refuses
+trailing bytes), and a root has at most `wrap::MAX_LEAVES` (4) leaves to be wrapped. The FFI's
+`wqc_sv_verify_wrap` verifies a root and its wrap together, refuses more leaves before
+verifying, and returns the wrap digest.
 
 Measured (8-core Mac, every tier, 1 to 4 leaves, one top commitment throughout):
 `prove_wrap` about 30 s, `verify_wrap` about 7.5 s, top proof 115 to 120 KB. The top verifier

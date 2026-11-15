@@ -372,6 +372,11 @@ impl DigestLayer {
     }
 }
 
+/// Most leaves a wrapped root may have: the fixed shape is measured for 1 to 4
+/// (`tests::the_wrap_shape_matrix`); callers keep larger roots off the wrap, and the FFI
+/// refuses them before verifying anything.
+pub const MAX_LEAVES: usize = 4;
+
 /// Shape of every proof that leaves the [`NORMALIZE_LAYERS`]: primitive table rows (witness,
 /// public/const, ALU) and each table's degree bits. Measured to hold for every tier with 1 to 4
 /// leaves, and for 3, 5 and 8 qubits (`tests::the_wrap_shape_matrix`); other roots are refused.
@@ -391,11 +396,28 @@ fn check_fixed_shape(proof: &RecursionProof) -> Result<(), Error> {
     Ok(())
 }
 
-/// A wrap chain's proofs ([`encode_proof`] bytes): the [`DigestLayer`], the
+/// A wrap chain's proofs ([`encode_proof`] bytes): each stage's [`DigestLayer`] and
 /// [`NORMALIZE_LAYERS`], then the top layer.
 #[derive(Serialize, Deserialize)]
 pub struct WrapProof {
     pub proofs: Vec<Vec<u8>>,
+}
+
+/// The wrap's bytes on the wire (postcard), as [`crate::root::encode_root`] for a root.
+pub fn encode_wrap(wrap: &WrapProof) -> Vec<u8> {
+    postcard::to_allocvec(wrap).expect("a wrap serializes")
+}
+
+/// Reads [`encode_wrap`]'s bytes; trailing bytes are an error.
+pub fn decode_wrap(bytes: &[u8]) -> Result<WrapProof, Error> {
+    match postcard::take_from_bytes(bytes) {
+        Ok((wrap, [])) => Ok(wrap),
+        Ok((_, rest)) => Err(Error::Verify(format!(
+            "{} trailing bytes after the wrap",
+            rest.len()
+        ))),
+        Err(e) => Err(Error::Verify(format!("wrap bytes: {e}"))),
+    }
 }
 
 /// The top of a wrap chain, which the SNARK verifies. Its statement is the
