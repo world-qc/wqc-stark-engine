@@ -389,8 +389,14 @@ SNARK re-runs the top proof's verifier circuit: `snark::snark_inputs` exports it
 (`snark::SnarkCircuit`, the same for every task) and its witness, and `snark::check` is the
 reference for every constraint the SNARK states. Its public inputs
 (`wrap::snark_public_inputs`) are the digest and the top layer's preprocessed commitment, which
-depends on the root's shape. Measured (8-core Mac): the chain takes about 20 s; the top
-verifier circuit has 4,755 Poseidon2 rows, 20,583 ALU operations and 35,915 slots.
+depends on the root's shape (leaf count, and for one or two leaves low against the other tiers),
+so a verifier checks it against the top of its own `wrap::verify_wrap`: a prover free to choose
+it could prove any statement with a circuit of the same shape.
+
+Measured (8-core Mac, every tier, 1 to 4 leaves): `prove_wrap` about 23 s (the top layer about
+13 s), `verify_wrap` about 6 s, top proof 115 to 120 KB, 3.8 GB peak for a whole run with the
+SNARK export. The top verifier circuit has 4,755 Poseidon2 rows, 20,583 ALU operations and
+35,915 slots; with the top at `FriParams::RECURSION` it would have 7,725, 37,315 and 62,497.
 
 ## Tests
 

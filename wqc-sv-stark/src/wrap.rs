@@ -11,7 +11,8 @@
 //!    commitment. The digest binds the root's statement and its relation; its length is fixed.
 //! 2. [`NORMALIZE_LAYERS`] recursion layers over it: the shape of a layer's proof depends only
 //!    on its child's shape, and from here on it no longer changes.
-//! 3. A top layer with [`FriParams::WRAP`]: fewer queries, so fewer Merkle paths for the SNARK.
+//! 3. A top layer with [`FriParams::WRAP`]: half the queries, so fewer Poseidon2 rows for the
+//!    SNARK.
 //!
 //! The SNARK then runs the verifier circuit of the top proof ([`verifier_circuit`]), which takes
 //! the top layer's preprocessed commitment as an input: that commitment and the digest are what
@@ -237,7 +238,7 @@ impl VerifierCircuit {
             ..
         } = &prev
         else {
-            unreachable!()
+            return Err(Error::Recursion("not a batch-STARK input".into()));
         };
         let (public, private) =
             self.inputs
@@ -298,15 +299,10 @@ pub struct DigestLayer {
 }
 
 impl DigestLayer {
+    /// A digest layer over `child`'s proofs, proved at [`FriParams::RECURSION`]; `sample` fixes
+    /// the allocation shape.
     pub fn new(child: CircuitVerifier<Cfg>, sample: &RecursionProof) -> Result<Self, Error> {
-        Self::new_with(child, sample, FriParams::RECURSION)
-    }
-
-    pub(crate) fn new_with(
-        child: CircuitVerifier<Cfg>,
-        sample: &RecursionProof,
-        fri: FriParams,
-    ) -> Result<Self, Error> {
+        let fri = FriParams::RECURSION;
         // The commitment's public inputs come from inside the verifier, which does not return
         // them: find their expressions in a first build, then build again with the sponge. The
         // build is deterministic, and the second circuit is checked to hash exactly them.
@@ -325,7 +321,8 @@ impl DigestLayer {
                 )));
             }
         }
-        let schema = schema.expect("built with the digest");
+        let schema =
+            schema.ok_or_else(|| Error::Recursion("digest built without its statement".into()))?;
         let b: Backend = backend();
         let mut preprocessors =
             PcsRecursionBackend::<Cfg, BatchOnly, 2>::non_primitive_preprocessors(&b);
@@ -366,19 +363,19 @@ impl DigestLayer {
     }
 }
 
-/// Shape of every proof that leaves the [`NORMALIZE_LAYERS`] (at [`FriParams::RECURSION`]):
-/// primitive table rows (witness, public/const, ALU) and each table's degree bits.
+/// Shape of every proof that leaves the [`NORMALIZE_LAYERS`]: primitive table rows (witness,
+/// public/const, ALU) and each table's degree bits. Measured to hold for every tier and 1 to 4
+/// leaves (`tests::the_wrap_shape_matrix`).
 pub const FIXED_ROWS: [usize; 3] = [281, 68, 37865];
 pub const FIXED_DEGREE_BITS: [usize; 6] = [9, 7, 14, 14, 11, 4];
 
-fn check_fixed_shape(proof: &RecursionProof, fri: FriParams) -> Result<(), Error> {
-    if fri != FriParams::RECURSION {
-        return Ok(());
-    }
+fn check_fixed_shape(proof: &RecursionProof) -> Result<(), Error> {
     let rows: Vec<usize> = proof.proof.rows.iter().collect();
     if rows != FIXED_ROWS || proof.proof.proof.degree_bits != FIXED_DEGREE_BITS {
         return Err(Error::Recursion(format!(
-            "normalized proof has rows {rows:?} and degree bits {:?}, not the fixed shape",
+            "after {NORMALIZE_LAYERS} normalizing layers the proof has rows {rows:?} and degree \
+             bits {:?}, not the fixed shape {FIXED_ROWS:?} / {FIXED_DEGREE_BITS:?}: this root's \
+             shape is not supported, the chain needs more normalizing layers",
             proof.proof.proof.degree_bits
         )));
     }
@@ -405,47 +402,18 @@ pub fn prove_wrap(
     root_verifier: CircuitVerifier<Cfg>,
     root: &RecursionProof,
 ) -> Result<(WrapProof, Wrapped), Error> {
-    prove_wrap_with(root_verifier, root, FriParams::RECURSION, FriParams::WRAP)
-}
-
-/// Verifies a wrap chain over a verified root, returning its top.
-///
-/// # Security
-///
-/// The root must come from [`crate::root::verified_root`] with the task's leaves: the chain
-/// only binds the root's statement and relation through the digest.
-pub fn verify_wrap(
-    root_verifier: CircuitVerifier<Cfg>,
-    root: &RecursionProof,
-    wrap: &WrapProof,
-) -> Result<Wrapped, Error> {
-    verify_wrap_with(
-        root_verifier,
-        root,
-        wrap,
-        FriParams::RECURSION,
-        FriParams::WRAP,
-    )
-}
-
-pub(crate) fn prove_wrap_with(
-    root_verifier: CircuitVerifier<Cfg>,
-    root: &RecursionProof,
-    fri: FriParams,
-    top_fri: FriParams,
-) -> Result<(WrapProof, Wrapped), Error> {
-    let digest = DigestLayer::new_with(root_verifier, root, fri)?;
+    let digest = DigestLayer::new(root_verifier, root)?;
     let mut cur = digest.prove(root)?;
     let mut proofs = vec![encode_proof(&cur.proof)];
     let mut child = digest.verifier();
     for _ in 0..NORMALIZE_LAYERS {
-        let layer = Layer::over_layer_with(child, &cur, fri)?;
+        let layer = Layer::over_layer(child, &cur)?;
         cur = layer.prove(&cur.proof, &cur.statement)?;
         proofs.push(encode_proof(&cur.proof));
         child = layer.verifier();
     }
-    check_fixed_shape(&cur, fri)?;
-    let top = Layer::over_layer_with(child, &cur, top_fri)?;
+    check_fixed_shape(&cur)?;
+    let top = Layer::over_layer_wrap(child, &cur)?;
     let proof = top.prove(&cur.proof, &cur.statement)?;
     proofs.push(encode_proof(&proof.proof));
     Ok((
@@ -457,12 +425,19 @@ pub(crate) fn prove_wrap_with(
     ))
 }
 
-pub(crate) fn verify_wrap_with(
+/// Verifies a wrap chain over a verified root, returning its top. It rebuilds every layer of
+/// the chain, as [`crate::root::verify_root`] does for a root.
+///
+/// # Security
+///
+/// The root must come from [`crate::root::verified_root`] with the task's leaves: the chain
+/// only binds the root's statement and relation through the digest. The returned top's
+/// verifier is the one the SNARK's public commitment must equal (see
+/// [`snark_public_inputs`]).
+pub fn verify_wrap(
     root_verifier: CircuitVerifier<Cfg>,
     root: &RecursionProof,
     wrap: &WrapProof,
-    fri: FriParams,
-    top_fri: FriParams,
 ) -> Result<Wrapped, Error> {
     if wrap.proofs.len() != NORMALIZE_LAYERS + 2 {
         return Err(Error::Verify(format!(
@@ -481,20 +456,31 @@ pub(crate) fn verify_wrap_with(
             statement: statement.clone(),
         })
     };
-    let mut child = DigestLayer::new_with(root_verifier, root, fri)?.verifier();
+    let mut child = DigestLayer::new(root_verifier, root)?.verifier();
     let mut cur = next(&child)?;
     for _ in 0..NORMALIZE_LAYERS {
-        child = Layer::over_layer_with(child, &cur, fri)?.verifier();
+        child = Layer::over_layer(child, &cur)?.verifier();
         cur = next(&child)?;
     }
-    check_fixed_shape(&cur, fri)?;
-    let verifier = Layer::over_layer_with(child, &cur, top_fri)?.verifier();
+    check_fixed_shape(&cur)?;
+    let verifier = Layer::over_layer_wrap(child, &cur)?.verifier();
     let proof = next(&verifier)?;
     Ok(Wrapped { verifier, proof })
 }
 
 /// The SNARK's public inputs for a wrap top: the digest, then the top layer's preprocessed
 /// commitment (see [`crate::snark`]).
+///
+/// # Security
+///
+/// Both halves must be checked against the task. The SNARK fixes the top proof's shape, not its
+/// relation: the commitment names the top layer's circuit, and a prover free to choose it could
+/// build a circuit of the same shape that verifies nothing and exports any statement. So the
+/// verifier compares the commitment with the top of its own [`verify_wrap`] (or with a value it
+/// derived the same way), and the digest with [`statement_digest`] of the root it verified. The
+/// commitment depends on the root's shape, not on the circuits or qubit counts: measured for
+/// 1 to 4 leaves (`tests::the_wrap_shape_matrix`), it differs between leaf counts and, for one
+/// or two leaves, between low and the other tiers.
 pub fn snark_public_inputs(top: &Wrapped) -> Result<Vec<u64>, Error> {
     Ok(top
         .proof

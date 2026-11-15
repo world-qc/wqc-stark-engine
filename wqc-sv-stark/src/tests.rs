@@ -2275,7 +2275,7 @@ fn the_wrap_reaches_one_snark_circuit() {
     assert!(c1 == c2, "both tasks wrap to the same SNARK circuit");
     for (rv, rp, top, w) in [(&rv1, &rp1, &top1, &w1), (&rv2, &rp2, &top2, &w2)] {
         let public = snark_public_inputs(top).unwrap();
-        assert_eq!(public, w.exposed(&c1));
+        assert_eq!(public, w.exposed(&c1).unwrap());
         let digest = statement_digest(rv, &rp.statement).unwrap();
         assert_eq!(public[..4], digest.map(|v| v.as_canonical_u64()));
         check(&c1, w, &public).unwrap();
@@ -2335,7 +2335,51 @@ fn the_wrap_binds_the_root() {
         statement_digest(&rv2, &rp2.statement).unwrap(),
         "same context, another circuit"
     );
-    assert!(verify_wrap(rv2, &rp2, &wrap).is_err());
+    assert!(verify_wrap(rv2.clone(), &rp2, &wrap).is_err());
+    // The top commitment depends on the root's shape only: another circuit of the same tier
+    // and leaf count has the same one.
+    let top = verify_wrap(rv, &rp, &wrap).unwrap();
+    let (_, top2) = crate::wrap::prove_wrap(rv2, &rp2).unwrap();
+    let public = crate::wrap::snark_public_inputs(&top).unwrap();
+    assert_eq!(
+        public[4..],
+        crate::wrap::snark_public_inputs(&top2).unwrap()[4..]
+    );
+}
+
+/// Every tier and 1 to 4 leaves reach the fixed shape after the normalizing layers; prints
+/// each top commitment and the chain's prove and verify times.
+#[test]
+#[ignore = "slow: 16 wraps"]
+fn the_wrap_shape_matrix() {
+    use crate::wrap::{prove_wrap, snark_public_inputs, verify_wrap};
+    use std::time::Instant;
+    for level in [
+        SecurityLevel::Low,
+        SecurityLevel::Normal,
+        SecurityLevel::High,
+        SecurityLevel::Ultra,
+    ] {
+        let l = build(level, 3, gates()).unwrap();
+        for n in 1..=4u64 {
+            let ps: Vec<LeafProof> = (0..n).map(|i| l.prove([i, 1, 2, 3]).unwrap()).collect();
+            let leaves: Vec<_> = ps.iter().map(|p| (&l, p)).collect();
+            let (root, _) = crate::root::prove_root(&leaves).unwrap();
+            let (rv, rp) = crate::root::verified_root(&leaves, &root).unwrap();
+            let t = Instant::now();
+            let (wrap, top) = prove_wrap(rv.clone(), &rp).unwrap();
+            let proved = t.elapsed();
+            let t = Instant::now();
+            verify_wrap(rv, &rp, &wrap).unwrap();
+            let verified = t.elapsed();
+            let public = snark_public_inputs(&top).unwrap();
+            println!(
+                "{level:?} leaves={n}: prove {proved:.1?} verify {verified:.1?} top {} B commitment {:?}",
+                wrap.proofs.last().unwrap().len(),
+                &public[4..]
+            );
+        }
+    }
 }
 
 /// Writes the SNARK fixtures wqc-snark-wrap tests against into `$WQC_SNARK_FIXTURES`: the
@@ -2354,12 +2398,15 @@ fn write_snark_fixtures() {
     let (_, top) = crate::wrap::prove_wrap(rv, &rp).unwrap();
     let (c, w) = snark_inputs(&top).unwrap();
     let public = snark_public_inputs(&top).unwrap();
+    crate::snark::check(&c, &w, &public).unwrap();
+    let tamper = snark_tamper_cases(&c, &w, &public);
     let write = |name: &str, v: &dyn erased::Json| {
         std::fs::write(dir.join(name), v.json()).unwrap();
     };
     write("circuit.json", &c);
     write("witness.json", &w);
     write("public.json", &public);
+    write("tamper.json", &tamper);
     let consts = poseidon2_constants();
     let perm = p3_recursion::builtin_config::fixed_goldilocks_poseidon2_8();
     let vectors: Vec<([u64; 8], [u64; 8])> = (0..8u64)
@@ -2375,6 +2422,126 @@ fn write_snark_fixtures() {
         })
         .collect();
     write("poseidon2.json", &(consts, vectors));
+}
+
+/// Prefix of each operation kind and Poseidon2 stream that wqc-snark-wrap checks the tamper
+/// cases on.
+const TAMPER_PREFIX: usize = 260;
+
+/// One change to a witness that [`crate::snark::check`] rejects, inside the first
+/// [`TAMPER_PREFIX`] operations of each kind: wqc-snark-wrap checks its circuit rejects it too.
+#[derive(serde::Serialize)]
+struct TamperCase {
+    name: &'static str,
+    /// `[slot, coordinate, value]`
+    slot: Option<[u64; 3]>,
+    /// `[stream, row, element, value]`
+    poseidon2_input: Option<[u64; 4]>,
+    /// `[stream, row]`: flip the direction bit.
+    poseidon2_bit: Option<[u64; 2]>,
+    /// `[index, value]`
+    public: Option<[u64; 2]>,
+    /// What [`crate::snark::check`] reports.
+    rust_error: String,
+}
+
+fn snark_tamper_cases(
+    c: &crate::snark::SnarkCircuit,
+    w: &crate::snark::SnarkWitness,
+    public: &[u64],
+) -> Vec<TamperCase> {
+    let p = F::ORDER_U64;
+    let bump = |v: u64| (v + 1) % p;
+    let case = |name| TamperCase {
+        name,
+        slot: None,
+        poseidon2_input: None,
+        poseidon2_bit: None,
+        public: None,
+        rust_error: String::new(),
+    };
+    let mut cases = Vec::new();
+    let mut slot = |name, s: u32, k: usize| {
+        let mut t = case(name);
+        t.slot = Some([s as u64, k as u64, bump(w.w[s as usize][k])]);
+        cases.push(t);
+    };
+    slot("alu output", c.alu[100].out, 1);
+    slot("recompose output", c.recompose[50].1, 0);
+    slot("constant", c.consts[5].0, 0);
+    for (i, name) in [(1, "digest"), (6, "commitment")] {
+        let mut t = case(name);
+        t.public = Some([i, bump(public[i as usize])]);
+        cases.push(t);
+    }
+    let rows = &c.poseidon2;
+    let mut input = |name, s: usize, r: usize, e: usize, v: u64| {
+        let mut t = case(name);
+        t.poseidon2_input = Some([s as u64, r as u64, e as u64, v]);
+        cases.push(t);
+    };
+    let chained = (100..TAMPER_PREFIX - 1)
+        .find(|&r| !rows[0][r + 1].new_start && !rows[0][r + 1].merkle)
+        .unwrap();
+    input(
+        "mmcs sponge chain",
+        0,
+        chained,
+        7,
+        w.poseidon2_inputs[0][chained][7] ^ 1,
+    );
+    let mmcs_start = (0..TAMPER_PREFIX)
+        .find(|&r| rows[0][r].new_start && !rows[0][r].merkle && rows[0][r].inputs[2].is_some())
+        .unwrap();
+    input(
+        "mmcs chain start capacity",
+        0,
+        mmcs_start,
+        4,
+        bump(w.poseidon2_inputs[0][mmcs_start][4]),
+    );
+    let cont = (50..TAMPER_PREFIX)
+        .find(|&r| !rows[1][r].new_start)
+        .unwrap();
+    input(
+        "challenger capacity chain",
+        1,
+        cont,
+        5,
+        bump(w.poseidon2_inputs[1][cont][5]),
+    );
+    input(
+        "challenger chain start",
+        1,
+        0,
+        4,
+        bump(w.poseidon2_inputs[1][0][4]),
+    );
+    let merkle = (0..TAMPER_PREFIX).find(|&r| rows[0][r].merkle).unwrap();
+    let mut t = case("merkle bit");
+    t.poseidon2_bit = Some([0, merkle as u64]);
+    cases.push(t);
+
+    for t in &mut cases {
+        let mut tw = w.clone();
+        let mut tp = public.to_vec();
+        if let Some([s, k, v]) = t.slot {
+            tw.w[s as usize][k as usize] = v;
+        }
+        if let Some([s, r, e, v]) = t.poseidon2_input {
+            tw.poseidon2_inputs[s as usize][r as usize][e as usize] = v;
+        }
+        if let Some([s, r]) = t.poseidon2_bit {
+            let b = &mut tw.poseidon2_bits[s as usize][r as usize];
+            *b = !*b;
+        }
+        if let Some([i, v]) = t.public {
+            tp[i as usize] = v;
+        }
+        let err = crate::snark::check(c, &tw, &tp).expect_err(t.name);
+        t.rust_error = err.to_string();
+    }
+    cases
 }
 
 #[cfg(test)]

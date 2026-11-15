@@ -18,8 +18,14 @@
 //! - `recompose/coeff`: `w[out] = (w[in0].0, w[in1].0)` and `w[in_i].1 = 0`.
 //! - Poseidon2 rows, one stream per source table (MMCS, challenger) in table order, each stream
 //!   starting a chain. A row's state `s` is 8 base elements, limb `l` being `s[2l..2l + 2]`;
-//!   `o = Poseidon2(s)`. The row constraints are the Poseidon2 circuit AIR's
-//!   (`p3-poseidon2-circuit-air`):
+//!   `o = Poseidon2(s)`. The row constraints are those of the Poseidon2 circuit AIR
+//!   (`p3-poseidon2-circuit-air`, `eval` and `eval_interactions`) for this table: Goldilocks
+//!   D = 2, width 8, two rate and two capacity limbs, arity-2 Merkle rows. That takes the AIR's
+//!   general branch; its compact branch (D = 1, width 16, rate 8, with the capacity-fed Merkle
+//!   flag and a chain start pinned on every sponge row) and its arity-4 branch do not apply, and
+//!   [`SnarkCircuit::new`] refuses other tables. In the shared table the chain start is gated by
+//!   the challenger role, so it binds challenger rows only; an MMCS chain start reads its
+//!   capacity from a slot instead (in the top circuit, the zero constant). The constraints:
 //!   - the direction bit is boolean, zero off Merkle rows, and `w[bit] = (bit, 0)` on them;
 //!   - input `l` read from `w[idx]` equals limb `l` of `s`, or limb `(l + 2) mod 4` if the bit
 //!     is set; output `l` (rate limbs 0 and 1) written to `w[idx]` equals limb `l` of `o`;
@@ -43,9 +49,21 @@ use crate::{Challenge, Error, F};
 /// Base elements of a Poseidon2 state.
 pub const WIDTH: usize = 8;
 
+/// Version of the [`SnarkCircuit`] / [`SnarkWitness`] encoding. wqc-snark-wrap refuses any
+/// other, so a change to the constraints cannot reach it unread.
+pub const FORMAT_VERSION: u32 = 1;
+
+/// The Poseidon2 tables a top circuit uses: the MMCS and the challenger table of
+/// `Poseidon2Config::GOLDILOCKS_D2_W8`, which the prover shares.
+const POSEIDON2_TABLES: [&str; 2] = [
+    "poseidon2_perm/goldilocks_d2_w8",
+    "poseidon2_perm/goldilocks_d2_w8_challenger",
+];
+
 /// The operations of a top verifier circuit, as the SNARK reads them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnarkCircuit {
+    pub version: u32,
     pub witness_count: u32,
     /// Public-input positions the SNARK exposes, in order.
     pub exposed: Vec<u32>,
@@ -97,6 +115,7 @@ pub struct Poseidon2Row {
 /// One run of the circuit: every slot, and each Poseidon2 row's input state and direction bit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnarkWitness {
+    pub version: u32,
     pub w: Vec<[u64; 2]>,
     pub poseidon2_inputs: Vec<Vec<[u64; WIDTH]>>,
     pub poseidon2_bits: Vec<Vec<bool>>,
@@ -135,6 +154,7 @@ impl SnarkCircuit {
     /// which the circuit alone fixes.
     pub fn new(vc: &VerifierCircuit, traces: &Traces<Challenge>) -> Result<Self, Error> {
         let mut c = Self {
+            version: FORMAT_VERSION,
             witness_count: vc.circuit.witness_count,
             exposed: vc
                 .table_publics
@@ -187,13 +207,19 @@ impl SnarkCircuit {
                         let out = limbs(&outputs[..], 1)?;
                         let out = limbs(&out[0], 1)?;
                         c.recompose.push(([id(ins[0]), id(ins[1])], id(out[0])));
-                    } else if !ty.starts_with("poseidon2_perm/") {
+                    } else if !POSEIDON2_TABLES.contains(&ty) {
                         return Err(Error::Recursion(format!("unsupported operation {ty}")));
                     }
                 }
             }
         }
         for s in streams(traces) {
+            if !POSEIDON2_TABLES.contains(&s.op_type.as_str()) {
+                return Err(Error::Recursion(format!(
+                    "unsupported Poseidon2 table {}",
+                    s.op_type.as_str()
+                )));
+            }
             let mut rows = Vec::with_capacity(s.operations.len());
             for r in &s.operations {
                 let inputs = limbs(&r.in_ctl, 4)?;
@@ -203,7 +229,7 @@ impl SnarkCircuit {
                 rows.push(Poseidon2Row {
                     new_start: r.new_start,
                     merkle: r.merkle_path,
-                    challenger: r.challenger || s.op_type.as_str().ends_with("_challenger"),
+                    challenger: s.op_type.as_str() == POSEIDON2_TABLES[1],
                     absorb: r.absorb_len as u8,
                     inputs: core::array::from_fn(|l| inputs[l].then_some(input_idx[l])),
                     outputs: core::array::from_fn(|l| outputs[l].then_some(output_idx[l])),
@@ -238,6 +264,7 @@ impl SnarkWitness {
             poseidon2_bits.push(s.operations.iter().map(|r| r.mmcs_bit).collect());
         }
         Ok(Self {
+            version: FORMAT_VERSION,
             w,
             poseidon2_inputs,
             poseidon2_bits,
@@ -245,19 +272,25 @@ impl SnarkWitness {
     }
 
     /// The SNARK's public inputs: the base value at each exposed position.
-    pub fn exposed(&self, c: &SnarkCircuit) -> Vec<u64> {
+    pub fn exposed(&self, c: &SnarkCircuit) -> Result<Vec<u64>, Error> {
         c.exposed
             .iter()
-            .map(|&pos| {
-                let (out, _) = c.publics.iter().find(|(_, p)| *p == pos).expect("exposed");
-                self.w[*out as usize][0]
-            })
+            .map(|&pos| Ok(self.w[public_slot(c, pos)? as usize][0]))
             .collect()
     }
 }
 
 fn fail(m: String) -> Error {
     Error::Verify(m)
+}
+
+/// The slot of the circuit's public input at `pos`.
+fn public_slot(c: &SnarkCircuit, pos: u32) -> Result<u32, Error> {
+    c.publics
+        .iter()
+        .find(|(_, p)| *p == pos)
+        .map(|&(out, _)| out)
+        .ok_or_else(|| fail(format!("exposed position {pos} has no public input")))
 }
 
 /// Checks every constraint the SNARK enforces (see the module docs) on `w` with public inputs
@@ -285,7 +318,11 @@ pub fn check(c: &SnarkCircuit, w: &SnarkWitness, exposed: &[u64]) -> Result<(), 
     if exposed.len() != c.exposed.len() {
         return Err(fail("exposed input count".into()));
     }
+    if c.version != FORMAT_VERSION || w.version != FORMAT_VERSION {
+        return Err(fail("format version".into()));
+    }
     for (&pos, &v) in c.exposed.iter().zip(exposed) {
+        public_slot(c, pos)?;
         for &(out, p2) in &c.publics {
             if p2 == pos {
                 eq("public", out, ext([v, 0]))?;

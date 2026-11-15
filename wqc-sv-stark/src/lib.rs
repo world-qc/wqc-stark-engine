@@ -149,8 +149,11 @@ impl FriParams {
         query_pow_bits: 16,
     };
 
-    /// The wrap chain's top layer (see [`wrap`]): rate 1/64 and 14 queries, so the SNARK opens
-    /// half the Merkle paths of [`FriParams::RECURSION`] at the same simple estimate (100 bits).
+    /// The wrap chain's top layer (see [`wrap`]): rate 1/64 and 14 queries, at the same simple
+    /// estimate as [`FriParams::RECURSION`] (100 bits). The SNARK opens half the Merkle paths,
+    /// each 3 levels deeper, so it hashes about three quarters as much (`14(d + 6)` against
+    /// `28(d + 3)` for a path of depth `d + 3`); the top layer's low-degree extensions are 8
+    /// times larger than at [`FriParams::RECURSION`].
     pub const WRAP: Self = Self {
         log_blowup: 6,
         log_final_poly_len: 0,
