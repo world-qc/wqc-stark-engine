@@ -2250,6 +2250,7 @@ fn snark_check_pins_a_challenger_chain_start() {
         version: FORMAT_VERSION,
         witness_count: 0,
         exposed: vec![],
+        fixed: vec![],
         consts: vec![],
         publics: vec![],
         alu: vec![],
@@ -2297,47 +2298,54 @@ fn wrapped(
     (rv, rp, wrap, top)
 }
 
-/// Two tasks with different leaves, tiers and trees wrap to the same SNARK circuit, whose
-/// constraints their witnesses meet; the public inputs are the root's digest and the top
-/// commitment, and any change to them, a slot or a Poseidon2 input is caught.
+/// Two tasks with different leaves, tiers and trees wrap to the same SNARK circuit (the top
+/// commitment included, as constants), whose constraints their witnesses meet; the only public
+/// input is the wrap digest, and any change to it, a slot or a Poseidon2 input is caught.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "release only")]
 fn the_wrap_reaches_one_snark_circuit() {
     use crate::snark::{check, snark_inputs};
-    use crate::wrap::{snark_public_inputs, statement_digest};
+    use crate::wrap::{snark_public_inputs, top_commitment, verify_wrap};
     let small = build(SecurityLevel::Low, 3, gates()).unwrap();
     let p = small.prove(CTX).unwrap();
-    let (rv1, rp1, _, top1) = wrapped(&[(&small, &p)]);
+    let (rv1, rp1, wrap1, top1) = wrapped(&[(&small, &p)]);
     let big = build(SecurityLevel::Ultra, 4, random_circuit(4, 12, 3)).unwrap();
     let ps: Vec<LeafProof> = (0..3u64)
         .map(|i| big.prove([i, 7, 7, 7]).unwrap())
         .collect();
     let leaves: Vec<_> = ps.iter().map(|p| (&big, p)).collect();
-    let (rv2, rp2, _, top2) = wrapped(&leaves);
+    let (rv2, rp2, wrap2, top2) = wrapped(&leaves);
 
     let (c1, w1) = snark_inputs(&top1).unwrap();
     let (c2, w2) = snark_inputs(&top2).unwrap();
     assert!(c1 == c2, "both tasks wrap to the same SNARK circuit");
-    for (rv, rp, top, w) in [(&rv1, &rp1, &top1, &w1), (&rv2, &rp2, &top2, &w2)] {
-        let public = snark_public_inputs(top).unwrap();
+    assert_eq!(
+        top_commitment(&top1).unwrap(),
+        top_commitment(&top2).unwrap()
+    );
+    for (rv, rp, wrap, top, w) in [
+        (&rv1, &rp1, &wrap1, &top1, &w1),
+        (&rv2, &rp2, &wrap2, &top2, &w2),
+    ] {
+        let public = snark_public_inputs(top);
+        assert_eq!(public.len(), 4);
         assert_eq!(public, w.exposed(&c1).unwrap());
-        let digest = statement_digest(rv, &rp.statement).unwrap();
-        assert_eq!(public[..4], digest.map(|v| v.as_canonical_u64()));
+        let checked = verify_wrap(rv.clone(), rp, wrap).unwrap();
+        assert_eq!(public, snark_public_inputs(&checked));
         check(&c1, w, &public).unwrap();
     }
-    assert_ne!(
-        snark_public_inputs(&top1).unwrap()[4..],
-        snark_public_inputs(&top2).unwrap()[4..],
-        "the top commitment depends on the root's shape"
-    );
+    assert_ne!(snark_public_inputs(&top1), snark_public_inputs(&top2));
 
-    let public = snark_public_inputs(&top1).unwrap();
+    let public = snark_public_inputs(&top1);
     let mut bad = public.clone();
     bad[0] ^= 1;
     assert!(check(&c1, &w1, &bad).is_err());
-    let mut bad = public.clone();
-    bad[7] ^= 1;
-    assert!(check(&c1, &w1, &bad).is_err());
+    let mut fixed = c1.clone();
+    fixed.fixed[3].1 ^= 1;
+    assert!(
+        check(&fixed, &w1, &public).is_err(),
+        "another top commitment"
+    );
     let mut bad = w1.clone();
     let o = c1.alu[c1.alu.len() / 2].out as usize;
     bad.w[o][1] = (bad.w[o][1] + 1) % F::ORDER_U64;
@@ -2396,24 +2404,27 @@ fn the_wrap_binds_the_root() {
     ] {
         assert!(verify_wrap(rv.clone(), &rp, &w).is_err(), "{what}");
     }
-    // The top commitment depends on the root's shape only: another circuit of the same tier
-    // and leaf count has the same one.
+    // Another circuit's root wraps to another digest under the same top commitment.
     let top = verify_wrap(rv, &rp, &wrap).unwrap();
     let (_, top2) = crate::wrap::prove_wrap(rv2, &rp2).unwrap();
-    let public = crate::wrap::snark_public_inputs(&top).unwrap();
+    assert_ne!(
+        crate::wrap::snark_public_inputs(&top),
+        crate::wrap::snark_public_inputs(&top2)
+    );
     assert_eq!(
-        public[4..],
-        crate::wrap::snark_public_inputs(&top2).unwrap()[4..]
+        crate::wrap::top_commitment(&top).unwrap(),
+        crate::wrap::top_commitment(&top2).unwrap()
     );
 }
 
-/// Every tier and 1 to 4 leaves reach the fixed shape after the normalizing layers; prints
-/// each top commitment and the chain's prove and verify times.
+/// Every tier and 1 to 4 leaves reach the fixed shape in both stages and one top commitment;
+/// prints the chain's prove and verify times.
 #[test]
 #[ignore = "slow: 16 wraps"]
 fn the_wrap_shape_matrix() {
-    use crate::wrap::{prove_wrap, snark_public_inputs, verify_wrap};
+    use crate::wrap::{prove_wrap, top_commitment, verify_wrap};
     use std::time::Instant;
+    let mut seen = None;
     for level in [
         SecurityLevel::Low,
         SecurityLevel::Normal,
@@ -2422,15 +2433,14 @@ fn the_wrap_shape_matrix() {
     ] {
         let l = build(level, 3, gates()).unwrap();
         if level == SecurityLevel::Low {
-            // Qubit counts and circuits: the same shape, so the same commitment.
-            let mut seen = None;
+            // Qubit counts and circuits.
             for q in [3usize, 5, 8] {
                 let lq = build(level, q, random_circuit(q, 10, q as u64)).unwrap();
                 let p = lq.prove(CTX).unwrap();
                 let (root, _) = crate::root::prove_root(&[(&lq, &p)]).unwrap();
                 let (rv, rp) = crate::root::verified_root(&[(&lq, &p)], &root).unwrap();
                 let (_, top) = prove_wrap(rv, &rp).unwrap();
-                let c = snark_public_inputs(&top).unwrap()[4..].to_vec();
+                let c = top_commitment(&top).unwrap();
                 assert!(seen.get_or_insert(c.clone()) == &c, "n = {q}");
             }
         }
@@ -2445,11 +2455,11 @@ fn the_wrap_shape_matrix() {
             let t = Instant::now();
             verify_wrap(rv, &rp, &wrap).unwrap();
             let verified = t.elapsed();
-            let public = snark_public_inputs(&top).unwrap();
+            let c = top_commitment(&top).unwrap();
+            assert!(seen.get_or_insert(c.clone()) == &c, "{level:?} leaves={n}");
             println!(
-                "{level:?} leaves={n}: prove {proved:.1?} verify {verified:.1?} top {} B commitment {:?}",
+                "{level:?} leaves={n}: prove {proved:.1?} verify {verified:.1?} top {} B",
                 wrap.proofs.last().unwrap().len(),
-                &public[4..]
             );
         }
     }
@@ -2470,7 +2480,7 @@ fn write_snark_fixtures() {
     let (rv, rp) = crate::root::verified_root(&[(&l, &p)], &root).unwrap();
     let (_, top) = crate::wrap::prove_wrap(rv, &rp).unwrap();
     let (c, w) = snark_inputs(&top).unwrap();
-    let public = snark_public_inputs(&top).unwrap();
+    let public = snark_public_inputs(&top);
     crate::snark::check(&c, &w, &public).unwrap();
     let tamper = snark_tamper_cases(&c, &w, &public);
     let write = |name: &str, v: &dyn erased::Json| {
@@ -2545,11 +2555,16 @@ fn snark_tamper_cases(
     slot("alu output", c.alu[100].out, 1);
     slot("recompose output", c.recompose[50].1, 0);
     slot("constant", c.consts[5].0, 0);
-    for (i, name) in [(1, "digest"), (6, "commitment")] {
-        let mut t = case(name);
-        t.public = Some([i, bump(public[i as usize])]);
-        cases.push(t);
-    }
+    let commitment_slot = c
+        .publics
+        .iter()
+        .find(|(_, p)| *p == c.fixed[2].0)
+        .unwrap()
+        .0;
+    slot("top commitment", commitment_slot, 0);
+    let mut t = case("digest");
+    t.public = Some([1, bump(public[1])]);
+    cases.push(t);
     let rows = &c.poseidon2;
     let mut input = |name, s: usize, r: usize, e: usize, v: u64| {
         let mut t = case(name);
