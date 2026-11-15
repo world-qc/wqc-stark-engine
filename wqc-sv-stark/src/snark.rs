@@ -6,10 +6,11 @@
 //! element (`x² = 7`), and each operation of the circuit becomes constraints:
 //!
 //! - `Const`: `w[out] = value`.
-//! - `Public`: at the positions in [`SnarkCircuit::exposed`] (the top statement, i.e. the
-//!   digest, and the top layer's preprocessed commitment), `w[out]` is the SNARK's public input:
-//!   a base-field element, so `w[out].1 = 0`. Every other public input of the circuit (the top
-//!   proof's commitments and openings) is private to the SNARK, and its slot is free.
+//! - `Public`: at the positions in [`SnarkCircuit::exposed`] (the top statement, i.e. the wrap
+//!   digest), `w[out]` is the SNARK's public input; at those in [`SnarkCircuit::fixed`] (the
+//!   top layer's preprocessed commitment, the same for every task), it is that constant. Both
+//!   are base-field elements, so `w[out].1 = 0`. Every other public input of the circuit (the
+//!   top proof's commitments and openings) is private to the SNARK, and its slot is free.
 //! - ALU: `add` `out = a + b`; `mul` `out = a·b`; `bool` `a·(a − 1) = 0` and `out = a`;
 //!   `mul_add` `out = a·b + c`, and `w[inter] = a·b` when the fused product has a slot;
 //!   `horner` `out = w[acc]·b + c − a`.
@@ -46,7 +47,7 @@ use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField64};
 use p3_symmetric::Permutation;
 use serde::{Deserialize, Serialize};
 
-use crate::wrap::{verifier_circuit, VerifierCircuit, Wrapped};
+use crate::wrap::{top_commitment, verifier_circuit, VerifierCircuit, Wrapped, TOP_COMMITMENT};
 use crate::{Challenge, Error, F};
 
 /// Base elements of a Poseidon2 state.
@@ -54,7 +55,7 @@ pub const WIDTH: usize = 8;
 
 /// Version of the [`SnarkCircuit`] / [`SnarkWitness`] encoding. wqc-snark-wrap refuses any
 /// other, so a change to the constraints cannot reach it unread.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The Poseidon2 source traces a top circuit uses: the MMCS and the challenger rows of
 /// `Poseidon2Config::GOLDILOCKS_D2_W8`, proved together as its `_shared` table.
@@ -70,6 +71,8 @@ pub struct SnarkCircuit {
     pub witness_count: u32,
     /// Public-input positions the SNARK exposes, in order.
     pub exposed: Vec<u32>,
+    /// Public-input positions the SNARK pins to a constant: `(position, value)`.
+    pub fixed: Vec<(u32, u64)>,
     /// `(out, value)`.
     pub consts: Vec<(u32, [u64; 2])>,
     /// `(out, position)`.
@@ -159,12 +162,8 @@ impl SnarkCircuit {
         let mut c = Self {
             version: FORMAT_VERSION,
             witness_count: vc.circuit.witness_count,
-            exposed: vc
-                .table_publics
-                .clone()
-                .chain(vc.commitment.clone())
-                .map(|p| p as u32)
-                .collect(),
+            exposed: vc.table_publics.clone().map(|p| p as u32).collect(),
+            fixed: Vec::new(),
             consts: Vec::new(),
             publics: Vec::new(),
             alu: Vec::new(),
@@ -215,6 +214,25 @@ impl SnarkCircuit {
                     }
                 }
             }
+        }
+        for pos in vc.commitment.clone() {
+            let pos = pos as u32;
+            if c.exposed.contains(&pos) {
+                return Err(Error::Recursion(format!(
+                    "position {pos} both exposed and fixed"
+                )));
+            }
+            let out = public_slot(&c, pos)?;
+            let v = traces
+                .witness_trace
+                .get_value(WitnessId(out))
+                .map_or([0, 0], coords);
+            if v[1] != 0 {
+                return Err(Error::Recursion(
+                    "commitment input outside the base field".into(),
+                ));
+            }
+            c.fixed.push((pos, v[0]));
         }
         for s in streams(traces) {
             if !POSEIDON2_TABLES.contains(&s.op_type.as_str()) {
@@ -323,6 +341,14 @@ pub fn check(c: &SnarkCircuit, w: &SnarkWitness, exposed: &[u64]) -> Result<(), 
     }
     if c.version != FORMAT_VERSION || w.version != FORMAT_VERSION {
         return Err(fail("format version".into()));
+    }
+    for &(pos, v) in &c.fixed {
+        public_slot(c, pos)?;
+        for &(out, p2) in &c.publics {
+            if p2 == pos {
+                eq("fixed public", out, ext([v, 0]))?;
+            }
+        }
     }
     for (&pos, &v) in c.exposed.iter().zip(exposed) {
         public_slot(c, pos)?;
@@ -463,10 +489,15 @@ pub fn check(c: &SnarkCircuit, w: &SnarkWitness, exposed: &[u64]) -> Result<(), 
 pub fn snark_inputs(top: &Wrapped) -> Result<(SnarkCircuit, SnarkWitness), Error> {
     let vc = verifier_circuit(&top.verifier, &top.proof)?;
     let traces = vc.run(&top.verifier, &top.proof)?;
-    Ok((
-        SnarkCircuit::new(&vc, &traces)?,
-        SnarkWitness::new(&vc, &traces)?,
-    ))
+    let c = SnarkCircuit::new(&vc, &traces)?;
+    let commitment: Vec<u64> = c.fixed.iter().map(|&(_, v)| v).collect();
+    if commitment != top_commitment(top)? || commitment != TOP_COMMITMENT {
+        return Err(Error::Recursion(format!(
+            "top commitment {commitment:?} is not wrap::TOP_COMMITMENT: the recursion changed, \
+             and the SNARK's keys and verifier must be made again"
+        )));
+    }
+    Ok((c, SnarkWitness::new(&vc, &traces)?))
 }
 
 /// Round constants of the Poseidon2 permutation the recursion uses (Plonky3-recursion's

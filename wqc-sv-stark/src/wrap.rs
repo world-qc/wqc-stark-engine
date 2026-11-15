@@ -3,20 +3,29 @@
 //!
 //! A root's verifier depends on the task (the leaf circuits fix every layer's preprocessed
 //! commitment), and its statement is the leaf statements concatenated, so its length depends on
-//! the leaves. A Groth16 circuit is fixed once, so the wrap chain removes both:
+//! the leaves. A Groth16 circuit is fixed once, so the wrap chain removes both, in [`STAGES`]
+//! stages and a top layer:
 //!
-//! 1. A [`DigestLayer`] verifies the root with the root's relation taken from the proof's shape
-//!    and its preprocessed commitment as an input, and exports one 4-element digest: a Poseidon2
-//!    sponge over every table's public values (the root statement among them) and that
-//!    commitment. The digest binds the root's statement and its relation; its length is fixed.
-//! 2. [`NORMALIZE_LAYERS`] recursion layers over it: the shape of a layer's proof depends only
-//!    on its child's shape, and from here on it no longer changes.
-//! 3. A top layer with [`FriParams::WRAP`]: half the queries, so fewer Poseidon2 rows for the
+//! 1. Each stage starts with a [`DigestLayer`]: it verifies its child with the child's relation
+//!    taken from the proof's shape and its preprocessed commitment as an input, and exports one
+//!    4-element digest, a Poseidon2 sponge over every table's public values (the child's
+//!    statement among them) and that commitment. The digest binds the child's statement and its
+//!    relation; its length is fixed.
+//! 2. [`NORMALIZE_LAYERS`] recursion layers follow: the shape of a layer's proof depends only on
+//!    its child's shape, and after them it is the same for every root measured (every tier, 1
+//!    to 4 leaves: [`FIXED_ROWS`], [`FIXED_DEGREE_BITS`]). A root whose proofs do not reach that
+//!    shape fails [`prove_wrap`] and [`verify_wrap`] (fail-closed): it cannot be wrapped.
+//! 3. The first stage's relation still depends on the root's shape; the second stage's digest
+//!    layer sees only the fixed shape, so its circuit, and every layer above it, is the same for
+//!    every task. Its digest is the wrap digest: it binds the first digest (the root's statement
+//!    and relation) and the first stage's relation.
+//! 4. A top layer with [`FriParams::WRAP`]: half the queries, so fewer Poseidon2 rows for the
 //!    SNARK.
 //!
-//! The SNARK then runs the verifier circuit of the top proof ([`verifier_circuit`]), which takes
-//! the top layer's preprocessed commitment as an input: that commitment and the digest are what
-//! a task's verifier must check.
+//! The SNARK runs the verifier circuit of the top proof ([`verifier_circuit`]) with the top
+//! layer's preprocessed commitment as a constant ([`top_commitment`]); its only public input
+//! is the wrap digest ([`snark_public_inputs`]), which a verifier compares with the top
+//! statement of its own [`verify_wrap`].
 
 use std::ops::Range;
 
@@ -365,7 +374,7 @@ impl DigestLayer {
 
 /// Shape of every proof that leaves the [`NORMALIZE_LAYERS`]: primitive table rows (witness,
 /// public/const, ALU) and each table's degree bits. Measured to hold for every tier with 1 to 4
-/// leaves, and for 3, 5 and 8 qubits (`tests::the_wrap_shape_matrix`).
+/// leaves, and for 3, 5 and 8 qubits (`tests::the_wrap_shape_matrix`); other roots are refused.
 pub const FIXED_ROWS: [usize; 3] = [281, 68, 37865];
 pub const FIXED_DEGREE_BITS: [usize; 6] = [9, 7, 14, 14, 11, 4];
 
@@ -396,15 +405,22 @@ pub struct Wrapped {
     pub proof: RecursionProof,
 }
 
-/// Proves the wrap chain over a root with verifier `root_verifier` (see
-/// [`crate::root::verified_root`]).
-pub fn prove_wrap(
-    root_verifier: CircuitVerifier<Cfg>,
-    root: &RecursionProof,
-) -> Result<(WrapProof, Wrapped), Error> {
-    let digest = DigestLayer::new(root_verifier, root)?;
-    let mut cur = digest.prove(root)?;
-    let mut proofs = vec![encode_proof(&cur.proof)];
+/// Digest layer and normalizing layers per stage; the chain has [`STAGES`] stages, then the top.
+pub const STAGES: usize = 2;
+
+/// Proofs in a [`WrapProof`]: each stage's digest and normalizing layers, then the top.
+pub const WRAP_PROOFS: usize = STAGES * (1 + NORMALIZE_LAYERS) + 1;
+
+/// One stage over a proof of `child`: a digest layer, then the normalizing layers. Returns the
+/// last layer's verifier and proof.
+fn prove_stage(
+    child: CircuitVerifier<Cfg>,
+    cur: &RecursionProof,
+    proofs: &mut Vec<Vec<u8>>,
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
+    let digest = DigestLayer::new(child, cur)?;
+    let mut cur = digest.prove(cur)?;
+    proofs.push(encode_proof(&cur.proof));
     let mut child = digest.verifier();
     for _ in 0..NORMALIZE_LAYERS {
         let layer = Layer::over_layer(child, &cur)?;
@@ -413,6 +429,20 @@ pub fn prove_wrap(
         child = layer.verifier();
     }
     check_fixed_shape(&cur)?;
+    Ok((child, cur))
+}
+
+/// Proves the wrap chain over a root with verifier `root_verifier` (see
+/// [`crate::root::verified_root`]).
+pub fn prove_wrap(
+    root_verifier: CircuitVerifier<Cfg>,
+    root: &RecursionProof,
+) -> Result<(WrapProof, Wrapped), Error> {
+    let mut proofs = Vec::with_capacity(WRAP_PROOFS);
+    let (mut child, mut cur) = prove_stage(root_verifier, root, &mut proofs)?;
+    for _ in 1..STAGES {
+        (child, cur) = prove_stage(child, &cur, &mut proofs)?;
+    }
     let top = Layer::over_layer_wrap(child, &cur)?;
     let proof = top.prove(&cur.proof, &cur.statement)?;
     proofs.push(encode_proof(&proof.proof));
@@ -426,68 +456,86 @@ pub fn prove_wrap(
 }
 
 /// Verifies a wrap chain over a verified root, returning its top. It rebuilds every layer of
-/// the chain, as [`crate::root::verify_root`] does for a root.
+/// the chain, as [`crate::root::verify_root`] does for a root; the top's statement is the
+/// wrap digest a settlement commits to.
 ///
 /// # Security
 ///
 /// The root must come from [`crate::root::verified_root`] with the task's leaves: the chain
-/// only binds the root's statement and relation through the digest. The returned top's
-/// verifier is the one the SNARK's public commitment must equal (see
-/// [`snark_public_inputs`]).
+/// only binds the root's statement and relation through the digests.
 pub fn verify_wrap(
     root_verifier: CircuitVerifier<Cfg>,
     root: &RecursionProof,
     wrap: &WrapProof,
 ) -> Result<Wrapped, Error> {
-    if wrap.proofs.len() != NORMALIZE_LAYERS + 2 {
+    if wrap.proofs.len() != WRAP_PROOFS {
         return Err(Error::Verify(format!(
-            "{} wrap proofs, expected {}",
+            "{} wrap proofs, expected {WRAP_PROOFS}",
             wrap.proofs.len(),
-            NORMALIZE_LAYERS + 2
         )));
     }
-    let statement = statement_digest(&root_verifier, &root.statement)?.to_vec();
     let mut proofs = wrap.proofs.iter();
-    let mut next = |verifier: &CircuitVerifier<Cfg>| {
+    let mut next = |verifier: &CircuitVerifier<Cfg>, statement: &[F]| {
         let proof = decode_proof(proofs.next().expect("counted above"))?;
-        verify(verifier, &proof, &statement)?;
+        verify(verifier, &proof, statement)?;
         Ok::<_, Error>(RecursionProof {
             proof,
-            statement: statement.clone(),
+            statement: statement.to_vec(),
         })
     };
-    let mut child = DigestLayer::new(root_verifier, root)?.verifier();
-    let mut cur = next(&child)?;
-    for _ in 0..NORMALIZE_LAYERS {
-        child = Layer::over_layer(child, &cur)?.verifier();
-        cur = next(&child)?;
+    let mut child = root_verifier;
+    let mut cur: Option<RecursionProof> = None;
+    for _ in 0..STAGES {
+        let below = cur.as_ref().unwrap_or(root);
+        let statement = statement_digest(&child, &below.statement)?;
+        child = DigestLayer::new(child, below)?.verifier();
+        let mut here = next(&child, &statement)?;
+        for _ in 0..NORMALIZE_LAYERS {
+            child = Layer::over_layer(child, &here)?.verifier();
+            here = next(&child, &statement)?;
+        }
+        check_fixed_shape(&here)?;
+        cur = Some(here);
     }
-    check_fixed_shape(&cur)?;
+    let cur = cur.expect("at least one stage");
     let verifier = Layer::over_layer_wrap(child, &cur)?.verifier();
-    let proof = next(&verifier)?;
+    let proof = next(&verifier, &cur.statement)?;
     Ok(Wrapped { verifier, proof })
 }
 
-/// The SNARK's public inputs for a wrap top: the digest, then the top layer's preprocessed
-/// commitment (see [`crate::snark`]).
+/// The SNARK's public inputs for a wrap top: the wrap digest, its statement.
+pub fn snark_public_inputs(top: &Wrapped) -> Vec<u64> {
+    top.proof
+        .statement
+        .iter()
+        .map(|v| v.as_canonical_u64())
+        .collect()
+}
+
+/// The top layer's preprocessed commitment for every task (the second stage's construction,
+/// measured in `tests::the_wrap_shape_matrix`). The SNARK pins it (wqc-snark-wrap holds the same
+/// four values), so a change of the recursion (Plonky3-recursion, FRI parameters, the chain)
+/// that moves it fails [`crate::snark::snark_inputs`] and the tests here, instead of leaving
+/// keys and verifiers of the old value in place.
+pub const TOP_COMMITMENT: [u64; 4] = [
+    6464881174286354437,
+    17602192061757321117,
+    9515401691109512629,
+    6765465250721831323,
+];
+
+/// The top layer's preprocessed commitment. The second stage makes it the same for every task
+/// (its digest layer's circuit depends only on the fixed shape below it), so the SNARK holds
+/// it as a constant instead of taking it as an input.
 ///
 /// # Security
 ///
-/// Both halves must be checked against the task. The SNARK fixes the top proof's shape, not its
-/// relation: the commitment names the top layer's circuit, and a prover free to choose it could
-/// build a circuit of the same shape that verifies nothing and exports any statement. So the
-/// verifier compares the commitment with the top of its own [`verify_wrap`] (or with a value it
-/// derived the same way), and the digest with [`statement_digest`] of the root it verified. The
-/// commitment depends on the root's shape, not on the circuits or qubit counts: measured for
-/// 1 to 4 leaves (`tests::the_wrap_shape_matrix`), it differs between leaf counts and, for one
-/// or two leaves, between low and the other tiers.
-pub fn snark_public_inputs(top: &Wrapped) -> Result<Vec<u64>, Error> {
-    Ok(top
-        .proof
-        .statement
-        .iter()
-        .copied()
-        .chain(commitment_values(&top.verifier)?)
+/// The SNARK fixes the top proof's shape; the commitment fixes its relation. Were it an input,
+/// a prover could pick a circuit of the same shape that verifies nothing and exports any
+/// statement.
+pub fn top_commitment(top: &Wrapped) -> Result<Vec<u64>, Error> {
+    Ok(commitment_values(&top.verifier)?
+        .into_iter()
         .map(|v| v.as_canonical_u64())
         .collect())
 }
