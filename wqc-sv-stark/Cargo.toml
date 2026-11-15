@@ -11,6 +11,7 @@ p3-circuit-prover = { git = "https://github.com/Plonky3/Plonky3-recursion", rev 
 p3-recursion = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "3a69ba61f713c8400b14eb3d8f0e52caa13512c7" }
 p3-air = "=0.9.0-rc.2"
 p3-batch-stark = "=0.9.0-rc.2"
+p3-challenger = "=0.9.0-rc.2"
 p3-commit = "=0.9.0-rc.2"
 p3-dft = "=0.9.0-rc.2"
 p3-field = "=0.9.0-rc.2"

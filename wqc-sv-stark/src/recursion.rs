@@ -31,7 +31,7 @@ pub fn backend() -> Backend {
         .for_extension_degree::<2>()
 }
 
-fn params(fri: FriParams) -> ProveNextLayerParams {
+pub(crate) fn params(fri: FriParams) -> ProveNextLayerParams {
     ProveNextLayerParams {
         table_packing: p3_circuit_prover::batch_stark_prover::TablePacking::new(1, 4)
             .with_min_trace_height(fri.min_trace_height()),
@@ -64,6 +64,14 @@ impl Layer {
     /// A layer over proofs of another layer (or aggregation) with verifier `child`.
     pub fn over_layer(child: CircuitVerifier<Cfg>, sample: &RecursionProof) -> Result<Self, Error> {
         Self::over_layer_with(child, sample, FriParams::RECURSION)
+    }
+
+    /// The wrap chain's top layer over `child` (see [`crate::wrap`]): [`FriParams::WRAP`].
+    pub fn over_layer_wrap(
+        child: CircuitVerifier<Cfg>,
+        sample: &RecursionProof,
+    ) -> Result<Self, Error> {
+        Self::over_layer_with(child, sample, FriParams::WRAP)
     }
 
     pub(crate) fn over_leaf_with(

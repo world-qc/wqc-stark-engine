@@ -1,7 +1,7 @@
 //! Run in release: debug builds assert AIR constraints inside `prove`, so the forgery tests
 //! are ignored there.
 
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{PrimeCharacteristicRing, PrimeField64};
 
 use crate::digest::*;
 use crate::exec::*;
@@ -2212,4 +2212,422 @@ fn observable_sums_terms_in_order_then_snaps() {
     assert!(check_terms(2, &[]).is_err());
     assert!(check_terms(2, &[term("Z", 1.0, 0.0)]).is_err());
     assert!(check_terms(2, &[term("ZA", 1.0, 0.0)]).is_err());
+}
+
+/// The SNARK's Poseidon2, written out step by step, is the recursion's permutation.
+#[test]
+fn snark_poseidon2_reference_matches_the_recursion_permutation() {
+    use crate::snark::{poseidon2_constants, poseidon2_reference};
+    use p3_symmetric::Permutation;
+    let c = poseidon2_constants();
+    let perm = p3_recursion::builtin_config::fixed_goldilocks_poseidon2_8();
+    for seed in 0..20u64 {
+        let mut s: [F; 8] = core::array::from_fn(|i| {
+            F::from_u64(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (i as u64) << 61)
+        });
+        let mut r = s;
+        perm.permute_mut(&mut s);
+        poseidon2_reference(&c, &mut r);
+        assert_eq!(s, r);
+    }
+}
+
+/// A challenger chain start must have capacity `(absorb, 0, 0, 0)`: a one-row stream with no
+/// slots isolates the rule (wqc-snark-wrap tests the same stream).
+#[test]
+fn snark_check_pins_a_challenger_chain_start() {
+    use crate::snark::{check, Poseidon2Row, SnarkCircuit, SnarkWitness, FORMAT_VERSION};
+    let row = Poseidon2Row {
+        new_start: true,
+        merkle: false,
+        challenger: true,
+        absorb: 4,
+        inputs: [None; 4],
+        outputs: [None; 2],
+        bit: None,
+    };
+    let c = SnarkCircuit {
+        version: FORMAT_VERSION,
+        witness_count: 0,
+        exposed: vec![],
+        consts: vec![],
+        publics: vec![],
+        alu: vec![],
+        recompose: vec![],
+        poseidon2: vec![vec![row]],
+    };
+    let w = |capacity: [u64; 4]| SnarkWitness {
+        version: FORMAT_VERSION,
+        w: vec![],
+        poseidon2_inputs: vec![vec![[
+            1,
+            2,
+            3,
+            4,
+            capacity[0],
+            capacity[1],
+            capacity[2],
+            capacity[3],
+        ]]],
+        poseidon2_bits: vec![vec![false]],
+    };
+    check(&c, &w([4, 0, 0, 0]), &[]).unwrap();
+    for bad in [[3, 0, 0, 0], [4, 1, 0, 0], [4, 0, 0, 9], [0, 0, 0, 0]] {
+        assert!(check(&c, &w(bad), &[]).is_err(), "{bad:?}");
+    }
+}
+
+/// Wraps the root over `leaves` at the production parameters; returns the root's verifier and
+/// proof, the wrap proof and its verified top.
+fn wrapped(
+    leaves: &[(&Leaf, &LeafProof)],
+) -> (
+    p3_circuit_prover::batch_stark_prover::CircuitVerifier<crate::Cfg>,
+    RecursionProof,
+    crate::wrap::WrapProof,
+    crate::wrap::Wrapped,
+) {
+    use crate::root::{prove_root, verified_root};
+    use crate::wrap::{prove_wrap, verify_wrap};
+    let (root, _) = prove_root(leaves).unwrap();
+    let (rv, rp) = verified_root(leaves, &root).unwrap();
+    let (wrap, top) = prove_wrap(rv.clone(), &rp).unwrap();
+    let checked = verify_wrap(rv.clone(), &rp, &wrap).unwrap();
+    assert_eq!(checked.proof.statement, top.proof.statement);
+    (rv, rp, wrap, top)
+}
+
+/// Two tasks with different leaves, tiers and trees wrap to the same SNARK circuit, whose
+/// constraints their witnesses meet; the public inputs are the root's digest and the top
+/// commitment, and any change to them, a slot or a Poseidon2 input is caught.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn the_wrap_reaches_one_snark_circuit() {
+    use crate::snark::{check, snark_inputs};
+    use crate::wrap::{snark_public_inputs, statement_digest};
+    let small = build(SecurityLevel::Low, 3, gates()).unwrap();
+    let p = small.prove(CTX).unwrap();
+    let (rv1, rp1, _, top1) = wrapped(&[(&small, &p)]);
+    let big = build(SecurityLevel::Ultra, 4, random_circuit(4, 12, 3)).unwrap();
+    let ps: Vec<LeafProof> = (0..3u64)
+        .map(|i| big.prove([i, 7, 7, 7]).unwrap())
+        .collect();
+    let leaves: Vec<_> = ps.iter().map(|p| (&big, p)).collect();
+    let (rv2, rp2, _, top2) = wrapped(&leaves);
+
+    let (c1, w1) = snark_inputs(&top1).unwrap();
+    let (c2, w2) = snark_inputs(&top2).unwrap();
+    assert!(c1 == c2, "both tasks wrap to the same SNARK circuit");
+    for (rv, rp, top, w) in [(&rv1, &rp1, &top1, &w1), (&rv2, &rp2, &top2, &w2)] {
+        let public = snark_public_inputs(top).unwrap();
+        assert_eq!(public, w.exposed(&c1).unwrap());
+        let digest = statement_digest(rv, &rp.statement).unwrap();
+        assert_eq!(public[..4], digest.map(|v| v.as_canonical_u64()));
+        check(&c1, w, &public).unwrap();
+    }
+    assert_ne!(
+        snark_public_inputs(&top1).unwrap()[4..],
+        snark_public_inputs(&top2).unwrap()[4..],
+        "the top commitment depends on the root's shape"
+    );
+
+    let public = snark_public_inputs(&top1).unwrap();
+    let mut bad = public.clone();
+    bad[0] ^= 1;
+    assert!(check(&c1, &w1, &bad).is_err());
+    let mut bad = public.clone();
+    bad[7] ^= 1;
+    assert!(check(&c1, &w1, &bad).is_err());
+    let mut bad = w1.clone();
+    let o = c1.alu[c1.alu.len() / 2].out as usize;
+    bad.w[o][1] = (bad.w[o][1] + 1) % F::ORDER_U64;
+    assert!(check(&c1, &bad, &public).is_err());
+    let mut bad = w1.clone();
+    bad.poseidon2_inputs[1][3][2] ^= 1;
+    assert!(check(&c1, &bad, &public).is_err());
+    let mut bad = w1.clone();
+    bad.poseidon2_inputs[0][10][7] ^= 1;
+    assert!(check(&c1, &bad, &public).is_err());
+}
+
+/// The digest binds the root's statement and its relation: another statement, or a root of
+/// another circuit, gives another digest, and the wrap fails against a wrong statement.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn the_wrap_binds_the_root() {
+    use crate::wrap::{statement_digest, verify_wrap};
+    let l = build(SecurityLevel::Low, 3, gates()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    let (rv, rp, wrap, _) = wrapped(&[(&l, &p)]);
+    let mut other = rp.statement.clone();
+    other[0] += F::ONE;
+    assert_ne!(
+        statement_digest(&rv, &rp.statement).unwrap(),
+        statement_digest(&rv, &other).unwrap()
+    );
+    let wrong = RecursionProof {
+        proof: crate::leaf::decode_proof(&crate::leaf::encode_proof(&rp.proof)).unwrap(),
+        statement: other,
+    };
+    assert!(verify_wrap(rv.clone(), &wrong, &wrap).is_err());
+
+    let l2 = build(SecurityLevel::Low, 3, random_circuit(3, 8, 9)).unwrap();
+    let p2 = l2.prove(CTX).unwrap();
+    let (root2, _) = crate::root::prove_root(&[(&l2, &p2)]).unwrap();
+    let (rv2, rp2) = crate::root::verified_root(&[(&l2, &p2)], &root2).unwrap();
+    assert_ne!(
+        statement_digest(&rv, &rp.statement).unwrap(),
+        statement_digest(&rv2, &rp2.statement).unwrap(),
+        "same context, another circuit"
+    );
+    assert!(verify_wrap(rv2.clone(), &rp2, &wrap).is_err());
+    // Proofs swapped, dropped or repeated fail where they are checked.
+    let broken = |f: &dyn Fn(&mut Vec<Vec<u8>>)| {
+        let mut proofs = wrap.proofs.clone();
+        f(&mut proofs);
+        crate::wrap::WrapProof { proofs }
+    };
+    for (what, w) in [
+        ("swapped", broken(&|p| p.swap(1, 2))),
+        ("top first", broken(&|p| p.rotate_right(1))),
+        ("dropped", broken(&|p| drop(p.remove(1)))),
+        ("repeated", broken(&|p| p[2] = p[1].clone())),
+        ("extra", broken(&|p| p.push(p[0].clone()))),
+    ] {
+        assert!(verify_wrap(rv.clone(), &rp, &w).is_err(), "{what}");
+    }
+    // The top commitment depends on the root's shape only: another circuit of the same tier
+    // and leaf count has the same one.
+    let top = verify_wrap(rv, &rp, &wrap).unwrap();
+    let (_, top2) = crate::wrap::prove_wrap(rv2, &rp2).unwrap();
+    let public = crate::wrap::snark_public_inputs(&top).unwrap();
+    assert_eq!(
+        public[4..],
+        crate::wrap::snark_public_inputs(&top2).unwrap()[4..]
+    );
+}
+
+/// Every tier and 1 to 4 leaves reach the fixed shape after the normalizing layers; prints
+/// each top commitment and the chain's prove and verify times.
+#[test]
+#[ignore = "slow: 16 wraps"]
+fn the_wrap_shape_matrix() {
+    use crate::wrap::{prove_wrap, snark_public_inputs, verify_wrap};
+    use std::time::Instant;
+    for level in [
+        SecurityLevel::Low,
+        SecurityLevel::Normal,
+        SecurityLevel::High,
+        SecurityLevel::Ultra,
+    ] {
+        let l = build(level, 3, gates()).unwrap();
+        if level == SecurityLevel::Low {
+            // Qubit counts and circuits: the same shape, so the same commitment.
+            let mut seen = None;
+            for q in [3usize, 5, 8] {
+                let lq = build(level, q, random_circuit(q, 10, q as u64)).unwrap();
+                let p = lq.prove(CTX).unwrap();
+                let (root, _) = crate::root::prove_root(&[(&lq, &p)]).unwrap();
+                let (rv, rp) = crate::root::verified_root(&[(&lq, &p)], &root).unwrap();
+                let (_, top) = prove_wrap(rv, &rp).unwrap();
+                let c = snark_public_inputs(&top).unwrap()[4..].to_vec();
+                assert!(seen.get_or_insert(c.clone()) == &c, "n = {q}");
+            }
+        }
+        for n in 1..=4u64 {
+            let ps: Vec<LeafProof> = (0..n).map(|i| l.prove([i, 1, 2, 3]).unwrap()).collect();
+            let leaves: Vec<_> = ps.iter().map(|p| (&l, p)).collect();
+            let (root, _) = crate::root::prove_root(&leaves).unwrap();
+            let (rv, rp) = crate::root::verified_root(&leaves, &root).unwrap();
+            let t = Instant::now();
+            let (wrap, top) = prove_wrap(rv.clone(), &rp).unwrap();
+            let proved = t.elapsed();
+            let t = Instant::now();
+            verify_wrap(rv, &rp, &wrap).unwrap();
+            let verified = t.elapsed();
+            let public = snark_public_inputs(&top).unwrap();
+            println!(
+                "{level:?} leaves={n}: prove {proved:.1?} verify {verified:.1?} top {} B commitment {:?}",
+                wrap.proofs.last().unwrap().len(),
+                &public[4..]
+            );
+        }
+    }
+}
+
+/// Writes the SNARK fixtures wqc-snark-wrap tests against into `$WQC_SNARK_FIXTURES`: the
+/// circuit, one task's witness and public inputs, and the Poseidon2 constants with vectors.
+#[test]
+#[ignore = "writes fixtures; run with WQC_SNARK_FIXTURES=<dir>"]
+fn write_snark_fixtures() {
+    use crate::snark::{poseidon2_constants, snark_inputs};
+    use crate::wrap::snark_public_inputs;
+    use p3_symmetric::Permutation;
+    let dir = std::path::PathBuf::from(std::env::var("WQC_SNARK_FIXTURES").unwrap());
+    let l = build(SecurityLevel::Low, 3, gates()).unwrap();
+    let p = l.prove(CTX).unwrap();
+    let (root, _) = crate::root::prove_root(&[(&l, &p)]).unwrap();
+    let (rv, rp) = crate::root::verified_root(&[(&l, &p)], &root).unwrap();
+    let (_, top) = crate::wrap::prove_wrap(rv, &rp).unwrap();
+    let (c, w) = snark_inputs(&top).unwrap();
+    let public = snark_public_inputs(&top).unwrap();
+    crate::snark::check(&c, &w, &public).unwrap();
+    let tamper = snark_tamper_cases(&c, &w, &public);
+    let write = |name: &str, v: &dyn erased::Json| {
+        std::fs::write(dir.join(name), v.json()).unwrap();
+    };
+    write("circuit.json", &c);
+    write("witness.json", &w);
+    write("public.json", &public);
+    write(
+        "tamper.json",
+        &serde_json::json!({ "prefix": TAMPER_PREFIX, "cases": tamper }),
+    );
+    let consts = poseidon2_constants();
+    let perm = p3_recursion::builtin_config::fixed_goldilocks_poseidon2_8();
+    let vectors: Vec<([u64; 8], [u64; 8])> = (0..8u64)
+        .map(|k| {
+            let s: [F; 8] =
+                core::array::from_fn(|i| F::from_u64(k * 1_000_003 + i as u64 * 0xffff_ffff));
+            let mut o = s;
+            perm.permute_mut(&mut o);
+            (
+                s.map(|v| v.as_canonical_u64()),
+                o.map(|v| v.as_canonical_u64()),
+            )
+        })
+        .collect();
+    write("poseidon2.json", &(consts, vectors));
+}
+
+/// Prefix of each operation kind and Poseidon2 stream that wqc-snark-wrap checks the tamper
+/// cases on.
+const TAMPER_PREFIX: usize = 260;
+
+/// One change to a witness that [`crate::snark::check`] rejects, inside the first
+/// [`TAMPER_PREFIX`] operations of each kind: wqc-snark-wrap checks its circuit rejects it too.
+#[derive(serde::Serialize)]
+struct TamperCase {
+    name: &'static str,
+    /// `[slot, coordinate, value]`
+    slot: Option<[u64; 3]>,
+    /// `[stream, row, element, value]`
+    poseidon2_input: Option<[u64; 4]>,
+    /// `[stream, row]`: flip the direction bit.
+    poseidon2_bit: Option<[u64; 2]>,
+    /// `[index, value]`
+    public: Option<[u64; 2]>,
+    /// What [`crate::snark::check`] reports.
+    rust_error: String,
+}
+
+fn snark_tamper_cases(
+    c: &crate::snark::SnarkCircuit,
+    w: &crate::snark::SnarkWitness,
+    public: &[u64],
+) -> Vec<TamperCase> {
+    let p = F::ORDER_U64;
+    let bump = |v: u64| (v + 1) % p;
+    let case = |name| TamperCase {
+        name,
+        slot: None,
+        poseidon2_input: None,
+        poseidon2_bit: None,
+        public: None,
+        rust_error: String::new(),
+    };
+    let mut cases = Vec::new();
+    let mut slot = |name, s: u32, k: usize| {
+        let mut t = case(name);
+        t.slot = Some([s as u64, k as u64, bump(w.w[s as usize][k])]);
+        cases.push(t);
+    };
+    slot("alu output", c.alu[100].out, 1);
+    slot("recompose output", c.recompose[50].1, 0);
+    slot("constant", c.consts[5].0, 0);
+    for (i, name) in [(1, "digest"), (6, "commitment")] {
+        let mut t = case(name);
+        t.public = Some([i, bump(public[i as usize])]);
+        cases.push(t);
+    }
+    let rows = &c.poseidon2;
+    let mut input = |name, s: usize, r: usize, e: usize, v: u64| {
+        let mut t = case(name);
+        t.poseidon2_input = Some([s as u64, r as u64, e as u64, v]);
+        cases.push(t);
+    };
+    let chained = (100..TAMPER_PREFIX - 1)
+        .find(|&r| !rows[0][r + 1].new_start && !rows[0][r + 1].merkle)
+        .unwrap();
+    input(
+        "mmcs sponge chain",
+        0,
+        chained,
+        7,
+        w.poseidon2_inputs[0][chained][7] ^ 1,
+    );
+    let mmcs_start = (0..TAMPER_PREFIX)
+        .find(|&r| rows[0][r].new_start && !rows[0][r].merkle && rows[0][r].inputs[2].is_some())
+        .unwrap();
+    input(
+        "mmcs chain start capacity",
+        0,
+        mmcs_start,
+        4,
+        bump(w.poseidon2_inputs[0][mmcs_start][4]),
+    );
+    let cont = (50..TAMPER_PREFIX)
+        .find(|&r| !rows[1][r].new_start)
+        .unwrap();
+    input(
+        "challenger capacity chain",
+        1,
+        cont,
+        5,
+        bump(w.poseidon2_inputs[1][cont][5]),
+    );
+    input(
+        "challenger chain start",
+        1,
+        0,
+        4,
+        bump(w.poseidon2_inputs[1][0][4]),
+    );
+    let merkle = (0..TAMPER_PREFIX).find(|&r| rows[0][r].merkle).unwrap();
+    let mut t = case("merkle bit");
+    t.poseidon2_bit = Some([0, merkle as u64]);
+    cases.push(t);
+
+    for t in &mut cases {
+        let mut tw = w.clone();
+        let mut tp = public.to_vec();
+        if let Some([s, k, v]) = t.slot {
+            tw.w[s as usize][k as usize] = v;
+        }
+        if let Some([s, r, e, v]) = t.poseidon2_input {
+            tw.poseidon2_inputs[s as usize][r as usize][e as usize] = v;
+        }
+        if let Some([s, r]) = t.poseidon2_bit {
+            let b = &mut tw.poseidon2_bits[s as usize][r as usize];
+            *b = !*b;
+        }
+        if let Some([i, v]) = t.public {
+            tp[i as usize] = v;
+        }
+        let err = crate::snark::check(c, &tw, &tp).expect_err(t.name);
+        t.rust_error = err.to_string();
+    }
+    cases
+}
+
+#[cfg(test)]
+mod erased {
+    pub trait Json {
+        fn json(&self) -> Vec<u8>;
+    }
+    impl<T: serde::Serialize> Json for T {
+        fn json(&self) -> Vec<u8> {
+            serde_json::to_vec(self).unwrap()
+        }
+    }
 }
