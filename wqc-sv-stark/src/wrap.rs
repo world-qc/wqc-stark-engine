@@ -12,8 +12,9 @@
 //!    statement among them) and that commitment. The digest binds the child's statement and its
 //!    relation; its length is fixed.
 //! 2. [`NORMALIZE_LAYERS`] recursion layers follow: the shape of a layer's proof depends only on
-//!    its child's shape, and after them it is the same for every root ([`FIXED_ROWS`],
-//!    [`FIXED_DEGREE_BITS`]).
+//!    its child's shape, and after them it is the same for every root measured (every tier, 1
+//!    to 4 leaves: [`FIXED_ROWS`], [`FIXED_DEGREE_BITS`]). A root whose proofs do not reach that
+//!    shape fails [`prove_wrap`] and [`verify_wrap`] (fail-closed): it cannot be wrapped.
 //! 3. The first stage's relation still depends on the root's shape; the second stage's digest
 //!    layer sees only the fixed shape, so its circuit, and every layer above it, is the same for
 //!    every task. Its digest is the wrap digest: it binds the first digest (the root's statement
@@ -373,7 +374,7 @@ impl DigestLayer {
 
 /// Shape of every proof that leaves the [`NORMALIZE_LAYERS`]: primitive table rows (witness,
 /// public/const, ALU) and each table's degree bits. Measured to hold for every tier with 1 to 4
-/// leaves, and for 3, 5 and 8 qubits (`tests::the_wrap_shape_matrix`).
+/// leaves, and for 3, 5 and 8 qubits (`tests::the_wrap_shape_matrix`); other roots are refused.
 pub const FIXED_ROWS: [usize; 3] = [281, 68, 37865];
 pub const FIXED_DEGREE_BITS: [usize; 6] = [9, 7, 14, 14, 11, 4];
 
@@ -510,6 +511,18 @@ pub fn snark_public_inputs(top: &Wrapped) -> Vec<u64> {
         .map(|v| v.as_canonical_u64())
         .collect()
 }
+
+/// The top layer's preprocessed commitment for every task (the second stage's construction,
+/// measured in `tests::the_wrap_shape_matrix`). The SNARK pins it (wqc-snark-wrap holds the same
+/// four values), so a change of the recursion (Plonky3-recursion, FRI parameters, the chain)
+/// that moves it fails [`crate::snark::snark_inputs`] and the tests here, instead of leaving
+/// keys and verifiers of the old value in place.
+pub const TOP_COMMITMENT: [u64; 4] = [
+    6464881174286354437,
+    17602192061757321117,
+    9515401691109512629,
+    6765465250721831323,
+];
 
 /// The top layer's preprocessed commitment. The second stage makes it the same for every task
 /// (its digest layer's circuit depends only on the fixed shape below it), so the SNARK holds

@@ -2319,10 +2319,8 @@ fn the_wrap_reaches_one_snark_circuit() {
     let (c1, w1) = snark_inputs(&top1).unwrap();
     let (c2, w2) = snark_inputs(&top2).unwrap();
     assert!(c1 == c2, "both tasks wrap to the same SNARK circuit");
-    assert_eq!(
-        top_commitment(&top1).unwrap(),
-        top_commitment(&top2).unwrap()
-    );
+    assert_eq!(top_commitment(&top1).unwrap(), crate::wrap::TOP_COMMITMENT);
+    assert_eq!(top_commitment(&top2).unwrap(), crate::wrap::TOP_COMMITMENT);
     for (rv, rp, wrap, top, w) in [
         (&rv1, &rp1, &wrap1, &top1, &w1),
         (&rv2, &rp2, &wrap2, &top2, &w2),

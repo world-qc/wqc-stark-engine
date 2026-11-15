@@ -47,7 +47,7 @@ use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField64};
 use p3_symmetric::Permutation;
 use serde::{Deserialize, Serialize};
 
-use crate::wrap::{top_commitment, verifier_circuit, VerifierCircuit, Wrapped};
+use crate::wrap::{top_commitment, verifier_circuit, VerifierCircuit, Wrapped, TOP_COMMITMENT};
 use crate::{Challenge, Error, F};
 
 /// Base elements of a Poseidon2 state.
@@ -217,6 +217,11 @@ impl SnarkCircuit {
         }
         for pos in vc.commitment.clone() {
             let pos = pos as u32;
+            if c.exposed.contains(&pos) {
+                return Err(Error::Recursion(format!(
+                    "position {pos} both exposed and fixed"
+                )));
+            }
             let out = public_slot(&c, pos)?;
             let v = traces
                 .witness_trace
@@ -486,10 +491,11 @@ pub fn snark_inputs(top: &Wrapped) -> Result<(SnarkCircuit, SnarkWitness), Error
     let traces = vc.run(&top.verifier, &top.proof)?;
     let c = SnarkCircuit::new(&vc, &traces)?;
     let commitment: Vec<u64> = c.fixed.iter().map(|&(_, v)| v).collect();
-    if commitment != top_commitment(top)? {
-        return Err(Error::Recursion(
-            "fixed inputs are not the top commitment".into(),
-        ));
+    if commitment != top_commitment(top)? || commitment != TOP_COMMITMENT {
+        return Err(Error::Recursion(format!(
+            "top commitment {commitment:?} is not wrap::TOP_COMMITMENT: the recursion changed, \
+             and the SNARK's keys and verifier must be made again"
+        )));
     }
     Ok((c, SnarkWitness::new(&vc, &traces)?))
 }
