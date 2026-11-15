@@ -373,7 +373,8 @@ impl DigestLayer {
 }
 
 /// Most leaves a wrapped root may have: the fixed shape is measured for 1 to 4
-/// (`tests::the_wrap_shape_matrix`); callers keep larger roots off the wrap.
+/// (`tests::the_wrap_shape_matrix`); callers keep larger roots off the wrap, and the FFI
+/// refuses them before verifying anything.
 pub const MAX_LEAVES: usize = 4;
 
 /// Shape of every proof that leaves the [`NORMALIZE_LAYERS`]: primitive table rows (witness,
