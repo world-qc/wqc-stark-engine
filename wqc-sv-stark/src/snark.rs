@@ -23,9 +23,12 @@
 //!   D = 2, width 8, two rate and two capacity limbs, arity-2 Merkle rows. That takes the AIR's
 //!   general branch; its compact branch (D = 1, width 16, rate 8, with the capacity-fed Merkle
 //!   flag and a chain start pinned on every sponge row) and its arity-4 branch do not apply, and
-//!   [`SnarkCircuit::new`] refuses other tables. In the shared table the chain start is gated by
-//!   the challenger role, so it binds challenger rows only; an MMCS chain start reads its
-//!   capacity from a slot instead (in the top circuit, the zero constant). The constraints:
+//!   [`SnarkCircuit::new`] refuses other tables. The circuit's rows come from two source traces,
+//!   `poseidon2_perm/goldilocks_d2_w8` (MMCS) and `..._challenger`, which the recursion backend
+//!   (`for_shared_challenger_table`) proves as one `poseidon2_perm/goldilocks_d2_w8_shared`
+//!   table, each source a run of rows that starts a chain. There the chain start is gated by the
+//!   challenger role, so it binds challenger rows only; an MMCS chain start reads its capacity
+//!   from a slot instead (in the top circuit, the zero constant). The constraints:
 //!   - the direction bit is boolean, zero off Merkle rows, and `w[bit] = (bit, 0)` on them;
 //!   - input `l` read from `w[idx]` equals limb `l` of `s`, or limb `(l + 2) mod 4` if the bit
 //!     is set; output `l` (rate limbs 0 and 1) written to `w[idx]` equals limb `l` of `o`;
@@ -53,8 +56,8 @@ pub const WIDTH: usize = 8;
 /// other, so a change to the constraints cannot reach it unread.
 pub const FORMAT_VERSION: u32 = 1;
 
-/// The Poseidon2 tables a top circuit uses: the MMCS and the challenger table of
-/// `Poseidon2Config::GOLDILOCKS_D2_W8`, which the prover shares.
+/// The Poseidon2 source traces a top circuit uses: the MMCS and the challenger rows of
+/// `Poseidon2Config::GOLDILOCKS_D2_W8`, proved together as its `_shared` table.
 const POSEIDON2_TABLES: [&str; 2] = [
     "poseidon2_perm/goldilocks_d2_w8",
     "poseidon2_perm/goldilocks_d2_w8_challenger",

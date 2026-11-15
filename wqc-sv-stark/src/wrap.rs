@@ -364,8 +364,8 @@ impl DigestLayer {
 }
 
 /// Shape of every proof that leaves the [`NORMALIZE_LAYERS`]: primitive table rows (witness,
-/// public/const, ALU) and each table's degree bits. Measured to hold for every tier and 1 to 4
-/// leaves (`tests::the_wrap_shape_matrix`).
+/// public/const, ALU) and each table's degree bits. Measured to hold for every tier with 1 to 4
+/// leaves, and for 3, 5 and 8 qubits (`tests::the_wrap_shape_matrix`).
 pub const FIXED_ROWS: [usize; 3] = [281, 68, 37865];
 pub const FIXED_DEGREE_BITS: [usize; 6] = [9, 7, 14, 14, 11, 4];
 

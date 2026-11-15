@@ -2232,6 +2232,51 @@ fn snark_poseidon2_reference_matches_the_recursion_permutation() {
     }
 }
 
+/// A challenger chain start must have capacity `(absorb, 0, 0, 0)`: a one-row stream with no
+/// slots isolates the rule (wqc-snark-wrap tests the same stream).
+#[test]
+fn snark_check_pins_a_challenger_chain_start() {
+    use crate::snark::{check, Poseidon2Row, SnarkCircuit, SnarkWitness, FORMAT_VERSION};
+    let row = Poseidon2Row {
+        new_start: true,
+        merkle: false,
+        challenger: true,
+        absorb: 4,
+        inputs: [None; 4],
+        outputs: [None; 2],
+        bit: None,
+    };
+    let c = SnarkCircuit {
+        version: FORMAT_VERSION,
+        witness_count: 0,
+        exposed: vec![],
+        consts: vec![],
+        publics: vec![],
+        alu: vec![],
+        recompose: vec![],
+        poseidon2: vec![vec![row]],
+    };
+    let w = |capacity: [u64; 4]| SnarkWitness {
+        version: FORMAT_VERSION,
+        w: vec![],
+        poseidon2_inputs: vec![vec![[
+            1,
+            2,
+            3,
+            4,
+            capacity[0],
+            capacity[1],
+            capacity[2],
+            capacity[3],
+        ]]],
+        poseidon2_bits: vec![vec![false]],
+    };
+    check(&c, &w([4, 0, 0, 0]), &[]).unwrap();
+    for bad in [[3, 0, 0, 0], [4, 1, 0, 0], [4, 0, 0, 9], [0, 0, 0, 0]] {
+        assert!(check(&c, &w(bad), &[]).is_err(), "{bad:?}");
+    }
+}
+
 /// Wraps the root over `leaves` at the production parameters; returns the root's verifier and
 /// proof, the wrap proof and its verified top.
 fn wrapped(
@@ -2336,6 +2381,21 @@ fn the_wrap_binds_the_root() {
         "same context, another circuit"
     );
     assert!(verify_wrap(rv2.clone(), &rp2, &wrap).is_err());
+    // Proofs swapped, dropped or repeated fail where they are checked.
+    let broken = |f: &dyn Fn(&mut Vec<Vec<u8>>)| {
+        let mut proofs = wrap.proofs.clone();
+        f(&mut proofs);
+        crate::wrap::WrapProof { proofs }
+    };
+    for (what, w) in [
+        ("swapped", broken(&|p| p.swap(1, 2))),
+        ("top first", broken(&|p| p.rotate_right(1))),
+        ("dropped", broken(&|p| drop(p.remove(1)))),
+        ("repeated", broken(&|p| p[2] = p[1].clone())),
+        ("extra", broken(&|p| p.push(p[0].clone()))),
+    ] {
+        assert!(verify_wrap(rv.clone(), &rp, &w).is_err(), "{what}");
+    }
     // The top commitment depends on the root's shape only: another circuit of the same tier
     // and leaf count has the same one.
     let top = verify_wrap(rv, &rp, &wrap).unwrap();
@@ -2361,6 +2421,19 @@ fn the_wrap_shape_matrix() {
         SecurityLevel::Ultra,
     ] {
         let l = build(level, 3, gates()).unwrap();
+        if level == SecurityLevel::Low {
+            // Qubit counts and circuits: the same shape, so the same commitment.
+            let mut seen = None;
+            for q in [3usize, 5, 8] {
+                let lq = build(level, q, random_circuit(q, 10, q as u64)).unwrap();
+                let p = lq.prove(CTX).unwrap();
+                let (root, _) = crate::root::prove_root(&[(&lq, &p)]).unwrap();
+                let (rv, rp) = crate::root::verified_root(&[(&lq, &p)], &root).unwrap();
+                let (_, top) = prove_wrap(rv, &rp).unwrap();
+                let c = snark_public_inputs(&top).unwrap()[4..].to_vec();
+                assert!(seen.get_or_insert(c.clone()) == &c, "n = {q}");
+            }
+        }
         for n in 1..=4u64 {
             let ps: Vec<LeafProof> = (0..n).map(|i| l.prove([i, 1, 2, 3]).unwrap()).collect();
             let leaves: Vec<_> = ps.iter().map(|p| (&l, p)).collect();
@@ -2406,7 +2479,10 @@ fn write_snark_fixtures() {
     write("circuit.json", &c);
     write("witness.json", &w);
     write("public.json", &public);
-    write("tamper.json", &tamper);
+    write(
+        "tamper.json",
+        &serde_json::json!({ "prefix": TAMPER_PREFIX, "cases": tamper }),
+    );
     let consts = poseidon2_constants();
     let perm = p3_recursion::builtin_config::fixed_goldilocks_poseidon2_8();
     let vectors: Vec<([u64; 8], [u64; 8])> = (0..8u64)
