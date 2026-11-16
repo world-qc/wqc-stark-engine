@@ -1141,86 +1141,6 @@ pub unsafe extern "C" fn wqc_sv_verify_sampling_leaf(
     unwind_to_ffi_code(result)
 }
 
-/// One leaf of [`wqc_sv_verify_root`]: its circuit, as for [`wqc_sv_leaf_new`], and the
-/// dispatch and result the orchestrator accepted, as for [`wqc_sv_verify_sampling_leaf`]
-/// (`shots == 0`: a `statevector_scalar` leaf, without seed and counts).
-#[derive(serde::Deserialize)]
-struct RootLeaf {
-    qubit_count: u32,
-    circuit: String,
-    #[serde(default)]
-    classical_bit_count: u32,
-    #[serde(default)]
-    shots: u64,
-    security_level: String,
-    circuit_id: String,
-    sub_task_id: String,
-    node_id: String,
-    slice_id: String,
-    digest: [u64; 4],
-    #[serde(default)]
-    sample_seed: u64,
-    #[serde(default)]
-    counts: String,
-    /// The leaf proof (standard base64): it fixes the layer's shape, the expected statement
-    /// is built from the fields above.
-    proof: String,
-}
-
-#[derive(serde::Deserialize)]
-struct RootInput {
-    leaves: Vec<RootLeaf>,
-}
-
-/// Prepares `l`'s leaf with its proof and the statement the orchestrator expects of it.
-fn root_leaf(
-    l: &RootLeaf,
-) -> Result<(wqc_sv_stark::leaf::Leaf, wqc_sv_stark::leaf::LeafProof), wqc_sv_stark::Error> {
-    use base64::Engine as _;
-    use wqc_sv_stark::leaf::{self, Dispatch, LeafProof};
-    use wqc_sv_stark::Error;
-    let level = wqc_sv_stark::SecurityLevel::parse(&l.security_level).ok_or_else(|| {
-        Error::InvalidCircuit(format!("unknown security level {:?}", l.security_level))
-    })?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&l.proof)
-        .map_err(|e| Error::Verify(format!("leaf proof base64: {e}")))?;
-    let proof = leaf::decode_proof(&bytes)?;
-    let n = l.qubit_count as usize;
-    let d = Dispatch {
-        circuit_id: &l.circuit_id,
-        sub_task_id: &l.sub_task_id,
-        node_id: &l.node_id,
-        slice_id: &l.slice_id,
-    };
-    if l.shots == 0 {
-        let c = parse_circuit(&l.circuit)?;
-        if !c.measures.is_empty() {
-            return Err(Error::InvalidCircuit(
-                "MEASURE in a circuit without shots".into(),
-            ));
-        }
-        let statement = leaf::statement(d.context(), l.digest)?;
-        return Ok((
-            leaf::build(level, n, c.gates)?,
-            LeafProof { proof, statement },
-        ));
-    }
-    let c = parse_leaf(&l.circuit, n)?;
-    let shots =
-        u32::try_from(l.shots).map_err(|_| Error::InvalidCircuit(format!("{} shots", l.shots)))?;
-    let sampling = Sampling {
-        measures: c.measures,
-        cbits: l.classical_bit_count as usize,
-        shots,
-    };
-    let counts = parse_counts(&l.counts, &sampling)?;
-    let statement =
-        leaf::expected_sampling_statement(&sampling, &d, l.digest, l.sample_seed, &counts)?;
-    let built = leaf::build_sampling(level, c.qubits, c.gates, sampling)?;
-    Ok((built, LeafProof { proof, statement }))
-}
-
 /// An upper estimate, in bytes, of the memory `wqc_sv_verify_root` peaks at per leaf of `rows`
 /// gate rows on `qubit_count` qubits with `shots`: it prepares each leaf with its proving data
 /// (about 1 KB per gate row) and a recursion layer over it (about 180 MB). Out-of-range
@@ -1260,17 +1180,7 @@ pub unsafe extern "C" fn wqc_sv_verify_root(
             return 0;
         }
         let root = slice::from_raw_parts(root_bytes, root_len as usize);
-        let checked = serde_json::from_str::<RootInput>(json)
-            .map_err(|e| wqc_sv_stark::Error::Verify(format!("leaves JSON: {e}")))
-            .and_then(|input| {
-                let leaves = input
-                    .leaves
-                    .iter()
-                    .map(root_leaf)
-                    .collect::<Result<Vec<_>, _>>()?;
-                let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
-                wqc_sv_stark::root::verify_root(&refs, &wqc_sv_stark::root::decode_root(root)?)
-            });
+        let checked = wqc_sv_stark::root_input::verify_root_json(json, root);
         match checked {
             Ok(()) => 1,
             Err(err) => {
@@ -1324,39 +1234,11 @@ pub unsafe extern "C" fn wqc_sv_verify_wrap(
         }
         let root = slice::from_raw_parts(root_bytes, root_len as usize);
         let wrap = slice::from_raw_parts(wrap_bytes, wrap_len as usize);
-        let checked = serde_json::from_str::<RootInput>(json)
-            .map_err(|e| wqc_sv_stark::Error::Verify(format!("leaves JSON: {e}")))
-            .and_then(|input| {
-                if input.leaves.len() > wqc_sv_stark::wrap::MAX_LEAVES {
-                    return Err(wqc_sv_stark::Error::Verify(format!(
-                        "{} leaves, more than {}",
-                        input.leaves.len(),
-                        wqc_sv_stark::wrap::MAX_LEAVES
-                    )));
-                }
-                let leaves = input
-                    .leaves
-                    .iter()
-                    .map(root_leaf)
-                    .collect::<Result<Vec<_>, _>>()?;
-                let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
-                let root = wqc_sv_stark::root::decode_root(root)?;
-                let (rv, rp) = wqc_sv_stark::root::verified_root(&refs, &root)?;
-                let wrap = wqc_sv_stark::wrap::decode_wrap(wrap)?;
-                let top = wqc_sv_stark::wrap::verify_wrap(rv, &rp, &wrap)?;
-                Ok(wqc_sv_stark::wrap::snark_public_inputs(&top))
-            });
+        let checked = wqc_sv_stark::root_input::verify_wrap_json(json, root, wrap);
         match checked {
-            Ok(digest) if digest.len() == 4 => {
+            Ok(digest) => {
                 digest_out.copy_from_slice(&digest);
                 1
-            }
-            Ok(digest) => {
-                eprintln!(
-                    "[Rust FFI] sv_verify_wrap: {} digest elements",
-                    digest.len()
-                );
-                0
             }
             Err(err) => {
                 eprintln!("[Rust FFI] sv_verify_wrap: {err}");

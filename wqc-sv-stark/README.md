@@ -397,7 +397,9 @@ its witness, and `snark::check` is the reference for every constraint the SNARK 
 A `wrap::WrapProof` travels as `wrap::encode_wrap` bytes (postcard; `wrap::decode_wrap` refuses
 trailing bytes), and a root has at most `wrap::MAX_LEAVES` (4) leaves to be wrapped. The FFI's
 `wqc_sv_verify_wrap` verifies a root and its wrap together, refuses more leaves before
-verifying, and returns the wrap digest.
+verifying, and returns the wrap digest. It is `root_input::verify_wrap_json`, which runs the
+same check on the published evidence JSON (leaves, root, wrap chain): a SettlementV4
+challenger recomputes a settled task's wrap digest with it.
 
 Measured (8-core Mac, every tier, 1 to 4 leaves, one top commitment throughout):
 `prove_wrap` about 30 s, `verify_wrap` about 7.5 s, top proof 115 to 120 KB. The top verifier
