@@ -45,9 +45,11 @@ struct RootInput {
     leaves: Vec<RootLeaf>,
 }
 
-/// Verifies a task's v2 root (`root::encode_root` bytes) over the leaves in `json`.
+/// Verifies a task's v2 root (`root::encode_root` bytes) over the leaves in `json`. Unlike
+/// [`verify_wrap_json`] it takes any number of leaves: a root over more than
+/// [`wrap::MAX_LEAVES`] is valid, it just cannot be wrapped.
 pub fn verify_root_json(json: &str, root_bytes: &[u8]) -> Result<(), Error> {
-    let leaves = root_leaves(parse(json)?)?;
+    let leaves = root_leaves(&parse(json)?)?;
     let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
     root::verify_root(&refs, &root::decode_root(root_bytes)?)
 }
@@ -69,7 +71,7 @@ pub fn verify_wrap_json(
             wrap::MAX_LEAVES
         )));
     }
-    let leaves = root_leaves(input)?;
+    let leaves = root_leaves(&input)?;
     let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
     let root = root::decode_root(root_bytes)?;
     let (rv, rp) = root::verified_root(&refs, &root)?;
@@ -85,7 +87,7 @@ fn parse(json: &str) -> Result<RootInput, Error> {
     serde_json::from_str(json).map_err(|e| Error::Verify(format!("leaves JSON: {e}")))
 }
 
-fn root_leaves(input: RootInput) -> Result<Vec<(Leaf, LeafProof)>, Error> {
+fn root_leaves(input: &RootInput) -> Result<Vec<(Leaf, LeafProof)>, Error> {
     input.leaves.iter().map(root_leaf).collect()
 }
 
