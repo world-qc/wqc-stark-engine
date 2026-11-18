@@ -2823,3 +2823,82 @@ fn segment_initial_state_is_checked() {
     low[3] = (0, -2 * S);
     assert!(build(low).is_ok(), "−2S is in range");
 }
+
+/// 64 leaves at every tier wrap to the top commitment of one leaf, which bounds
+/// [`crate::wrap::MAX_LEAVES`]; prints the root's and the wrap's prove times.
+#[test]
+#[ignore = "slow: a 64-leaf root per tier, about 35 minutes"]
+fn the_wrap_takes_64_leaves() {
+    use crate::wrap::{prove_wrap, top_commitment, verify_wrap, MAX_LEAVES};
+    use std::time::Instant;
+    let mut seen = None;
+    for level in [
+        SecurityLevel::Low,
+        SecurityLevel::Normal,
+        SecurityLevel::High,
+        SecurityLevel::Ultra,
+    ] {
+        let l = build(level, 3, gates()).unwrap();
+        for n in [1, MAX_LEAVES as u64] {
+            let ps: Vec<LeafProof> = (0..n).map(|i| l.prove([i, 1, 2, 3]).unwrap()).collect();
+            let leaves: Vec<_> = ps.iter().map(|p| (&l, p)).collect();
+            let t = Instant::now();
+            let (root, _) = crate::root::prove_root(&leaves).unwrap();
+            let rooted = t.elapsed();
+            let (rv, rp) = crate::root::verified_root(&leaves, &root).unwrap();
+            let t = Instant::now();
+            let (wrap, top) = prove_wrap(rv.clone(), &rp).unwrap();
+            let proved = t.elapsed();
+            verify_wrap(rv, &rp, &wrap).unwrap();
+            let c = top_commitment(&top).unwrap();
+            assert!(seen.get_or_insert(c.clone()) == &c, "{level:?} leaves={n}");
+            println!("{level:?} leaves={n}: root {rooted:.1?}, wrap {proved:.1?}");
+        }
+    }
+}
+
+/// A root over segment leaves wraps to the same top commitment as a root over one plain leaf.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn segment_roots_wrap_to_the_same_top() {
+    use crate::leaf::{build_segment, segment_start};
+    use crate::wrap::{prove_wrap, top_commitment, verify_wrap};
+    let n = 3;
+    let (first, second) = (gates()[..4].to_vec(), gates()[4..].to_vec());
+    let s0 = build_segment(
+        SecurityLevel::Low,
+        n,
+        first.clone(),
+        segment_start(n, &[]).unwrap(),
+        None,
+    )
+    .unwrap();
+    let s1 = build_segment(
+        SecurityLevel::Low,
+        n,
+        second,
+        segment_start(n, std::slice::from_ref(&first)).unwrap(),
+        None,
+    )
+    .unwrap();
+    let (p0, p1) = (
+        s0.prove([0, 1, 2, 3]).unwrap(),
+        s1.prove([1, 1, 2, 3]).unwrap(),
+    );
+    let leaves = [(&s0, &p0), (&s1, &p1)];
+    let (root, _) = crate::root::prove_root(&leaves).unwrap();
+    let (rv, rp) = crate::root::verified_root(&leaves, &root).unwrap();
+    let (wrap, top) = prove_wrap(rv.clone(), &rp).unwrap();
+    verify_wrap(rv, &rp, &wrap).unwrap();
+
+    let plain = build(SecurityLevel::Low, n, gates()).unwrap();
+    let pp = plain.prove(CTX).unwrap();
+    let one = [(&plain, &pp)];
+    let (root1, _) = crate::root::prove_root(&one).unwrap();
+    let (rv1, rp1) = crate::root::verified_root(&one, &root1).unwrap();
+    let (_, top1) = prove_wrap(rv1, &rp1).unwrap();
+    assert_eq!(
+        top_commitment(&top).unwrap(),
+        top_commitment(&top1).unwrap()
+    );
+}
