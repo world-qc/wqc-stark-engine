@@ -98,6 +98,12 @@ the stored positions its logical pairs map to, with the phases folded into its m
 (exact), and the boundary table applies the final frame before the digest. The result is the
 dense execution's bit for bit (a test checks random circuits); only the rows change.
 
+A circuit whose gates are all monomial after fusion has no rounding step and so no leaf: from
+`|0…0⟩` it reaches one basis state times `i^phase`, with no superposition. `leaf::monomial_state`
+returns that state (the frame's position of the stored `|0…0⟩`), the same as the dense execution
+(a test checks it), and a verifier recomputes such a circuit's results from it instead of
+verifying a proof (`wqc_sv_monomial_state` in `wqc-stark-ffi`).
+
 ## Fusion
 
 `build` first rewrites the gate list by one fixed rule, and the result is defined on the

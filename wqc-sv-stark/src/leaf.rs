@@ -304,6 +304,28 @@ pub fn gate_rows(n: usize, gates: &[Gate]) -> Result<usize, Error> {
     Ok(rounding_steps(&fused) << (n - 1))
 }
 
+/// The final state of `gates` on `n` qubits from `|0…0⟩` when no gate takes a rounding step
+/// ([`gate_rows`] is 0): every gate then permutes amplitudes and multiplies them by unit
+/// phases, so the state is one basis state `k` times `i^phase`, exactly. Bit `q` of `k` is
+/// qubit `q`. `None` when a gate rounds. Rejects what [`gate_rows`] rejects.
+///
+/// Such a circuit has no leaf (there is nothing to prove a table for); a verifier recomputes
+/// its results from this instead.
+pub fn monomial_state(n: usize, gates: &[Gate]) -> Result<Option<(usize, u8)>, Error> {
+    let fused = validated_fuse(n, gates)?;
+    if rounding_steps(&fused) != 0 {
+        return Ok(None);
+    }
+    let frame = crate::exec::plan_fused(n, &fused).frame;
+    // Logical k holds i^phase[k] · stored[perm[k]], and the stored vector is still |0…0⟩.
+    let k = frame
+        .perm
+        .iter()
+        .position(|&p| p == 0)
+        .expect("the frame's perm is a permutation");
+    Ok(Some((k, frame.phase[k])))
+}
+
 /// An upper estimate of the memory [`build_verifier`] peaks at, in bytes, for a leaf of `rows`
 /// gate rows ([`gate_rows`]) on `n` qubits with `shots` (0 for a unitary leaf): 400 bytes per
 /// gate row, 600 per basis state, 800 per shot and 16 MiB. Measured peaks (live heap, n = 2 to

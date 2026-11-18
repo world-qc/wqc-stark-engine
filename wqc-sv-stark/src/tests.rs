@@ -2644,3 +2644,42 @@ mod erased {
         }
     }
 }
+
+/// A circuit with no rounding step goes to one basis state times a unit phase, the same one
+/// `execute` reaches; a circuit that rounds has none.
+#[test]
+fn monomial_state_matches_execution() {
+    use crate::leaf::monomial_state;
+    use crate::wire::parse_circuit;
+    let cases = [
+        // X on qubit 1: |010⟩.
+        r#"[{"type":"X","params":1}]"#,
+        // Z after X: −|001⟩.
+        r#"[{"type":"X","params":0},{"type":"Z","params":0}]"#,
+        // S after X: i|001⟩, then CNOT 0→2 and CZ 0,2: −i|101⟩.
+        r#"[{"type":"X","params":0},{"type":"S","params":0},{"type":"CNOT","params":[0,2]},
+            {"type":"CZ","params":[0,2]}]"#,
+        // Y, CCNOT and RZ(π), with terminal MEASUREs.
+        r#"[{"type":"Y","params":0},{"type":"X","params":1},{"type":"CCNOT","params":[0,1,2]},
+            {"type":"RZ","params":[2,3.141592653589793]},
+            {"type":"MEASURE","params":{"qubit":2,"cbit":0}}]"#,
+        // H twice fuses to the identity.
+        r#"[{"type":"H","params":0},{"type":"H","params":0},{"type":"X","params":2}]"#,
+    ];
+    for json in cases {
+        let gates = parse_circuit(json).unwrap().gates;
+        let (k, phase) = monomial_state(3, &gates).unwrap().expect(json);
+        let state = execute(3, &gates).1;
+        for (i, &amp) in state.iter().enumerate() {
+            let want = if i == k {
+                crate::exec::rot((S, 0), phase)
+            } else {
+                (0, 0)
+            };
+            assert_eq!(amp, want, "{json}: amplitude {i}");
+        }
+    }
+    let rounds = parse_circuit(r#"[{"type":"H","params":0}]"#).unwrap().gates;
+    assert_eq!(monomial_state(3, &rounds).unwrap(), None);
+    assert!(monomial_state(17, &[]).is_err(), "over MAX_QUBITS");
+}
