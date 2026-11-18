@@ -208,6 +208,12 @@ pub(crate) fn pairs(n: usize, g: &Gate) -> impl Iterator<Item = (usize, usize, b
         })
 }
 
+/// `i^k` as a fixed-point amplitude (`S · i^k`): the one non-zero amplitude of a circuit with
+/// no rounding step ([`crate::leaf::monomial_state`]).
+pub fn unit_phase_amplitude(k: u8) -> C {
+    rot((S, 0), k)
+}
+
 /// `x · i^k`, exact.
 pub(crate) fn rot(x: C, k: u8) -> C {
     match k & 3 {
