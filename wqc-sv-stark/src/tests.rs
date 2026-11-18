@@ -29,7 +29,7 @@ fn gates() -> Vec<Gate> {
 }
 
 fn leaf(tamper: Tamper) -> Leaf {
-    build_with_tamper(FRI, 3, gates(), None, tamper).unwrap()
+    build_with_tamper(FRI, 3, gates(), None, None, tamper).unwrap()
 }
 
 fn honest_statement() -> Vec<F> {
@@ -1340,7 +1340,7 @@ fn bell_sampling(shots: u32) -> crate::born::Sampling {
 
 fn sampling_leaf(tamper: Tamper) -> Leaf {
     let gates = vec![Gate::h(0), Gate::cnot(0, 1), Gate::ry(1, 0.7)];
-    build_with_tamper(FRI, 2, gates, Some(bell_sampling(64)), tamper).unwrap()
+    build_with_tamper(FRI, 2, gates, Some(bell_sampling(64)), None, tamper).unwrap()
 }
 
 /// The sampling leaf proves the counts its native sampling gives, and verifies only for its
@@ -1503,7 +1503,15 @@ fn sampling_outcomes_follow_the_measurements() {
         shots: 1,
     };
     assert_eq!(one.counts_len(), 4);
-    assert!(build_with_tamper(FRI, 3, vec![Gate::h(0)], Some(one.clone()), Tamper::None).is_ok());
+    assert!(build_with_tamper(
+        FRI,
+        3,
+        vec![Gate::h(0)],
+        Some(one.clone()),
+        None,
+        Tamper::None
+    )
+    .is_ok());
     for bad in [
         Sampling {
             measures: vec![],
@@ -1535,7 +1543,15 @@ fn sampling_outcomes_follow_the_measurements() {
         },
     ] {
         assert!(
-            build_with_tamper(FRI, 3, vec![Gate::h(0)], Some(bad.clone()), Tamper::None).is_err(),
+            build_with_tamper(
+                FRI,
+                3,
+                vec![Gate::h(0)],
+                Some(bad.clone()),
+                None,
+                Tamper::None
+            )
+            .is_err(),
             "{bad:?}"
         );
     }
@@ -1578,7 +1594,7 @@ fn small_sampling_leaves_satisfy_their_constraints() {
             cbits,
             shots: 5,
         };
-        let l = build_with_tamper(FRI, n, gates.clone(), Some(s), Tamper::None).unwrap();
+        let l = build_with_tamper(FRI, n, gates.clone(), Some(s), None, Tamper::None).unwrap();
         let (p, counts) = l.prove_sampling(CTX, 3).unwrap();
         let digest = terminal_digest(&execute(n, &gates).1);
         let want = sampling_statement(CTX, digest, 3, 5, counts_digest(&counts)).unwrap();
@@ -2682,4 +2698,128 @@ fn monomial_state_matches_execution() {
     let rounds = parse_circuit(r#"[{"type":"H","params":0}]"#).unwrap().gates;
     assert_eq!(monomial_state(3, &rounds).unwrap(), None);
     assert!(monomial_state(17, &[]).is_err(), "over MAX_QUBITS");
+}
+
+/// A segment leaf proves its segment from the state the earlier segments reach: the chain of
+/// two segments gives `execute_from` over each in turn, a proof made from another initial
+/// state fails the honest verifier, and the leaf from `|0…0⟩` is unchanged by segments.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn segment_leaf_proves_from_its_start() {
+    use crate::leaf::{build_segment_verifier, segment_start};
+    let n = 4;
+    let all = random_circuit(n, 24, 11);
+    let (first, second) = all.split_at(12);
+    let (first, second) = (first.to_vec(), second.to_vec());
+
+    // The second segment starts where the first, fused on its own, ends.
+    let start = segment_start(n, std::slice::from_ref(&first)).unwrap();
+    assert_eq!(start, execute(n, &first).1);
+    assert_eq!(
+        segment_start(n, &[]).unwrap(),
+        execute(n, &[]).1,
+        "no earlier segment: |0…0⟩"
+    );
+    let fin = execute_from(n, &second, Some(&start)).1;
+
+    let seg = build_with_tamper(
+        FRI,
+        n,
+        second.clone(),
+        None,
+        Some(start.clone()),
+        Tamper::None,
+    )
+    .unwrap();
+    let p = seg.prove(CTX).unwrap();
+    let expected = statement(CTX, terminal_digest(&fin)).unwrap();
+    assert_eq!(p.statement, expected);
+    seg.verify(&p.proof, &expected).unwrap();
+
+    // A verifier built the low-memory way from the same start accepts it.
+    let v = build_segment_verifier(
+        SecurityLevel::Low,
+        n,
+        second.clone(),
+        Some(start.clone()),
+        None,
+    );
+    assert!(v.is_ok());
+
+    // A prover that starts from another state proves another relation: its proof fails the
+    // honest verifier, against its own claim or the honest digest.
+    let zero = segment_start(n, &[]).unwrap();
+    let liar = build_with_tamper(
+        FRI,
+        n,
+        second.clone(),
+        None,
+        Some(zero.clone()),
+        Tamper::None,
+    )
+    .unwrap();
+    let bad = liar.prove(CTX).unwrap();
+    assert!(seg.verify(&bad.proof, &bad.statement).is_err());
+    assert!(seg.verify(&bad.proof, &expected).is_err());
+
+    // From |0…0⟩, a segment leaf reaches the plain leaf's digest; the two are separate
+    // relations (different boundary tables), and each verifies only its own proof.
+    let plain = build_with(FRI, n, second.clone()).unwrap();
+    let from_zero =
+        build_with_tamper(FRI, n, second.clone(), None, Some(zero), Tamper::None).unwrap();
+    let (pp, pz) = (plain.prove(CTX).unwrap(), from_zero.prove(CTX).unwrap());
+    assert_eq!(pp.statement, pz.statement);
+    plain.verify(&pp.proof, &pp.statement).unwrap();
+    assert!(plain.verify(&pz.proof, &pz.statement).is_err());
+    assert!(from_zero.verify(&pp.proof, &pp.statement).is_err());
+}
+
+/// The last segment of a sampling task samples from the state the segments reach.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn segment_leaf_samples_its_final_state() {
+    use crate::born::sample;
+    use crate::leaf::segment_start;
+    let first = vec![Gate::h(0), Gate::cnot(0, 1)];
+    let last = vec![Gate::ry(1, 0.7), Gate::t(0)];
+    let start = segment_start(2, std::slice::from_ref(&first)).unwrap();
+    let l = build_with_tamper(
+        FRI,
+        2,
+        last.clone(),
+        Some(bell_sampling(64)),
+        Some(start.clone()),
+        Tamper::None,
+    )
+    .unwrap();
+    let d = Dispatch {
+        circuit_id: "c",
+        sub_task_id: "s",
+        node_id: "n",
+        slice_id: "1",
+    };
+    let seed = 0x0123_4567_89AB_CDEF;
+    let (p, counts) = l.prove_sampling(d.context(), seed).unwrap();
+    let fin = execute_from(2, &last, Some(&start)).1;
+    assert_eq!(
+        counts,
+        sample(&fin, &bell_sampling(64), seed).unwrap().counts
+    );
+    l.verify_sampling(&p.proof, &d, terminal_digest(&fin), seed, &counts)
+        .unwrap();
+}
+
+/// A segment leaf's initial state has `2^n` amplitudes in a gate output's range.
+#[test]
+fn segment_initial_state_is_checked() {
+    let zero = crate::leaf::segment_start(2, &[]).unwrap();
+    let build =
+        |init: Vec<C>| build_with_tamper(FRI, 2, vec![Gate::h(0)], None, Some(init), Tamper::None);
+    assert!(build(zero[..2].to_vec()).is_err(), "too few amplitudes");
+    let mut big = zero.clone();
+    big[1] = (2 * S, 0);
+    assert!(build(big).is_err(), "out of range");
+    let mut low = zero;
+    low[3] = (0, -2 * S);
+    assert!(build(low).is_ok(), "−2S is in range");
 }

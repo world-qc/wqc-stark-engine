@@ -34,6 +34,8 @@ pub const GATE_CHUNK_OPS: [&str; GATE_CHUNKS] = [GATE_OP, "wqc/gate1", "wqc/gate
 const _: () = assert!(GATE_CHUNKS == 3);
 const GATE_TRACES: [TraceGeneratorFn<EF>; GATE_CHUNKS] = [gate_trace, gate1_trace, gate2_trace];
 pub const BOUNDARY_OP: &str = "wqc/boundary";
+/// A segment leaf's boundary table (see [`crate::tables::BoundaryTableAir`]).
+pub const BOUNDARY_SEG_OP: &str = "wqc/boundary_seg";
 pub const RANGE_OP: &str = "wqc/range";
 
 pub fn gate_type() -> NpoTypeId {
@@ -41,6 +43,9 @@ pub fn gate_type() -> NpoTypeId {
 }
 pub fn gate_chunk_type(c: usize) -> NpoTypeId {
     NpoTypeId::new(GATE_CHUNK_OPS[c])
+}
+pub fn boundary_seg_type() -> NpoTypeId {
+    NpoTypeId::new(BOUNDARY_SEG_OP)
 }
 pub fn boundary_type() -> NpoTypeId {
     NpoTypeId::new(BOUNDARY_OP)
@@ -87,6 +92,8 @@ pub(crate) fn outputs_len(sampling: bool) -> usize {
 #[derive(Debug, Default)]
 pub struct SvState {
     pub n: usize,
+    /// A segment leaf (its boundary table is [`boundary_seg_type`]).
+    pub segment: bool,
     pub steps: usize,
     pub rows: Vec<PairRow>,
     /// Final stored vector, by stored position (the boundary table reads it).
@@ -118,6 +125,8 @@ pub struct SvExecutor {
     /// Already fused ([`fuse`]).
     pub gates: Vec<Gate>,
     pub sampling: Option<Sampling>,
+    /// A segment leaf's initial logical state; `None` starts from `|0…0⟩`.
+    pub initial: Option<Vec<C>>,
     pub(crate) tamper: Tamper,
 }
 
@@ -217,7 +226,7 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
         ctx: &mut ExecutionContext<'_, EF>,
     ) -> Result<(), CircuitError> {
         let plan = plan_fused(self.n, &self.gates);
-        let (mut rows, mut fin) = run(self.n, &plan);
+        let (mut rows, mut fin) = run_from(self.n, &plan, self.initial.as_deref());
         apply_tamper(self.tamper, &mut rows, &mut fin, plan.steps);
         let logical = plan.frame.logical(&fin);
         let born = match &self.sampling {
@@ -274,6 +283,7 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
         let st = ctx.get_op_state_mut::<SvState>(&gate_type());
         *st = SvState {
             n: self.n,
+            segment: self.initial.is_some(),
             steps: plan.steps,
             rows,
             fin,
@@ -319,14 +329,18 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
             }
         }
         // One row per stored position: its initial value, the step of its final read, and the
-        // logical index and phase the final frame gives it.
+        // logical index and phase the final frame gives it. The frame is the identity at step 0,
+        // so stored position `s` starts with logical amplitude `s`. A segment leaf's initial
+        // value has an imaginary part too.
         let mut boundary = Vec::new();
         for (s, (logical, phase)) in plan.frame.inverse().into_iter().enumerate() {
             let (c, d) = rot((1, 0), phase);
+            boundary.extend([EF::ONE, EF::from_usize(s)]);
+            match &self.initial {
+                None => boundary.push(if s == 0 { fi::<EF>(S) } else { EF::ZERO }),
+                Some(init) => boundary.extend([fi::<EF>(init[s].0), fi::<EF>(init[s].1)]),
+            }
             boundary.extend([
-                EF::ONE,
-                EF::from_usize(s),
-                if s == 0 { fi::<EF>(S) } else { EF::ZERO },
                 EF::from_usize(plan.steps),
                 EF::from_usize(logical),
                 fi::<EF>(c),
@@ -334,7 +348,12 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
                 EF::from_usize(1 + self.sampling.is_some() as usize),
             ]);
         }
-        pw.register_non_primitive_preprocessed_no_read(&boundary_type(), &boundary);
+        let boundary_op = if self.initial.is_some() {
+            boundary_seg_type()
+        } else {
+            boundary_type()
+        };
+        pw.register_non_primitive_preprocessed_no_read(&boundary_op, &boundary);
         let range: Vec<EF> = (0..1usize << LOG_RANGE).map(EF::from_usize).collect();
         pw.register_non_primitive_preprocessed_no_read(&range_type(), &range);
         // Digest rows: the last one creates the digest witnesses (multiplicity set later).
@@ -377,6 +396,7 @@ impl NonPrimitiveExecutor<EF> for SvExecutor {
 pub enum SvTrace {
     Gate(usize, Vec<PairRow>),
     Boundary(Vec<C>),
+    SegBoundary(Vec<C>),
     Range(Vec<u64>),
     Digest {
         hashed: Vec<C>,
@@ -395,6 +415,7 @@ impl<T> NonPrimitiveTrace<T> for SvTrace {
         match self {
             Self::Gate(c, _) => gate_chunk_type(*c),
             Self::Boundary(_) => boundary_type(),
+            Self::SegBoundary(_) => boundary_seg_type(),
             Self::Range(_) => range_type(),
             Self::Digest { .. } => digest_type(),
             Self::Perm(_) => perm_type(),
@@ -407,7 +428,7 @@ impl<T> NonPrimitiveTrace<T> for SvTrace {
     fn rows(&self) -> usize {
         match self {
             Self::Gate(_, r) => r.len(),
-            Self::Boundary(f) => f.len(),
+            Self::Boundary(f) | Self::SegBoundary(f) => f.len(),
             Self::Range(_) => 1 << LOG_RANGE,
             Self::Digest { ins, .. } => ins.len(),
             Self::Perm(i) => i.len(),
@@ -461,7 +482,15 @@ pub(crate) fn boundary_trace(
     op_states: &OpStateMap,
 ) -> Result<Option<Box<dyn NonPrimitiveTrace<EF>>>, CircuitError> {
     Ok(state(op_states)
+        .filter(|s| !s.segment)
         .map(|s| Box::new(SvTrace::Boundary(s.fin.clone())) as Box<dyn NonPrimitiveTrace<EF>>))
+}
+pub(crate) fn seg_boundary_trace(
+    op_states: &OpStateMap,
+) -> Result<Option<Box<dyn NonPrimitiveTrace<EF>>>, CircuitError> {
+    Ok(state(op_states)
+        .filter(|s| s.segment)
+        .map(|s| Box::new(SvTrace::SegBoundary(s.fin.clone())) as Box<dyn NonPrimitiveTrace<EF>>))
 }
 pub(crate) fn range_trace(
     op_states: &OpStateMap,
@@ -534,6 +563,8 @@ pub struct SvGatePlugin {
     /// Already fused ([`fuse`]).
     pub gates: Vec<Gate>,
     pub sampling: Option<Sampling>,
+    /// A segment leaf's initial logical state; `None` starts from `|0…0⟩`.
+    pub initial: Option<Vec<C>>,
     pub(crate) tamper: Tamper,
 }
 
@@ -571,6 +602,7 @@ impl NpoCircuitPlugin<EF> for SvGatePlugin {
                 n: self.n,
                 gates: self.gates.clone(),
                 sampling: self.sampling.clone(),
+                initial: self.initial.clone(),
                 tamper: self.tamper,
             }),
             op_id: data.op_id,
@@ -619,6 +651,9 @@ pub fn gate_chunk_plugins() -> [SvSidePlugin; GATE_CHUNKS - 1] {
 pub fn boundary_plugin() -> SvSidePlugin {
     SvSidePlugin(boundary_type(), boundary_trace)
 }
+pub fn seg_boundary_plugin() -> SvSidePlugin {
+    SvSidePlugin(boundary_seg_type(), seg_boundary_trace)
+}
 pub fn range_plugin() -> SvSidePlugin {
     SvSidePlugin(range_type(), range_trace)
 }
@@ -652,6 +687,7 @@ impl NpoPreprocessor<F> for SvPreprocessor {
         };
         let types = (0..GATE_CHUNKS).map(gate_chunk_type).chain([
             boundary_type(),
+            boundary_seg_type(),
             range_type(),
             perm_type(),
             weight_type(),
@@ -703,13 +739,15 @@ pub enum SvTable {
     Draw,
     Prf,
     Count,
+    /// A segment leaf's boundary; last, so the other tables keep their order.
+    SegBoundary,
 }
 
 impl SvTable {
     /// Every table, in prover registration order. The gate tables are listed one by one, as
     /// are [`gate_chunk_plugins`] and the `gate*_trace` generators: changing [`GATE_CHUNKS`]
     /// means updating all three (the assertions below catch a mismatch in count).
-    pub const ALL: [Self; GATE_CHUNKS + 8] = [
+    pub const ALL: [Self; GATE_CHUNKS + 9] = [
         Self::Gate(0),
         Self::Gate(1),
         Self::Gate(2),
@@ -721,6 +759,7 @@ impl SvTable {
         Self::Draw,
         Self::Prf,
         Self::Count,
+        Self::SegBoundary,
     ];
     pub fn op_type(self) -> NpoTypeId {
         match self {
@@ -733,12 +772,14 @@ impl SvTable {
             Self::Draw => draw_type(),
             Self::Prf => prf_type(),
             Self::Count => count_type(),
+            Self::SegBoundary => boundary_seg_type(),
         }
     }
     fn width(self) -> usize {
         match self {
             Self::Gate(_) => GP,
             Self::Boundary => BP,
+            Self::SegBoundary => BP_SEG,
             Self::Range => 1,
             Self::Digest => DP,
             Self::Perm => PP,
@@ -766,7 +807,13 @@ impl SvTable {
     {
         match self {
             Self::Gate(_) => DynamicAirEntry::new(Box::new(GateTableAir { prep, min_height })),
-            Self::Boundary => DynamicAirEntry::new(Box::new(BoundaryTableAir { prep, min_height })),
+            Self::Boundary | Self::SegBoundary => {
+                DynamicAirEntry::new(Box::new(BoundaryTableAir {
+                    prep,
+                    min_height,
+                    segment: matches!(self, Self::SegBoundary),
+                }))
+            }
             Self::Range => DynamicAirEntry::new(Box::new(RangeTableAir { prep, min_height })),
             Self::Digest => DynamicAirEntry::new(Box::new(DigestTableAir { prep, min_height })),
             Self::Perm => DynamicAirEntry::new(Box::new(PermTableAir::new(prep, min_height))),
@@ -822,10 +869,12 @@ macro_rules! sv_npo_impls {
                         let m = a.main(r);
                         (DynamicAirEntry::new(Box::new(a)), m, r.len())
                     }
-                    (SvTable::Boundary, SvTrace::Boundary(f)) => {
+                    (SvTable::Boundary, SvTrace::Boundary(f))
+                    | (SvTable::SegBoundary, SvTrace::SegBoundary(f)) => {
                         let a = BoundaryTableAir {
                             prep: committed.to_vec(),
                             min_height,
+                            segment: matches!(self.0, SvTable::SegBoundary),
                         };
                         let m = a.main(f);
                         (DynamicAirEntry::new(Box::new(a)), m, f.len())

@@ -26,6 +26,8 @@ pub(crate) const FIN: &str = "wqc_fin";
 pub(crate) const PERM: &str = "wqc_perm";
 pub(crate) const GP: usize = 13; // gate preprocessed: real, t, i, j, active, m[8]
 pub(crate) const BP: usize = 8; // boundary preprocessed: real, idx, init_re, last_t, logical idx, phase (c, d), FIN uses
+/// A segment leaf's boundary (see [`BoundaryTableAir::segment`]): `init_im` follows `init_re`.
+pub(crate) const BP_SEG: usize = BP + 1;
 pub(crate) const DP: usize = 3 + 2 * DIGEST_LEN; // digest preprocessed: real, is_last, idx0, (out_idx, out_mult) × 4
 pub(crate) const PP: usize = 1; // perm preprocessed: real
 
@@ -214,15 +216,30 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for GateTableAir {
 impl BatchAir<Cfg> for GateTableAir {}
 impl BatchAir<VerifyCfg> for GateTableAir {}
 
+/// One row per stored position: its initial value (written at step 0), its final value (read
+/// after the last step) and where the final frame puts it.
+///
+/// A leaf from `|0…0⟩` has a real initial value only (`init_re`, `S` at position 0). A segment
+/// leaf, which starts from the state its earlier segments reach, has an imaginary one too:
+/// `segment` adds the `init_im` column ([`BP_SEG`]). The two are separate tables (separate op
+/// types), so a leaf from `|0…0⟩` is unchanged.
 #[derive(Clone)]
 pub struct BoundaryTableAir {
     pub prep: Vec<F>,
     pub min_height: usize,
+    pub segment: bool,
 }
 
 impl BoundaryTableAir {
+    pub(crate) fn prep_width(&self) -> usize {
+        if self.segment {
+            BP_SEG
+        } else {
+            BP
+        }
+    }
     pub(crate) fn rows(&self) -> usize {
-        padded_rows(self.prep.len() / BP, self.min_height)
+        padded_rows(self.prep.len() / self.prep_width(), self.min_height)
     }
     pub(crate) fn main(&self, fin: &[C]) -> RowMajorMatrix<F> {
         let mut v = vec![F::ZERO; self.rows() * 2];
@@ -239,10 +256,10 @@ impl BaseAir<F> for BoundaryTableAir {
         2
     }
     fn preprocessed_width(&self) -> usize {
-        BP
+        self.prep_width()
     }
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
-        Some(prep_matrix(&self.prep, BP, self.min_height))
+        Some(prep_matrix(&self.prep, self.prep_width(), self.min_height))
     }
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
@@ -266,16 +283,23 @@ impl<AB: AirBuilder<F = F> + InteractionBuilder> Air<AB> for BoundaryTableAir {
             .iter()
             .map(|&x| x.into())
             .collect();
-        let (real, idx, init, last) = (p[0].clone(), p[1].clone(), p[2].clone(), p[3].clone());
+        // A segment's boundary has `init_im` after `init_re`; the columns after it shift by one.
+        let (real, idx, init_re) = (p[0].clone(), p[1].clone(), p[2].clone());
+        let (init_im, rest) = if self.segment {
+            (p[3].clone(), &p[4..])
+        } else {
+            (AB::Expr::ZERO, &p[3..])
+        };
+        let last = rest[0].clone();
         // The final frame: this stored position holds logical `out` times `c + d·i`.
-        let (out, c, d) = (p[4].clone(), p[5].clone(), p[6].clone());
+        let (out, c, d) = (rest[1].clone(), rest[2].clone(), rest[3].clone());
         // The digest reads each final amplitude once, and the weight table once more when the
         // leaf samples.
-        let uses = p[7].clone();
+        let uses = rest[4].clone();
         let zero = AB::Expr::ZERO;
         builder.push_interaction(
             MEM,
-            [zero.clone(), idx.clone(), init, zero],
+            [zero, idx.clone(), init_re, init_im],
             Count::bounded(real.clone(), 1),
         );
         builder.push_interaction(
