@@ -799,55 +799,114 @@ pub unsafe extern "C" fn wqc_sv_leaf_rows(qubit_count: u32, circuit_json: *const
     result.unwrap_or(-99)
 }
 
-/// The final state of a terminal circuit with no rounding step (`wqc_sv_leaf_rows` is 0):
-/// `|0…0⟩` goes to one basis state times `i^phase`, exactly in the leaf's fixed-point
-/// arithmetic. Writes the basis state to `index_out` (bit `q` is qubit `q`) and `phase`
-/// (0 to 3) to `phase_out`. A verifier recomputes such a circuit's results from it, since it
-/// has no leaf. MEASUREs must follow every unitary gate (no RESET, IF or gate after a
-/// MEASURE) and stay within `qubit_count`.
+/// The results of a terminal circuit with no rounding step (`wqc_sv_leaf_rows` is 0), which
+/// has no v2 leaf: from `|0…0⟩` it reaches one basis state times `i^phase`, exactly in the
+/// leaf's fixed-point arithmetic (`leaf::monomial_state`), so a verifier recomputes what a node
+/// must report instead of verifying a proof. The values follow `wqc_sv_state_outputs` (and
+/// wqc-core): the `|0…0⟩` amplitude and each observable's value on the `1e-6` grid.
 ///
-/// Returns `1` with both written, `0` if a gate takes a rounding step, `-1` if the circuit is
-/// not one this reads (bad JSON, mid-circuit, a qubit out of range, more than 16 qubits), or
-/// `-99` on panic. On anything but `1` the outputs are untouched.
+/// - `circuit_json`: wqc-core's gate list; MEASUREs must follow every unitary gate (no RESET,
+///   IF or gate after a MEASURE) and stay within `qubit_count`.
+/// - `observables_json`: as for `wqc_sv_state_outputs`; null or `[]` for none.
+/// - `out_register`: the classical register every shot reads, cbit `c` in bit `c` (the last
+///   MEASURE into a cbit wins; unmeasured cbits are 0). With no MEASURE it is 0.
+/// - `out_scalar`: 2 doubles; `out_values`: `2 · out_count` doubles, `out_count` equal to the
+///   number of observables (it may be null when `out_count` is 0).
+///
+/// Returns `1` with the outputs written, `0` if a gate takes a rounding step, `-1` if an
+/// argument is invalid (bad JSON, mid-circuit, a qubit out of range, more than 16 qubits, an
+/// observable that does not fit), or `-99` on panic. On anything but `1` nothing is written.
 ///
 /// # Safety
 ///
-/// `circuit_json` must be a null-terminated string valid for the duration of this call;
-/// `index_out` and `phase_out` must be valid for writes.
+/// `circuit_json` must be a null-terminated string; `observables_json` null or one.
+/// `out_register` must point to a writable `u64`, `out_scalar` to 2 writable doubles and
+/// `out_values` to `2 · out_count`.
 #[no_mangle]
-pub unsafe extern "C" fn wqc_sv_monomial_state(
+pub unsafe extern "C" fn wqc_sv_monomial_outputs(
     qubit_count: u32,
     circuit_json: *const c_char,
-    index_out: *mut u64,
-    phase_out: *mut u8,
+    observables_json: *const c_char,
+    out_register: *mut u64,
+    out_scalar: *mut f64,
+    out_values: *mut f64,
+    out_count: usize,
 ) -> i32 {
+    use wqc_sv_stark::outputs::{amplitude_zero, observable, PauliTerm};
     let result = catch_unwind(AssertUnwindSafe(|| {
+        if out_register.is_null() || out_scalar.is_null() || (out_count > 0 && out_values.is_null())
+        {
+            eprintln!("[Rust FFI] sv_monomial_outputs: null output");
+            return -1;
+        }
         let Some(json) = cstr(circuit_json) else {
-            eprintln!("[Rust FFI] sv_monomial_state: null or non-UTF-8 circuit");
+            eprintln!("[Rust FFI] sv_monomial_outputs: null or non-UTF-8 circuit");
             return -1;
         };
+        let terms: Vec<Vec<PauliTerm>> = if observables_json.is_null() {
+            Vec::new()
+        } else {
+            let parsed = cstr(observables_json)
+                .ok_or_else(|| "non-UTF-8 observables".to_string())
+                .and_then(|j| {
+                    serde_json::from_str(j).map_err(|e| format!("observables JSON: {e}"))
+                });
+            match parsed {
+                Ok(t) => t,
+                Err(err) => {
+                    eprintln!("[Rust FFI] sv_monomial_outputs: {err}");
+                    return -1;
+                }
+            }
+        };
+        if terms.len() != out_count {
+            eprintln!(
+                "[Rust FFI] sv_monomial_outputs: {} observables, {out_count} slots",
+                terms.len()
+            );
+            return -1;
+        }
         let n = qubit_count as usize;
-        let state = parse_circuit(json).and_then(|c| {
+        let outputs = parse_circuit(json).and_then(|c| {
             if let Some(m) = c.measures.iter().find(|m| m.qubit >= n) {
                 return Err(wqc_sv_stark::Error::InvalidCircuit(format!(
                     "MEASURE of qubit {} with {n} qubits",
                     m.qubit
                 )));
             }
-            monomial_state(n, &c.gates)
+            let Some((k, phase)) = monomial_state(n, &c.gates)? else {
+                return Ok(None);
+            };
+            let mut register = 0u64;
+            for m in &c.measures {
+                let bit = ((k >> m.qubit) & 1) as u64;
+                register = (register & !(1 << m.cbit)) | (bit << m.cbit);
+            }
+            let mut fin = vec![(0i64, 0i64); 1 << n];
+            fin[k] = wqc_sv_stark::exec::unit_phase_amplitude(phase);
+            let mut values = Vec::with_capacity(2 * terms.len());
+            for t in &terms {
+                let (re, im) = observable(&fin, n, t)?;
+                values.extend([re, im]);
+            }
+            Ok(Some((register, amplitude_zero(&fin), values)))
         });
-        match state {
-            Ok(Some((k, phase))) => {
-                // SAFETY: the caller passes pointers valid for writes.
+        match outputs {
+            Ok(Some((register, (re, im), values))) => {
+                // SAFETY: the caller passes pointers valid for these writes.
                 unsafe {
-                    *index_out = k as u64;
-                    *phase_out = phase;
+                    *out_register = register;
+                    *out_scalar = re;
+                    *out_scalar.add(1) = im;
+                    if out_count > 0 {
+                        std::ptr::copy_nonoverlapping(values.as_ptr(), out_values, values.len());
+                    }
                 }
                 1
             }
             Ok(None) => 0,
             Err(err) => {
-                eprintln!("[Rust FFI] sv_monomial_state: {err}");
+                eprintln!("[Rust FFI] sv_monomial_outputs: {err}");
                 -1
             }
         }
@@ -1376,44 +1435,84 @@ mod sv_tests {
     }
 
     #[test]
-    fn sv_monomial_state_reads_core_json() {
+    fn sv_monomial_outputs_reads_core_json() {
         unsafe {
-            let (mut k, mut ph) = (u64::MAX, u8::MAX);
-            // X on 0, S: i|01⟩; CNOT 0→1: i|11⟩; CZ: −i|11⟩.
+            let mut reg = u64::MAX;
+            let mut amp = [9.0f64; 2];
+            let mut vals = [9.0f64; 4];
+            // X on 0, S: i|01⟩; CNOT 0→1: i|11⟩; CZ: −i|11⟩. Qubit 1 goes to cbit 0, qubit 0
+            // to cbit 2.
             let mono = r#"[{"type":"X","params":0},{"type":"S","params":0},
                 {"type":"CNOT","params":[0,1]},{"type":"CZ","params":[0,1]},
-                {"type":"MEASURE","params":{"qubit":1,"cbit":0}}]"#;
+                {"type":"MEASURE","params":{"qubit":1,"cbit":0}},
+                {"type":"MEASURE","params":{"qubit":0,"cbit":2}}]"#;
+            let obs = c(r#"[[{"label":"ZI","coeff":{"real":1,"imag":0}}],
+                [{"label":"XZ","coeff":{"real":1,"imag":0}},
+                 {"label":"ZZ","coeff":{"real":0.5,"imag":0}}]]"#);
+            let ret = wqc_sv_monomial_outputs(
+                2,
+                c(mono).as_ptr(),
+                obs.as_ptr(),
+                &mut reg,
+                amp.as_mut_ptr(),
+                vals.as_mut_ptr(),
+                2,
+            );
+            assert_eq!(ret, 1);
+            assert_eq!(reg, 0b101);
+            // |11⟩ has no |00⟩ amplitude; ⟨Z on qubit 1⟩ = −1, ⟨XZ⟩ = 0, ½⟨ZZ⟩ = ½.
+            assert_eq!(amp, [0.0, 0.0]);
+            assert_eq!(vals, [-1.0, 0.0, 0.5, 0.0]);
+            // |0…0⟩ itself: amplitude i^k.
+            let z = r#"[{"type":"X","params":0},{"type":"Y","params":0}]"#;
             assert_eq!(
-                wqc_sv_monomial_state(2, c(mono).as_ptr(), &mut k, &mut ph),
+                wqc_sv_monomial_outputs(
+                    1,
+                    c(z).as_ptr(),
+                    std::ptr::null(),
+                    &mut reg,
+                    amp.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    0
+                ),
                 1
             );
-            assert_eq!((k, ph), (3, 3));
-            // A rounding gate, a mid-circuit circuit and bad input leave the outputs alone.
-            let (mut k, mut ph) = (7u64, 9u8);
-            assert_eq!(
-                wqc_sv_monomial_state(2, c(BELL).as_ptr(), &mut k, &mut ph),
-                0
-            );
+            assert_eq!((reg, amp), (0, [0.0, -1.0]), "Y·X|0⟩ = −i|0⟩");
+            // A rounding gate, a mid-circuit circuit, bad input, an observable count that does
+            // not match: nothing is written.
+            let (mut reg, mut amp) = (7u64, [3.0f64; 2]);
+            let mut call = |circuit: &str, n: u32| {
+                wqc_sv_monomial_outputs(
+                    n,
+                    c(circuit).as_ptr(),
+                    std::ptr::null(),
+                    &mut reg,
+                    amp.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            assert_eq!(call(BELL, 2), 0);
             let mid = r#"[{"type":"X","params":0},{"type":"MEASURE","params":{"qubit":0,"cbit":0}},
                 {"type":"X","params":1}]"#;
-            assert_eq!(
-                wqc_sv_monomial_state(2, c(mid).as_ptr(), &mut k, &mut ph),
-                -1
-            );
+            assert_eq!(call(mid, 2), -1);
             let far = r#"[{"type":"MEASURE","params":{"qubit":9,"cbit":0}}]"#;
+            assert_eq!(call(far, 2), -1);
+            assert_eq!(call("[]", 17), -1);
+            assert_eq!(call("not json", 2), -1);
             assert_eq!(
-                wqc_sv_monomial_state(2, c(far).as_ptr(), &mut k, &mut ph),
+                wqc_sv_monomial_outputs(
+                    2,
+                    c("[]").as_ptr(),
+                    obs.as_ptr(),
+                    &mut reg,
+                    amp.as_mut_ptr(),
+                    vals.as_mut_ptr(),
+                    1
+                ),
                 -1
             );
-            assert_eq!(
-                wqc_sv_monomial_state(17, c("[]").as_ptr(), &mut k, &mut ph),
-                -1
-            );
-            assert_eq!(
-                wqc_sv_monomial_state(2, std::ptr::null(), &mut k, &mut ph),
-                -1
-            );
-            assert_eq!((k, ph), (7, 9));
+            assert_eq!((reg, amp), (7, [3.0, 3.0]));
         }
     }
 

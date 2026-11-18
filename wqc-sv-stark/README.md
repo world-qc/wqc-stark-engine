@@ -102,7 +102,7 @@ A circuit whose gates are all monomial after fusion has no rounding step and so 
 `|0…0⟩` it reaches one basis state times `i^phase`, with no superposition. `leaf::monomial_state`
 returns that state (the frame's position of the stored `|0…0⟩`), the same as the dense execution
 (a test checks it), and a verifier recomputes such a circuit's results from it instead of
-verifying a proof (`wqc_sv_monomial_state` in `wqc-stark-ffi`).
+verifying a proof (`wqc_sv_monomial_outputs` in `wqc-stark-ffi` gives the register every shot reads, the `|0…0⟩` amplitude and the observables' values).
 
 ## Fusion
 
