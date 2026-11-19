@@ -458,10 +458,25 @@ pub(crate) fn split_rows<T>(
     [x, y, z]
 }
 
-/// Executes `plan`: the gate rows and the final stored vector.
-pub(crate) fn run(n: usize, plan: &Plan) -> (Vec<PairRow>, Vec<C>) {
-    let mut st = vec![(0i64, 0i64); 1 << n];
-    st[0] = (S, 0);
+/// Executes `plan` from `initial` (a logical state of `2^n` amplitudes), or from `|0…0⟩` when
+/// `None`: the gate rows and the final stored vector. The frame is the identity before the
+/// first gate, so the stored vector starts as the logical one.
+pub(crate) fn run_from(n: usize, plan: &Plan, initial: Option<&[C]>) -> (Vec<PairRow>, Vec<C>) {
+    let mut st = match initial {
+        Some(init) => {
+            assert_eq!(
+                init.len(),
+                1 << n,
+                "an initial state of {n} qubits has 2^{n} amplitudes"
+            );
+            init.to_vec()
+        }
+        None => {
+            let mut st = vec![(0i64, 0i64); 1 << n];
+            st[0] = (S, 0);
+            st
+        }
+    };
     let mut rows = Vec::with_capacity(plan.rows.len());
     for p in &plan.rows {
         // Every step touches each stored position once, so reading `st` in row order is
@@ -498,8 +513,18 @@ pub(crate) fn run(n: usize, plan: &Plan) -> (Vec<PairRow>, Vec<C>) {
 /// Executes validated gates: the gate rows and the final logical state. The circuit executed
 /// is the [`fuse`]d one, so the state differs from rounding after every gate as written.
 pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
+    execute_from(n, gates, None)
+}
+
+/// [`execute`] from `initial` (a logical state of `2^n` amplitudes), or from `|0…0⟩` when
+/// `None`: what a segment leaf ([`crate::leaf::build_segment`]) proves.
+///
+/// # Panics
+///
+/// If `initial` does not have `2^n` amplitudes (`build_segment` checks it, and its range).
+pub fn execute_from(n: usize, gates: &[Gate], initial: Option<&[C]>) -> (Vec<PairRow>, Vec<C>) {
     let plan = plan(n, gates);
-    let (rows, stored) = run(n, &plan);
+    let (rows, stored) = run_from(n, &plan, initial);
     let fin = plan.frame.logical(&stored);
     (rows, fin)
 }

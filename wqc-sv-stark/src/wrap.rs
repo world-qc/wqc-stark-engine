@@ -372,14 +372,16 @@ impl DigestLayer {
     }
 }
 
-/// Most leaves a wrapped root may have: the fixed shape is measured for 1 to 4
-/// (`tests::the_wrap_shape_matrix`); callers keep larger roots off the wrap, and the FFI
-/// refuses them before verifying anything.
-pub const MAX_LEAVES: usize = 4;
+/// Most leaves a wrapped root may have: every tier reaches the fixed shape and the one top
+/// commitment with 1 to 4 leaves (`tests::the_wrap_shape_matrix`) and with 64
+/// (`tests::the_wrap_takes_64_leaves`; low also with 5, 8, 16 and 32), the root growing about
+/// 0.43 MB and 6.8 s per leaf. Callers keep larger roots off the wrap, and the FFI refuses them
+/// before verifying anything.
+pub const MAX_LEAVES: usize = 64;
 
 /// Shape of every proof that leaves the [`NORMALIZE_LAYERS`]: primitive table rows (witness,
 /// public/const, ALU) and each table's degree bits. Measured to hold for every tier with 1 to 4
-/// leaves, and for 3, 5 and 8 qubits (`tests::the_wrap_shape_matrix`); other roots are refused.
+/// and 64 leaves, and for 3, 5 and 8 qubits (see [`MAX_LEAVES`]); other roots are refused.
 pub const FIXED_ROWS: [usize; 3] = [281, 68, 37865];
 pub const FIXED_DEGREE_BITS: [usize; 6] = [9, 7, 14, 14, 11, 4];
 

@@ -172,6 +172,26 @@ read the final amplitudes from the boundary table, so one proof covers both.
   with 64 rounding steps, all 16 qubits measured, proves in 35 s with 1024 shots and 42 s with
   2^16 shots (35 s without sampling); the proof grows by about 80–100 KB.
 
+## Segments
+
+A circuit too deep for one leaf ([`MAX_ROWS`]) is cut into segments, each a leaf. A segment
+leaf (`leaf::build_segment`) proves its gates from the state the earlier segments reach instead
+of `|0…0⟩`: that state is a preprocessed column (the initial value of each stored position,
+real and imaginary, in a separate boundary table `wqc/boundary_seg`), so it is part of the
+circuit. A verifier computes it with `leaf::segment_start` (each earlier segment fused on its
+own, applied in order, in the leaf's fixed-point arithmetic) and builds the segment's verifier
+from it (`leaf::build_segment_verifier`), as it builds the gates; a proof made from another state
+fails. The statement is a leaf's (`[context, digest]`, or a sampling one when the last segment
+samples), and a leaf from `|0…0⟩` keeps its own boundary table, so its format is unchanged.
+
+- **Result.** Each segment is fused on its own, so a cut circuit rounds differently from the
+  whole one fused at once: the result is that of the segments applied in order, and the cut is
+  part of what is proved.
+- **Cost.** Measured at n = 16 and 2^21 gate rows (low, 8-core Mac): a segment leaf builds in
+  7.6 s, proves in 39–40 s and its proof is 211 KB, against 7.5 s, 38–41 s and 206–211 KB for
+  a leaf from `|0…0⟩`; peak memory varied from 6.4 to 9.4 GiB across runs of either.
+- **Roots.** A root over segment leaves wraps like any other (see the wrap's measurements).
+
 ## Mid-circuit measurement
 
 `wire::parse_leaf(json, n)` reads a circuit with mid-circuit semantics (a RESET, an IF, or a
@@ -401,7 +421,7 @@ top's statement is the task's wrap digest, the SNARK's only public input
 its witness, and `snark::check` is the reference for every constraint the SNARK states.
 
 A `wrap::WrapProof` travels as `wrap::encode_wrap` bytes (postcard; `wrap::decode_wrap` refuses
-trailing bytes), and a root has at most `wrap::MAX_LEAVES` (4) leaves to be wrapped. The FFI's
+trailing bytes), and a root has at most `wrap::MAX_LEAVES` (64) leaves to be wrapped. The FFI's
 `wqc_sv_verify_wrap` verifies a root and its wrap together, refuses more leaves before
 verifying, and returns the wrap digest. It is `root_input::verify_wrap_json`, which runs the
 same check on the published evidence JSON (leaves, root, wrap chain): a SettlementV4
@@ -411,6 +431,11 @@ Measured (8-core Mac, every tier, 1 to 4 leaves, one top commitment throughout):
 `prove_wrap` about 30 s, `verify_wrap` about 7.5 s, top proof 115 to 120 KB. The top verifier
 circuit has 4,755 Poseidon2 rows, 20,583 ALU operations and 35,915 slots; with the top at
 `FriParams::RECURSION` it would have 7,725, 37,315 and 62,497.
+
+With 64 leaves (8-core Mac, 3-qubit leaves, `tests::the_wrap_takes_64_leaves`) every tier
+reaches the same top commitment: the root takes about 436 s and 27.3 MB at normal, high and
+ultra (about 298 s and 26.5 MB at low), and `prove_wrap` about 35 s. Roots over segment leaves
+wrap to it too (`tests::segment_roots_wrap_to_the_same_top`).
 
 ## Tests
 

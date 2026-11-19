@@ -40,6 +40,8 @@ pub struct Leaf {
     /// Fused.
     gates: Vec<Gate>,
     sampling: Option<Sampling>,
+    /// A segment leaf's initial logical state ([`build_segment`]).
+    initial: Option<Vec<C>>,
 }
 
 /// A leaf proof with the statement it was proved for.
@@ -94,7 +96,71 @@ where
 /// Builds and prepares the leaf circuit for `gates` on `n` qubits (`1 ≤ n ≤ MAX_QUBITS`) at
 /// `level`, which fixes the FRI parameters ([`FriParams::leaf`]) and so the verifier.
 pub fn build(level: SecurityLevel, n: usize, gates: Vec<Gate>) -> Result<Leaf, Error> {
-    build_with_tamper(FriParams::leaf(level), n, gates, None, Tamper::None)
+    build_with_tamper(FriParams::leaf(level), n, gates, None, None, Tamper::None)
+}
+
+/// Builds a segment leaf: `gates` on `n` qubits from `initial` instead of `|0…0⟩`, with
+/// `sampling` when the segment is a task's last and the task samples. `initial` is the
+/// logical state the task's earlier segments reach ([`segment_start`]); it is part of the
+/// circuit (a preprocessed column), so a verifier derives it itself, as it derives the gates,
+/// and a proof made from another initial state fails. The statement is a leaf's
+/// (`[context, digest]`, or a sampling one).
+///
+/// A circuit too deep for one leaf ([`MAX_ROWS`]) is cut into segments, each fused on its
+/// own: the result is that of the segments applied in order, which rounds differently from
+/// the whole circuit fused at once.
+pub fn build_segment(
+    level: SecurityLevel,
+    n: usize,
+    gates: Vec<Gate>,
+    initial: Vec<C>,
+    sampling: Option<Sampling>,
+) -> Result<Leaf, Error> {
+    build_with_tamper(
+        FriParams::leaf(level),
+        n,
+        gates,
+        sampling,
+        Some(initial),
+        Tamper::None,
+    )
+}
+
+/// The logical state from which the segment after `earlier` starts: `|0…0⟩` through each
+/// segment of `earlier` in order, each fused on its own ([`crate::exec::execute_from`]). The
+/// prover and the verifier of a segment leaf both compute it.
+pub fn segment_start(n: usize, earlier: &[Vec<Gate>]) -> Result<Vec<C>, Error> {
+    let mut state: Option<Vec<C>> = None;
+    for seg in earlier {
+        // Fused once, as `build_segment` fuses the segment it proves.
+        let plan = plan_fused(n, &validated_fuse(n, seg)?);
+        state = Some(plan.frame.logical(&run_from(n, &plan, state.as_deref()).1));
+    }
+    Ok(state.unwrap_or_else(|| {
+        let mut zero = vec![(0, 0); 1 << n];
+        zero[0] = (S, 0);
+        zero
+    }))
+}
+
+/// An initial state a segment leaf accepts: `2^n` amplitudes in the range a gate's output has
+/// (`[−2S, 2S)` per component, as the gate table range-checks), so the field arithmetic stays the
+/// integer one.
+fn check_initial(n: usize, initial: &[C]) -> Result<(), Error> {
+    if initial.len() != 1 << n {
+        return Err(Error::InvalidCircuit(format!(
+            "initial state of {} amplitudes, expected {}",
+            initial.len(),
+            1usize << n
+        )));
+    }
+    let ok = |x: i64| (-2 * S..2 * S).contains(&x);
+    if let Some(k) = initial.iter().position(|&(re, im)| !ok(re) || !ok(im)) {
+        return Err(Error::InvalidCircuit(format!(
+            "initial amplitude {k} out of range"
+        )));
+    }
+    Ok(())
 }
 
 /// [`build`] for a `sample_counts` leaf: the circuit ends in `sampling`'s measurements, and a
@@ -111,6 +177,7 @@ pub fn build_sampling(
         n,
         gates,
         Some(sampling),
+        None,
         Tamper::None,
     )
 }
@@ -118,7 +185,7 @@ pub fn build_sampling(
 /// [`build`] with explicit FRI parameters (tests use [`FriParams::TESTING`] for speed).
 #[cfg(test)]
 pub(crate) fn build_with(fri: FriParams, n: usize, gates: Vec<Gate>) -> Result<Leaf, Error> {
-    build_with_tamper(fri, n, gates, None, Tamper::None)
+    build_with_tamper(fri, n, gates, None, None, Tamper::None)
 }
 
 /// A leaf circuit before preparation.
@@ -135,11 +202,15 @@ fn construct(
     n: usize,
     gates: Vec<Gate>,
     sampling: &Option<Sampling>,
+    initial: &Option<Vec<C>>,
     tamper: Tamper,
 ) -> Result<Unprepared, Error> {
     let gates = validated_fuse(n, &gates)?;
     if let Some(s) = &sampling {
         s.validate(n)?;
+    }
+    if let Some(init) = initial {
+        check_initial(n, init)?;
     }
     let rows = rounding_steps(&gates) << (n - 1);
     if rows > MAX_ROWS {
@@ -153,6 +224,7 @@ fn construct(
         n,
         gates: gates.clone(),
         sampling: sampling.clone(),
+        initial: initial.clone(),
         tamper,
     });
     for p in gate_chunk_plugins() {
@@ -161,12 +233,12 @@ fn construct(
     for p in sampling_plugins() {
         b.register_npo(p);
     }
-    for p in [
-        boundary_plugin(),
-        range_plugin(),
-        digest_plugin(),
-        perm_plugin(),
-    ] {
+    let boundary = if initial.is_some() {
+        seg_boundary_plugin()
+    } else {
+        boundary_plugin()
+    };
+    for p in [boundary, range_plugin(), digest_plugin(), perm_plugin()] {
         b.register_npo(p);
     }
     let ctx: Vec<_> = (0..4).map(|_| b.public_input()).collect();
@@ -240,9 +312,10 @@ pub(crate) fn build_with_tamper(
     n: usize,
     gates: Vec<Gate>,
     sampling: Option<Sampling>,
+    initial: Option<Vec<C>>,
     tamper: Tamper,
 ) -> Result<Leaf, Error> {
-    let u = construct(fri, n, gates, &sampling, tamper)?;
+    let u = construct(fri, n, gates, &sampling, &initial, tamper)?;
     let prepared = prepare!(fri.config(), &u)?;
     Ok(Leaf {
         prepared,
@@ -251,6 +324,7 @@ pub(crate) fn build_with_tamper(
         n,
         gates: u.gates,
         sampling,
+        initial,
     })
 }
 
@@ -263,8 +337,20 @@ pub fn build_verifier(
     gates: Vec<Gate>,
     sampling: Option<Sampling>,
 ) -> Result<LeafVerifier, Error> {
+    build_segment_verifier(level, n, gates, None, sampling)
+}
+
+/// [`build_verifier`] for a segment leaf ([`build_segment`]) from `initial`, or for a leaf
+/// from `|0…0⟩` when `None`.
+pub fn build_segment_verifier(
+    level: SecurityLevel,
+    n: usize,
+    gates: Vec<Gate>,
+    initial: Option<Vec<C>>,
+    sampling: Option<Sampling>,
+) -> Result<LeafVerifier, Error> {
     let fri = FriParams::leaf(level);
-    let u = construct(fri, n, gates, &sampling, Tamper::None)?;
+    let u = construct(fri, n, gates, &sampling, &initial, Tamper::None)?;
     let prepared = prepare!(VerifyCfg::new(fri.config()), &u)?;
     Ok(LeafVerifier {
         verifier: Verifier::Coset(prepared.verifier()),
@@ -459,7 +545,9 @@ impl Leaf {
         inputs.push(F::from_u32(sampling.shots));
         let proof = self.prove_inputs(inputs)?;
         let plan = plan_fused(self.n, &self.gates);
-        let logical = plan.frame.logical(&run(self.n, &plan).1);
+        let logical = plan
+            .frame
+            .logical(&run_from(self.n, &plan, self.initial.as_deref()).1);
         let counts = sample(&logical, sampling, seed)?.counts;
         Ok((proof, counts))
     }
