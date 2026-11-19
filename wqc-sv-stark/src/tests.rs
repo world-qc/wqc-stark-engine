@@ -2905,7 +2905,9 @@ fn segment_roots_wrap_to_the_same_top() {
 
 /// A leaf proof from before segment leaves (wqc-stark-engine 9d8d3a6, `FriParams::TESTING`,
 /// `gates()` on 3 qubits, context `CTX`) still verifies: adding a table must leave a leaf from
-/// `|0…0⟩` unchanged, since nodes and the orchestrator upgrade separately.
+/// `|0…0⟩` unchanged, since nodes and the orchestrator upgrade separately. The fixture is for
+/// `gates()` as it is: changing that circuit means proving the fixture again (at a commit
+/// before the change being guarded against).
 #[test]
 fn an_older_leaf_proof_still_verifies() {
     let proof = include_bytes!("../testdata/leaf_v2_testing_n3.proof");
@@ -2925,4 +2927,39 @@ fn an_older_leaf_proof_still_verifies() {
         .unwrap()
         .verify(&proof[..], &expected)
         .unwrap();
+}
+
+/// A sampling leaf proof from before segment leaves (9d8d3a6, `sampling_leaf`, seed 7, context
+/// `CTX`) still verifies, statement and counts included. As for the unitary fixture, changing
+/// `sampling_leaf`'s circuit means proving it again.
+#[test]
+fn an_older_sampling_leaf_proof_still_verifies() {
+    use crate::born::counts_digest;
+    use crate::leaf::sampling_statement;
+    let proof = include_bytes!("../testdata/sampling_v2_testing_n2.proof");
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/sampling_v2_testing_n2.json")).unwrap();
+    let counts: Vec<u64> = serde_json::from_value(fixture["counts"].clone()).unwrap();
+    let words: Vec<u64> = serde_json::from_value(fixture["statement"].clone()).unwrap();
+    let gates = vec![Gate::h(0), Gate::cnot(0, 1), Gate::ry(1, 0.7)];
+    let fin = execute(2, &gates).1;
+    let expected =
+        sampling_statement(CTX, terminal_digest(&fin), 7, 64, counts_digest(&counts)).unwrap();
+    assert_eq!(
+        words,
+        expected
+            .iter()
+            .map(|x| x.as_canonical_u64())
+            .collect::<Vec<_>>()
+    );
+    sampling_leaf(Tamper::None)
+        .verify(&proof[..], &expected)
+        .unwrap();
+}
+
+/// `execute_from` refuses an initial state of the wrong length instead of reading past it.
+#[test]
+#[should_panic(expected = "amplitudes")]
+fn execute_from_panics_on_a_short_initial_state() {
+    execute_from(2, &[Gate::h(0)], Some(&[(S, 0); 3]));
 }
