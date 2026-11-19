@@ -463,7 +463,14 @@ pub(crate) fn split_rows<T>(
 /// first gate, so the stored vector starts as the logical one.
 pub(crate) fn run_from(n: usize, plan: &Plan, initial: Option<&[C]>) -> (Vec<PairRow>, Vec<C>) {
     let mut st = match initial {
-        Some(init) => init.to_vec(),
+        Some(init) => {
+            assert_eq!(
+                init.len(),
+                1 << n,
+                "an initial state of {n} qubits has 2^{n} amplitudes"
+            );
+            init.to_vec()
+        }
         None => {
             let mut st = vec![(0i64, 0i64); 1 << n];
             st[0] = (S, 0);
@@ -511,6 +518,10 @@ pub fn execute(n: usize, gates: &[Gate]) -> (Vec<PairRow>, Vec<C>) {
 
 /// [`execute`] from `initial` (a logical state of `2^n` amplitudes), or from `|0…0⟩` when
 /// `None`: what a segment leaf ([`crate::leaf::build_segment`]) proves.
+///
+/// # Panics
+///
+/// If `initial` does not have `2^n` amplitudes (`build_segment` checks it, and its range).
 pub fn execute_from(n: usize, gates: &[Gate], initial: Option<&[C]>) -> (Vec<PairRow>, Vec<C>) {
     let plan = plan(n, gates);
     let (rows, stored) = run_from(n, &plan, initial);

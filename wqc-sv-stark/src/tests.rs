@@ -2902,3 +2902,27 @@ fn segment_roots_wrap_to_the_same_top() {
         top_commitment(&top1).unwrap()
     );
 }
+
+/// A leaf proof from before segment leaves (wqc-stark-engine 9d8d3a6, `FriParams::TESTING`,
+/// `gates()` on 3 qubits, context `CTX`) still verifies: adding a table must leave a leaf from
+/// `|0…0⟩` unchanged, since nodes and the orchestrator upgrade separately.
+#[test]
+fn an_older_leaf_proof_still_verifies() {
+    let proof = include_bytes!("../testdata/leaf_v2_testing_n3.proof");
+    let words: Vec<u64> = serde_json::from_str(include_str!(
+        "../testdata/leaf_v2_testing_n3.statement.json"
+    ))
+    .unwrap();
+    let expected = honest_statement();
+    assert_eq!(
+        words,
+        expected
+            .iter()
+            .map(|x| x.as_canonical_u64())
+            .collect::<Vec<_>>()
+    );
+    build_with(FRI, 3, gates())
+        .unwrap()
+        .verify(&proof[..], &expected)
+        .unwrap();
+}
