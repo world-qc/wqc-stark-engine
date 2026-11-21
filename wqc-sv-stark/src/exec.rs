@@ -392,8 +392,15 @@ pub(crate) fn plan(n: usize, gates: &[Gate]) -> Plan {
 
 /// [`plan`] for gates that are already the output of [`fuse`] (the leaf fuses once, at build).
 pub(crate) fn plan_fused(n: usize, gates: &[Gate]) -> Plan {
-    let mut frame = Frame::identity(n);
     let mut rows = Vec::new();
+    let (steps, frame) = plan_each(n, gates, |r| rows.push(r));
+    Plan { rows, steps, frame }
+}
+
+/// [`plan_fused`] with each row handed to `row` in order instead of kept: the number of steps
+/// and the final frame.
+fn plan_each(n: usize, gates: &[Gate], mut row: impl FnMut(PlanRow)) -> (usize, Frame) {
+    let mut frame = Frame::identity(n);
     let mut steps = 0;
     for g in gates {
         if let Some(mono) = g.monomial() {
@@ -414,7 +421,7 @@ pub(crate) fn plan_fused(n: usize, gates: &[Gate]) -> Plan {
             } else {
                 g.m
             };
-            rows.push(PlanRow {
+            row(PlanRow {
                 t: steps,
                 i: pi,
                 j: pj,
@@ -428,7 +435,7 @@ pub(crate) fn plan_fused(n: usize, gates: &[Gate]) -> Plan {
         }
         steps += 1;
     }
-    Plan { rows, steps, frame }
+    (steps, frame)
 }
 
 /// The gate table is split into this many tables, so its rows pad to a sum of powers of two
@@ -462,7 +469,24 @@ pub(crate) fn split_rows<T>(
 /// `None`: the gate rows and the final stored vector. The frame is the identity before the
 /// first gate, so the stored vector starts as the logical one.
 pub(crate) fn run_from(n: usize, plan: &Plan, initial: Option<&[C]>) -> (Vec<PairRow>, Vec<C>) {
-    let mut st = match initial {
+    let mut st = start_state(n, initial);
+    let rows = plan.rows.iter().map(|p| step(&mut st, p)).collect();
+    (rows, st)
+}
+
+/// The final logical state of fused gates from `initial` (or `|0…0⟩`), as
+/// `plan.frame.logical(&run_from(n, &plan, initial).1)` with `plan = plan_fused(n, gates)`,
+/// but without keeping the plan's rows or the gate rows: memory is `O(2^n)`, not `O(W)`.
+pub(crate) fn run_state(n: usize, gates: &[Gate], initial: Option<&[C]>) -> Vec<C> {
+    let mut st = start_state(n, initial);
+    let (_, frame) = plan_each(n, gates, |p| {
+        step(&mut st, &p);
+    });
+    frame.logical(&st)
+}
+
+fn start_state(n: usize, initial: Option<&[C]>) -> Vec<C> {
+    match initial {
         Some(init) => {
             assert_eq!(
                 init.len(),
@@ -476,38 +500,38 @@ pub(crate) fn run_from(n: usize, plan: &Plan, initial: Option<&[C]>) -> (Vec<Pai
             st[0] = (S, 0);
             st
         }
-    };
-    let mut rows = Vec::with_capacity(plan.rows.len());
-    for p in &plan.rows {
-        // Every step touches each stored position once, so reading `st` in row order is
-        // reading the previous step's value.
-        let (ai, aj) = (st[p.i], st[p.j]);
-        let (ni, nj) = if p.active {
-            let (x, y, z, w) = (
-                cm(p.m[0], ai),
-                cm(p.m[1], aj),
-                cm(p.m[2], ai),
-                cm(p.m[3], aj),
-            );
-            ((x.0 + y.0, x.1 + y.1), (z.0 + w.0, z.1 + w.1))
-        } else {
-            ((ai.0 * S, ai.1 * S), (aj.0 * S, aj.1 * S))
-        };
-        let ((bi, ri), (bj, rj)) = (round_div(ni), round_div(nj));
-        st[p.i] = bi;
-        st[p.j] = bj;
-        rows.push(PairRow {
-            t: p.t,
-            i: p.i,
-            j: p.j,
-            active: p.active,
-            m: p.m,
-            a: [ai, aj],
-            b: [bi, bj],
-            r: [ri, rj],
-        });
     }
-    (rows, st)
+}
+
+/// Executes one plan row on the stored vector `st`.
+fn step(st: &mut [C], p: &PlanRow) -> PairRow {
+    // Every step touches each stored position once, so reading `st` in row order is
+    // reading the previous step's value.
+    let (ai, aj) = (st[p.i], st[p.j]);
+    let (ni, nj) = if p.active {
+        let (x, y, z, w) = (
+            cm(p.m[0], ai),
+            cm(p.m[1], aj),
+            cm(p.m[2], ai),
+            cm(p.m[3], aj),
+        );
+        ((x.0 + y.0, x.1 + y.1), (z.0 + w.0, z.1 + w.1))
+    } else {
+        ((ai.0 * S, ai.1 * S), (aj.0 * S, aj.1 * S))
+    };
+    let ((bi, ri), (bj, rj)) = (round_div(ni), round_div(nj));
+    st[p.i] = bi;
+    st[p.j] = bj;
+    PairRow {
+        t: p.t,
+        i: p.i,
+        j: p.j,
+        active: p.active,
+        m: p.m,
+        a: [ai, aj],
+        b: [bi, bj],
+        r: [ri, rj],
+    }
 }
 
 /// Executes validated gates: the gate rows and the final logical state. The circuit executed

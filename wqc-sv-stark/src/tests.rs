@@ -2700,6 +2700,31 @@ fn monomial_state_matches_execution() {
     assert!(monomial_state(17, &[]).is_err(), "over MAX_QUBITS");
 }
 
+/// The start of a segment, computed without keeping the head's rows, is the state the head's
+/// gate rows end in, bit for bit: each earlier segment fused on its own and executed from the
+/// previous one's end.
+#[test]
+fn segment_start_matches_the_executed_head() {
+    use crate::leaf::segment_start;
+    for n in 1..=5 {
+        for seed in 0..6 {
+            let all = random_circuit(n, 40, 100 * n as u64 + seed);
+            let segs: Vec<Vec<Gate>> = all.chunks(7).map(<[Gate]>::to_vec).collect();
+            let mut state = execute(n, &[]).1;
+            for k in 0..=segs.len() {
+                assert_eq!(
+                    segment_start(n, &segs[..k]).unwrap(),
+                    state,
+                    "n = {n}, seed {seed}, segment {k}"
+                );
+                if let Some(seg) = segs.get(k) {
+                    state = execute_from(n, seg, Some(&state)).1;
+                }
+            }
+        }
+    }
+}
+
 /// A segment leaf proves its segment from the state the earlier segments reach: the chain of
 /// two segments gives `execute_from` over each in turn, a proof made from another initial
 /// state fails the honest verifier, and the leaf from `|0…0⟩` is unchanged by segments.
