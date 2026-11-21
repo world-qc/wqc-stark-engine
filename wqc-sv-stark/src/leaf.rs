@@ -132,9 +132,9 @@ pub fn build_segment(
 pub fn segment_start(n: usize, earlier: &[Vec<Gate>]) -> Result<Vec<C>, Error> {
     let mut state: Option<Vec<C>> = None;
     for seg in earlier {
-        // Fused once, as `build_segment` fuses the segment it proves.
-        let plan = plan_fused(n, &validated_fuse(n, seg)?);
-        state = Some(plan.frame.logical(&run_from(n, &plan, state.as_deref()).1));
+        // Fused once, as `build_segment` fuses the segment it proves. Only the state is kept,
+        // so a long head costs time but not memory.
+        state = Some(run_state(n, &validated_fuse(n, seg)?, state.as_deref()));
     }
     Ok(state.unwrap_or_else(|| {
         let mut zero = vec![(0, 0); 1 << n];

@@ -198,7 +198,11 @@ samples), and a leaf from `|0…0⟩` keeps its own boundary table, so its forma
   with the cuts and the segment's index, so every party derives the same segments.
   `segment::plan_tail` finds the earliest cut whose tail fits a row limit. Only that tail is
   proved: its start is computed by every verifier, so a proof of the head would show nothing
-  more. The head's depth is bounded by that computation, not by a leaf.
+  more. The head's depth is bounded by that computation, not by a leaf. `segment_start` keeps
+  only the `2^n` amplitudes, not the head's rows, so its memory does not grow with the head: a
+  head of 1.6·10^9 gate rows (n = 16, about 50,000 rotations) takes 14 s on an 8-core Mac. At
+  n = 8 with a 4.2·10^6-row head, a tail verifier peaks at 83 MB, against 1.66 GB when the head's
+  rows were kept.
 - **Verifying a cut task.** The leaves JSON (`root_input`) takes `cuts` and `segment` per leaf.
   It builds one leaf at a time and keeps only its verifier (`root::verified_root_over`), so the
   peak is one prepared leaf, not all of them. Verifying a tail costs computing the head's
