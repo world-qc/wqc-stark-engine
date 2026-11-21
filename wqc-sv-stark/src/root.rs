@@ -11,6 +11,10 @@
 //! against the verifier its children give before it is used.
 
 use p3_circuit_prover::batch_stark_prover::CircuitVerifier;
+
+/// The verifier [`verified_root_over`] and [`prove_root_over`] take per leaf
+/// ([`Leaf::verifier`]), re-exported so callers need not depend on the prover crate.
+pub use p3_circuit_prover::batch_stark_prover::CircuitVerifier as LeafCircuitVerifier;
 use serde::{Deserialize, Serialize};
 
 use crate::leaf::{decode_proof, encode_proof, verifier_peak_bytes, Leaf, LeafProof};
