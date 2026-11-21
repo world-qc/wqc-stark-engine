@@ -167,44 +167,30 @@ pub fn split(gates: Vec<Gate>, cuts: &[usize]) -> Result<Vec<Vec<Gate>>, Error> 
     Ok(out)
 }
 
-/// Where to cut `gates` on `n` qubits so each segment has at most `max_rows` gate rows: from
-/// the first gate, each segment takes as many gates as fit, scanning one more gate at a time
-/// (fusion can lower a segment's rows as it grows, so the last fitting end is kept). Returns
-/// the cuts, empty when the whole circuit fits one leaf, or `None` when one gate alone is over
-/// `max_rows` or the circuit needs more than `max_segments` segments.
-pub fn plan_cuts(
-    n: usize,
-    gates: &[Gate],
-    max_rows: usize,
-    max_segments: usize,
-) -> Result<Option<Vec<usize>>, Error> {
+/// Where to cut `gates` on `n` qubits so the part after the cut fits one leaf of at most
+/// `max_rows` gate rows: the earliest cut whose tail fits, scanning back from the end one gate
+/// at a time (fusion can lower the tail's rows as it grows, so the earliest fitting start is
+/// kept). Returns `Some(0)` when the whole circuit fits one leaf (no cut), `Some(c)` to prove
+/// gates `c..` from the state gates `..c` reach, or `None` when the last gate alone is over
+/// `max_rows`.
+///
+/// Only the tail is proved: its leaf starts from the state the head reaches, which every
+/// verifier computes itself ([`leaf::segment_start`]), so a proof of the head would add nothing
+/// to what the tail's proof shows. The head's depth is bounded by that computation, not by a
+/// leaf.
+pub fn plan_tail(n: usize, gates: &[Gate], max_rows: usize) -> Result<Option<usize>, Error> {
     if gate_rows(n, gates)? <= max_rows {
-        return Ok(Some(Vec::new()));
+        return Ok(Some(0));
     }
-    let mut cuts = Vec::new();
-    let mut start = 0;
-    while start < gates.len() {
-        if cuts.len() + 1 > max_segments {
-            return Ok(None);
+    let mut earliest = None;
+    for c in (0..gates.len()).rev() {
+        if gate_rows(n, &gates[c..])? <= max_rows {
+            earliest = Some(c);
+        } else if earliest.is_some() {
+            break;
         }
-        let mut end = None;
-        for e in start + 1..=gates.len() {
-            if gate_rows(n, &gates[start..e])? <= max_rows {
-                end = Some(e);
-            } else if end.is_some() {
-                break;
-            }
-        }
-        let Some(e) = end else {
-            return Ok(None);
-        };
-        if e == gates.len() {
-            return Ok(Some(cuts));
-        }
-        cuts.push(e);
-        start = e;
     }
-    Ok(Some(cuts))
+    Ok(earliest)
 }
 
 #[cfg(test)]
@@ -264,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_cuts_fills_each_segment() {
+    fn plan_tail_cuts_where_the_tail_fits() {
         // Each RY is one rounding step of 2^(n−1) = 4 rows on 3 qubits; each CNOT folds.
         let gates: Vec<Gate> = (0..6)
             .flat_map(|k| {
@@ -275,26 +261,26 @@ mod tests {
             })
             .collect();
         assert_eq!(gate_rows(3, &gates).unwrap(), 24);
+        assert_eq!(plan_tail(3, &gates, 24).unwrap(), Some(0), "fits one leaf");
+        let c = plan_tail(3, &gates, 8).unwrap().unwrap();
         assert_eq!(
-            plan_cuts(3, &gates, 24, 1).unwrap(),
-            Some(vec![]),
-            "fits one leaf"
+            gate_rows(3, &gates[c..]).unwrap(),
+            8,
+            "the tail holds two steps"
         );
-        let cuts = plan_cuts(3, &gates, 8, 4).unwrap().unwrap();
-        let segs = split(gates.clone(), &cuts).unwrap();
-        assert_eq!(segs.len(), 3);
-        for s in &segs {
-            assert!(gate_rows(3, s).unwrap() <= 8);
-        }
-        assert_eq!(
-            plan_cuts(3, &gates, 8, 2).unwrap(),
-            None,
-            "three segments needed"
+        assert!(
+            gate_rows(3, &gates[c - 1..]).unwrap() > 8,
+            "the earliest fitting cut"
         );
         assert_eq!(
-            plan_cuts(3, &gates, 2, 9).unwrap(),
+            plan_tail(3, &gates, 2).unwrap(),
+            Some(11),
+            "only the last CNOT, which folds, fits"
+        );
+        assert_eq!(
+            plan_tail(3, &gates[..11], 2).unwrap(),
             None,
-            "one gate is over the limit"
+            "the last gate is over the limit"
         );
     }
 }
