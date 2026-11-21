@@ -124,6 +124,7 @@ fn root_leaf(l: &RootLeaf) -> Result<(Leaf, LeafProof), Error> {
     };
     if !l.cuts.is_empty() {
         let segs = Segments::parse(&l.circuit, n, &l.cuts)?;
+        segs.check_tail(l.segment)?;
         let sampling = segs.sampling(l.segment, l.classical_bit_count, l.shots)?;
         let statement = match &sampling {
             None => leaf::statement(d.context(), l.digest)?,
@@ -184,9 +185,9 @@ mod tests {
         assert!(err.to_string().contains("base64"), "{err}");
     }
 
-    /// A task cut into two segments verifies through the leaves JSON, its root and its wrap,
-    /// against each segment's dispatch and the last one's counts; another cut, a sampling
-    /// earlier segment or another digest does not.
+    /// A cut task's one leaf, its tail, verifies through the leaves JSON, its root and its
+    /// wrap, against the tail's dispatch and counts; another cut, the head's index, a tail
+    /// without shots or another digest does not.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "release only")]
     fn a_cut_task_verifies_through_the_json() {
@@ -196,72 +197,46 @@ mod tests {
             {"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"MEASURE","params":{"qubit":1,"cbit":1}}]"#;
         let level = SecurityLevel::Low;
         let segs = Segments::parse(circuit, 2, &[2]).unwrap();
-        let d = |k: usize| Dispatch {
+        let d = Dispatch {
             circuit_id: "c",
-            sub_task_id: if k == 0 { "s0" } else { "s1" },
+            sub_task_id: "s1",
             node_id: "n",
-            slice_id: if k == 0 { "0" } else { "1" },
+            slice_id: "1",
         };
-        let (l0, l1) = (
-            segs.leaf(level, 0, 2, 0).unwrap(),
-            segs.leaf(level, 1, 2, 64).unwrap(),
-        );
-        let p0 = l0.prove(d(0).context()).unwrap();
-        let (p1, counts) = l1.prove_sampling(d(1).context(), 7).unwrap();
-        let (root, _) = root::prove_root(&[(&l0, &p0), (&l1, &p1)]).unwrap();
-        let (rv, rp) = root::verified_root(&[(&l0, &p0), (&l1, &p1)], &root).unwrap();
+        let tail = segs.leaf(level, 1, 2, 64).unwrap();
+        let (p, counts) = tail.prove_sampling(d.context(), 7).unwrap();
+        let (root, _) = root::prove_root(&[(&tail, &p)]).unwrap();
+        let (rv, rp) = root::verified_root(&[(&tail, &p)], &root).unwrap();
         let (wrap, top) = wrap::prove_wrap(rv, &rp).unwrap();
         let (root, wrap) = (root::encode_root(&root), wrap::encode_wrap(&wrap));
-        let words = |p: &LeafProof| -> Vec<u64> {
-            p.statement[4..8]
-                .iter()
-                .map(|x| x.as_canonical_u64())
-                .collect()
-        };
-        let leaf_json = |k: usize, p: &LeafProof, cuts: &[usize], shots: u64, digest: Vec<u64>| {
-            serde_json::json!({
+        let digest: Vec<u64> = p.statement[4..8]
+            .iter()
+            .map(|x| x.as_canonical_u64())
+            .collect();
+        let json = |cuts: &[usize], segment: usize, shots: u64, digest: &[u64]| {
+            serde_json::json!({"leaves": [{
                 "qubit_count": 2, "circuit": circuit, "classical_bit_count": 2, "shots": shots,
-                "security_level": "low", "circuit_id": "c", "sub_task_id": d(k).sub_task_id,
-                "node_id": "n", "slice_id": d(k).slice_id, "digest": digest, "sample_seed": 7,
+                "security_level": "low", "circuit_id": "c", "sub_task_id": "s1",
+                "node_id": "n", "slice_id": "1", "digest": digest, "sample_seed": 7,
                 "counts": if shots > 0 { crate::wire::counts_json(&counts, 2) } else { String::new() },
                 "proof": base64::engine::general_purpose::STANDARD.encode(leaf::encode_proof(&p.proof)),
-                "cuts": cuts, "segment": k,
-            })
+                "cuts": cuts, "segment": segment,
+            }]})
+            .to_string()
         };
-        let json = |a: serde_json::Value, b: serde_json::Value| {
-            serde_json::json!({"leaves": [a, b]}).to_string()
-        };
-        let good = json(
-            leaf_json(0, &p0, &[2], 0, words(&p0)),
-            leaf_json(1, &p1, &[2], 64, words(&p1)),
-        );
+        let good = json(&[2], 1, 64, &digest);
         verify_root_json(&good, &root).unwrap();
         assert_eq!(
             verify_wrap_json(&good, &root, &wrap).unwrap().to_vec(),
             wrap::snark_public_inputs(&top)
         );
+        let mut other = digest.clone();
+        other[0] ^= 1;
         for (what, bad) in [
-            (
-                "another cut",
-                json(
-                    leaf_json(0, &p0, &[1], 0, words(&p0)),
-                    leaf_json(1, &p1, &[1], 64, words(&p1)),
-                ),
-            ),
-            (
-                "an earlier segment with shots",
-                json(
-                    leaf_json(0, &p0, &[2], 64, words(&p0)),
-                    leaf_json(1, &p1, &[2], 64, words(&p1)),
-                ),
-            ),
-            (
-                "another digest",
-                json(
-                    leaf_json(0, &p0, &[2], 0, words(&p1)),
-                    leaf_json(1, &p1, &[2], 64, words(&p1)),
-                ),
-            ),
+            ("another cut", json(&[1], 1, 64, &digest)),
+            ("the head", json(&[2], 0, 0, &digest)),
+            ("a tail without shots", json(&[2], 1, 0, &digest)),
+            ("another digest", json(&[2], 1, 64, &other)),
         ] {
             assert!(verify_root_json(&bad, &root).is_err(), "{what}");
         }

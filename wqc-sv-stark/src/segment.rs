@@ -11,7 +11,12 @@ use crate::born::{Measure, Sampling};
 use crate::exec::{Gate, C};
 use crate::leaf::{self, gate_rows, Leaf, LeafVerifier};
 use crate::wire::parse_circuit;
-use crate::{Error, SecurityLevel};
+use crate::{Error, SecurityLevel, MAX_QUBITS};
+
+/// How far back from the circuit's end [`plan_tail`] looks for a cut, in gates. Any cut is
+/// sound (every verifier computes the head), so the bound only trades a longer head for a
+/// plan that stays linear in the circuit: each step fuses the tail again.
+pub const TAIL_SCAN_GATES: usize = 1 << 13;
 
 /// A terminal circuit cut into segments.
 pub struct Segments {
@@ -25,6 +30,12 @@ impl Segments {
     /// Reads `circuit_json` (wqc-core's gate list) on `n` qubits and cuts it at `cuts`: strictly
     /// increasing, each between 1 and the gate count minus 1, so no segment is empty.
     pub fn parse(circuit_json: &str, n: usize, cuts: &[usize]) -> Result<Self, Error> {
+        // Before anything allocates `2^n` amplitudes (`start`).
+        if !(1..=MAX_QUBITS).contains(&n) {
+            return Err(Error::InvalidCircuit(format!(
+                "{n} qubits, supported 1..={MAX_QUBITS}"
+            )));
+        }
         let c = parse_circuit(circuit_json)?;
         if let Some(m) = c.measures.iter().find(|m| m.qubit >= n) {
             return Err(Error::InvalidCircuit(format!(
@@ -45,6 +56,18 @@ impl Segments {
 
     pub fn is_empty(&self) -> bool {
         self.segments.is_empty()
+    }
+
+    /// Fails unless `k` is the last segment, the tail: the only one a cut task proves
+    /// ([`plan_tail`]).
+    pub fn check_tail(&self, k: usize) -> Result<(), Error> {
+        if k + 1 != self.len() {
+            return Err(Error::InvalidCircuit(format!(
+                "segment {k} of {}: only the last segment (the tail) is proved",
+                self.len()
+            )));
+        }
+        Ok(())
     }
 
     /// The state segment `k` starts from ([`leaf::segment_start`]).
@@ -169,10 +192,10 @@ pub fn split(gates: Vec<Gate>, cuts: &[usize]) -> Result<Vec<Vec<Gate>>, Error> 
 
 /// Where to cut `gates` on `n` qubits so the part after the cut fits one leaf of at most
 /// `max_rows` gate rows: the earliest cut whose tail fits, scanning back from the end one gate
-/// at a time (fusion can lower the tail's rows as it grows, so the earliest fitting start is
-/// kept). Returns `Some(0)` when the whole circuit fits one leaf (no cut), `Some(c)` to prove
-/// gates `c..` from the state gates `..c` reach, or `None` when the last gate alone is over
-/// `max_rows`.
+/// at a time over at most [`TAIL_SCAN_GATES`] gates (fusion can lower the tail's rows as it
+/// grows, so the earliest fitting start is kept). Returns `Some(0)` when the whole circuit
+/// fits one leaf (no cut), `Some(c)` to prove gates `c..` from the state gates `..c` reach, or
+/// `None` when no tail within the scan fits (the last gate alone is over `max_rows`).
 ///
 /// Only the tail is proved: its leaf starts from the state the head reaches, which every
 /// verifier computes itself ([`leaf::segment_start`]), so a proof of the head would add nothing
@@ -183,7 +206,7 @@ pub fn plan_tail(n: usize, gates: &[Gate], max_rows: usize) -> Result<Option<usi
         return Ok(Some(0));
     }
     let mut earliest = None;
-    for c in (0..gates.len()).rev() {
+    for c in (gates.len().saturating_sub(TAIL_SCAN_GATES)..gates.len()).rev() {
         if gate_rows(n, &gates[c..])? <= max_rows {
             earliest = Some(c);
         } else if earliest.is_some() {
@@ -282,5 +305,26 @@ mod tests {
             None,
             "the last gate is over the limit"
         );
+    }
+
+    #[test]
+    fn plan_tail_scans_a_bounded_tail() {
+        // Rounding steps, then more folding gates than the scan covers: the tail found is the
+        // scanned window, all of it fitting, and the plan stays fast.
+        let mut gates: Vec<Gate> = (0..32).map(|k| Gate::ry(k % 3, 0.3 + k as f64)).collect();
+        gates.extend((0..TAIL_SCAN_GATES + 100).map(|k| Gate::x(k % 3)));
+        let c = plan_tail(3, &gates, 8).unwrap().unwrap();
+        assert_eq!(c, gates.len() - TAIL_SCAN_GATES);
+        assert_eq!(gate_rows(3, &gates[c..]).unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_checks_the_qubit_count_and_the_tail() {
+        for n in [0, MAX_QUBITS + 1, 40] {
+            assert!(Segments::parse(TWO, n, &[2]).is_err(), "{n} qubits");
+        }
+        let s = Segments::parse(TWO, 2, &[2]).unwrap();
+        assert!(s.check_tail(1).is_ok());
+        assert!(s.check_tail(0).is_err() && s.check_tail(2).is_err());
     }
 }
