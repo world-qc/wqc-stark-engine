@@ -82,6 +82,16 @@ impl Layer {
         Self::over(leaf.verifier(), &sample.proof, &sample.statement, fri)
     }
 
+    /// [`Layer::over_leaf_with`] from the leaf's verifier alone (the leaf itself may be
+    /// dropped: a root's verification keeps one verifier per leaf, not the leaves).
+    pub(crate) fn over_leaf_verifier(
+        verifier: CircuitVerifier<Cfg>,
+        sample: &LeafProof,
+        fri: FriParams,
+    ) -> Result<Self, Error> {
+        Self::over(verifier, &sample.proof, &sample.statement, fri)
+    }
+
     pub(crate) fn over_layer_with(
         child: CircuitVerifier<Cfg>,
         sample: &RecursionProof,

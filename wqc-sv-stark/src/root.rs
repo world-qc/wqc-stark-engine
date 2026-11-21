@@ -108,6 +108,25 @@ pub(crate) fn verify_root_with(
     root: &RootProof,
     fri: FriParams,
 ) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
+    let verifiers: Vec<_> = leaves.iter().map(|(l, p)| (l.verifier(), *p)).collect();
+    verify_root_over(&verifiers, root, fri)
+}
+
+/// [`verified_root`] over each leaf's verifier ([`Leaf::verifier`]) rather than the leaves, so a
+/// caller can build one leaf at a time and drop it: the peak is one prepared leaf, not all of
+/// them. The same security note applies.
+pub fn verified_root_over(
+    leaves: &[(CircuitVerifier<Cfg>, &LeafProof)],
+    root: &RootProof,
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
+    verify_root_over(leaves, root, FriParams::RECURSION)
+}
+
+fn verify_root_over(
+    leaves: &[(CircuitVerifier<Cfg>, &LeafProof)],
+    root: &RootProof,
+    fri: FriParams,
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
     let expected = leaves.len().max(1) * 2 - 1;
     if leaves.is_empty() || root.proofs.len() != expected {
         return Err(Error::Verify(format!(
@@ -124,8 +143,8 @@ pub(crate) fn verify_root_with(
         Ok::<_, Error>(RecursionProof { proof, statement })
     };
     let mut level = Vec::with_capacity(leaves.len());
-    for (leaf, sample) in leaves {
-        let layer = Layer::over_leaf_with(leaf, sample, fri)?;
+    for (leaf_verifier, sample) in leaves {
+        let layer = Layer::over_leaf_verifier(leaf_verifier.clone(), sample, fri)?;
         let verifier = layer.verifier();
         let out = next(&verifier, sample.statement.clone())?;
         level.push((verifier, out));

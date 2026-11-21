@@ -191,6 +191,16 @@ samples), and a leaf from `|0…0⟩` keeps its own boundary table, so its forma
   7.6 s, proves in 39–40 s and its proof is 211 KB, against 7.5 s, 38–41 s and 206–211 KB for
   a leaf from `|0…0⟩`; peak memory varied from 6.4 to 9.4 GiB across runs of either.
 - **Roots.** A root over segment leaves wraps like any other (see the wrap's measurements).
+- **Cutting.** `segment::Segments` holds a terminal circuit cut at gate positions (indices
+  into its unitary gates as `wire::parse_circuit` reads them): each segment's start, leaf,
+  low-memory verifier and gate rows; only the last segment samples. The circuit travels whole
+  with the cuts and the segment's index, so every party derives the same segments.
+  `segment::plan_cuts` fills each segment up to a row limit and gives up past a segment count.
+- **Verifying a cut task.** The leaves JSON (`root_input`) takes `cuts` and `segment` per leaf.
+  It builds one leaf at a time and keeps only its verifier (`root::verified_root_over`), so the
+  peak is one prepared leaf, not all of them. Verifying costs about 3.4 µs per gate row (each
+  leaf is built again), 1.6 s per leaf for the root and 8 s for the wrap (n = 16, normal,
+  8-core Mac): four segments of 2^22 rows take about 70 s.
 
 ## Mid-circuit measurement
 
