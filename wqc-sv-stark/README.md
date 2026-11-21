@@ -174,7 +174,8 @@ read the final amplitudes from the boundary table, so one proof covers both.
 
 ## Segments
 
-A circuit too deep for one leaf ([`MAX_ROWS`]) is cut into segments, each a leaf. A segment
+A circuit too deep for one leaf ([`MAX_ROWS`]) is cut into segments; the protocol proves only
+the last one (the tail), from the state the head reaches, which every verifier computes. A segment
 leaf (`leaf::build_segment`) proves its gates from the state the earlier segments reach instead
 of `|0…0⟩`: that state is a preprocessed column (the initial value of each stored position,
 real and imaginary, in a separate boundary table `wqc/boundary_seg`), so it is part of the
@@ -191,6 +192,18 @@ samples), and a leaf from `|0…0⟩` keeps its own boundary table, so its forma
   7.6 s, proves in 39–40 s and its proof is 211 KB, against 7.5 s, 38–41 s and 206–211 KB for
   a leaf from `|0…0⟩`; peak memory varied from 6.4 to 9.4 GiB across runs of either.
 - **Roots.** A root over segment leaves wraps like any other (see the wrap's measurements).
+- **Cutting.** `segment::Segments` holds a terminal circuit cut at gate positions (indices
+  into its unitary gates as `wire::parse_circuit` reads them): each segment's start, leaf,
+  low-memory verifier and gate rows; only the last segment samples. The circuit travels whole
+  with the cuts and the segment's index, so every party derives the same segments.
+  `segment::plan_tail` finds the earliest cut whose tail fits a row limit. Only that tail is
+  proved: its start is computed by every verifier, so a proof of the head would show nothing
+  more. The head's depth is bounded by that computation, not by a leaf.
+- **Verifying a cut task.** The leaves JSON (`root_input`) takes `cuts` and `segment` per leaf.
+  It builds one leaf at a time and keeps only its verifier (`root::verified_root_over`), so the
+  peak is one prepared leaf, not all of them. Verifying a tail costs computing the head's
+  state, about 3.4 µs per gate row of the tail (its leaf is built again), 1.6 s for the root
+  and 8 s for the wrap (n = 16, normal, 8-core Mac).
 
 ## Mid-circuit measurement
 

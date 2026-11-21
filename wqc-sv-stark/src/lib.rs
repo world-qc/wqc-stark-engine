@@ -18,6 +18,7 @@ pub mod outputs;
 pub mod recursion;
 pub mod root;
 pub mod root_input;
+pub mod segment;
 pub mod snark;
 mod tables;
 pub(crate) mod verify_cfg;

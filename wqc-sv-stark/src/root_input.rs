@@ -10,10 +10,13 @@
 use base64::Engine as _;
 use serde::Deserialize;
 
+use p3_circuit_prover::batch_stark_prover::CircuitVerifier;
+
 use crate::born::Sampling;
 use crate::leaf::{self, Dispatch, Leaf, LeafProof};
+use crate::segment::Segments;
 use crate::wire::{parse_circuit, parse_counts, parse_leaf};
-use crate::{root, wrap, Error, SecurityLevel};
+use crate::{root, wrap, Cfg, Error, SecurityLevel};
 
 /// One leaf: its circuit, and the dispatch and result the orchestrator accepted
 /// (`shots == 0`: a `statevector_scalar` leaf, without seed and counts).
@@ -38,6 +41,12 @@ struct RootLeaf {
     /// The leaf proof (standard base64): it fixes the layer's shape, the expected statement
     /// is built from the fields above.
     proof: String,
+    /// A segment of a cut circuit (`crate::segment`): `circuit` is the whole circuit, cut at
+    /// `cuts`, and this leaf is segment `segment`. Empty `cuts`: an uncut circuit.
+    #[serde(default)]
+    cuts: Vec<usize>,
+    #[serde(default)]
+    segment: usize,
 }
 
 #[derive(Deserialize)]
@@ -50,8 +59,8 @@ struct RootInput {
 /// [`wrap::MAX_LEAVES`] is valid, it just cannot be wrapped.
 pub fn verify_root_json(json: &str, root_bytes: &[u8]) -> Result<(), Error> {
     let leaves = root_leaves(&parse(json)?)?;
-    let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
-    root::verify_root(&refs, &root::decode_root(root_bytes)?)
+    let refs: Vec<_> = leaves.iter().map(|(v, p)| (v.clone(), p)).collect();
+    root::verified_root_over(&refs, &root::decode_root(root_bytes)?).map(|_| ())
 }
 
 /// Verifies a task's v2 root, as [`verify_root_json`], then its wrap chain
@@ -72,9 +81,9 @@ pub fn verify_wrap_json(
         )));
     }
     let leaves = root_leaves(&input)?;
-    let refs: Vec<_> = leaves.iter().map(|(l, p)| (l, p)).collect();
+    let refs: Vec<_> = leaves.iter().map(|(v, p)| (v.clone(), p)).collect();
     let root = root::decode_root(root_bytes)?;
-    let (rv, rp) = root::verified_root(&refs, &root)?;
+    let (rv, rp) = root::verified_root_over(&refs, &root)?;
     let top = wrap::verify_wrap(rv, &rp, &wrap::decode_wrap(wrap_bytes)?)?;
     let digest = wrap::snark_public_inputs(&top);
     digest
@@ -87,8 +96,14 @@ fn parse(json: &str) -> Result<RootInput, Error> {
     serde_json::from_str(json).map_err(|e| Error::Verify(format!("leaves JSON: {e}")))
 }
 
-fn root_leaves(input: &RootInput) -> Result<Vec<(Leaf, LeafProof)>, Error> {
-    input.leaves.iter().map(root_leaf).collect()
+/// Each leaf's verifier and its proof with the expected statement. Leaves are built one at a
+/// time and dropped once their verifier is taken, so the peak is one prepared leaf.
+fn root_leaves(input: &RootInput) -> Result<Vec<(CircuitVerifier<Cfg>, LeafProof)>, Error> {
+    input
+        .leaves
+        .iter()
+        .map(|l| root_leaf(l).map(|(leaf, proof)| (leaf.verifier(), proof)))
+        .collect()
 }
 
 /// Prepares `l`'s leaf with its proof and the statement the orchestrator expects of it.
@@ -107,6 +122,20 @@ fn root_leaf(l: &RootLeaf) -> Result<(Leaf, LeafProof), Error> {
         node_id: &l.node_id,
         slice_id: &l.slice_id,
     };
+    if !l.cuts.is_empty() {
+        let segs = Segments::parse(&l.circuit, n, &l.cuts)?;
+        segs.check_tail(l.segment)?;
+        let sampling = segs.sampling(l.segment, l.classical_bit_count, l.shots)?;
+        let statement = match &sampling {
+            None => leaf::statement(d.context(), l.digest)?,
+            Some(sampling) => {
+                let counts = parse_counts(&l.counts, sampling)?;
+                leaf::expected_sampling_statement(sampling, &d, l.digest, l.sample_seed, &counts)?
+            }
+        };
+        let built = segs.leaf(level, l.segment, l.classical_bit_count, l.shots)?;
+        return Ok((built, LeafProof { proof, statement }));
+    }
     if l.shots == 0 {
         let c = parse_circuit(&l.circuit)?;
         if !c.measures.is_empty() {
@@ -138,6 +167,7 @@ fn root_leaf(l: &RootLeaf) -> Result<(Leaf, LeafProof), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p3_field::PrimeField64;
 
     /// Malformed input and too many leaves are refused before anything is built.
     #[test]
@@ -153,5 +183,62 @@ mod tests {
         assert!(err.to_string().contains("more than"), "{err}");
         let err = verify_root_json(&format!(r#"{{"leaves":[{leaf}]}}"#), b"").unwrap_err();
         assert!(err.to_string().contains("base64"), "{err}");
+    }
+
+    /// A cut task's one leaf, its tail, verifies through the leaves JSON, its root and its
+    /// wrap, against the tail's dispatch and counts; another cut, the head's index, a tail
+    /// without shots or another digest does not.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "release only")]
+    fn a_cut_task_verifies_through_the_json() {
+        use base64::Engine as _;
+        let circuit = r#"[{"type":"H","params":0},{"type":"CNOT","params":[0,1]},
+            {"type":"RY","params":[1,0.7]},{"type":"T","params":0},
+            {"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"MEASURE","params":{"qubit":1,"cbit":1}}]"#;
+        let level = SecurityLevel::Low;
+        let segs = Segments::parse(circuit, 2, &[2]).unwrap();
+        let d = Dispatch {
+            circuit_id: "c",
+            sub_task_id: "s1",
+            node_id: "n",
+            slice_id: "1",
+        };
+        let tail = segs.leaf(level, 1, 2, 64).unwrap();
+        let (p, counts) = tail.prove_sampling(d.context(), 7).unwrap();
+        let (root, _) = root::prove_root(&[(&tail, &p)]).unwrap();
+        let (rv, rp) = root::verified_root(&[(&tail, &p)], &root).unwrap();
+        let (wrap, top) = wrap::prove_wrap(rv, &rp).unwrap();
+        let (root, wrap) = (root::encode_root(&root), wrap::encode_wrap(&wrap));
+        let digest: Vec<u64> = p.statement[4..8]
+            .iter()
+            .map(|x| x.as_canonical_u64())
+            .collect();
+        let json = |cuts: &[usize], segment: usize, shots: u64, digest: &[u64]| {
+            serde_json::json!({"leaves": [{
+                "qubit_count": 2, "circuit": circuit, "classical_bit_count": 2, "shots": shots,
+                "security_level": "low", "circuit_id": "c", "sub_task_id": "s1",
+                "node_id": "n", "slice_id": "1", "digest": digest, "sample_seed": 7,
+                "counts": if shots > 0 { crate::wire::counts_json(&counts, 2) } else { String::new() },
+                "proof": base64::engine::general_purpose::STANDARD.encode(leaf::encode_proof(&p.proof)),
+                "cuts": cuts, "segment": segment,
+            }]})
+            .to_string()
+        };
+        let good = json(&[2], 1, 64, &digest);
+        verify_root_json(&good, &root).unwrap();
+        assert_eq!(
+            verify_wrap_json(&good, &root, &wrap).unwrap().to_vec(),
+            wrap::snark_public_inputs(&top)
+        );
+        let mut other = digest.clone();
+        other[0] ^= 1;
+        for (what, bad) in [
+            ("another cut", json(&[1], 1, 64, &digest)),
+            ("the head", json(&[2], 0, 0, &digest)),
+            ("a tail without shots", json(&[2], 1, 0, &digest)),
+            ("another digest", json(&[2], 1, 64, &other)),
+        ] {
+            assert!(verify_root_json(&bad, &root).is_err(), "{what}");
+        }
     }
 }

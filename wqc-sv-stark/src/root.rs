@@ -11,6 +11,10 @@
 //! against the verifier its children give before it is used.
 
 use p3_circuit_prover::batch_stark_prover::CircuitVerifier;
+
+/// The verifier [`verified_root_over`] and [`prove_root_over`] take per leaf
+/// ([`Leaf::verifier`]), re-exported so callers need not depend on the prover crate.
+pub use p3_circuit_prover::batch_stark_prover::CircuitVerifier as LeafCircuitVerifier;
 use serde::{Deserialize, Serialize};
 
 use crate::leaf::{decode_proof, encode_proof, verifier_peak_bytes, Leaf, LeafProof};
@@ -83,14 +87,30 @@ pub fn verify_peak_bytes(n: usize, rows: usize, shots: u64) -> u64 {
         .saturating_add(256 << 20)
 }
 
+/// [`prove_root`] over each leaf's verifier ([`Leaf::verifier`]) rather than the leaves, so a
+/// prover can build one leaf at a time and drop it, as [`verified_root_over`] does.
+pub fn prove_root_over(
+    leaves: &[(CircuitVerifier<Cfg>, &LeafProof)],
+) -> Result<(RootProof, Vec<F>), Error> {
+    prove_root_over_with(leaves, FriParams::RECURSION)
+}
+
 pub(crate) fn prove_root_with(
     leaves: &[(&Leaf, &LeafProof)],
     fri: FriParams,
 ) -> Result<(RootProof, Vec<F>), Error> {
+    let verifiers: Vec<_> = leaves.iter().map(|(l, p)| (l.verifier(), *p)).collect();
+    prove_root_over_with(&verifiers, fri)
+}
+
+fn prove_root_over_with(
+    leaves: &[(CircuitVerifier<Cfg>, &LeafProof)],
+    fri: FriParams,
+) -> Result<(RootProof, Vec<F>), Error> {
     let mut proofs = Vec::new();
     let mut level = Vec::with_capacity(leaves.len());
-    for (leaf, sample) in leaves {
-        let layer = Layer::over_leaf_with(leaf, sample, fri)?;
+    for (leaf_verifier, sample) in leaves {
+        let layer = Layer::over_leaf_verifier(leaf_verifier.clone(), sample, fri)?;
         let out = layer.prove(&sample.proof, &sample.statement)?;
         proofs.push(encode_proof(&out.proof));
         level.push((layer.verifier(), out));
@@ -105,6 +125,25 @@ pub(crate) fn prove_root_with(
 
 pub(crate) fn verify_root_with(
     leaves: &[(&Leaf, &LeafProof)],
+    root: &RootProof,
+    fri: FriParams,
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
+    let verifiers: Vec<_> = leaves.iter().map(|(l, p)| (l.verifier(), *p)).collect();
+    verify_root_over(&verifiers, root, fri)
+}
+
+/// [`verified_root`] over each leaf's verifier ([`Leaf::verifier`]) rather than the leaves, so a
+/// caller can build one leaf at a time and drop it: the peak is one prepared leaf, not all of
+/// them. The same security note applies.
+pub fn verified_root_over(
+    leaves: &[(CircuitVerifier<Cfg>, &LeafProof)],
+    root: &RootProof,
+) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
+    verify_root_over(leaves, root, FriParams::RECURSION)
+}
+
+fn verify_root_over(
+    leaves: &[(CircuitVerifier<Cfg>, &LeafProof)],
     root: &RootProof,
     fri: FriParams,
 ) -> Result<(CircuitVerifier<Cfg>, RecursionProof), Error> {
@@ -124,8 +163,8 @@ pub(crate) fn verify_root_with(
         Ok::<_, Error>(RecursionProof { proof, statement })
     };
     let mut level = Vec::with_capacity(leaves.len());
-    for (leaf, sample) in leaves {
-        let layer = Layer::over_leaf_with(leaf, sample, fri)?;
+    for (leaf_verifier, sample) in leaves {
+        let layer = Layer::over_leaf_verifier(leaf_verifier.clone(), sample, fri)?;
         let verifier = layer.verifier();
         let out = next(&verifier, sample.statement.clone())?;
         level.push((verifier, out));

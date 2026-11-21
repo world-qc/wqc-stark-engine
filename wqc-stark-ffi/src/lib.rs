@@ -1099,6 +1099,123 @@ pub unsafe extern "C" fn wqc_sv_leaf_new(
     result.unwrap_or(std::ptr::null_mut())
 }
 
+/// Where to cut a terminal circuit that is too deep for one v2 leaf (`wqc_sv_leaf_rows` over
+/// `max_rows`) so the gates after the cut fit one leaf (`wqc_sv_stark::segment::plan_tail`).
+/// Only that tail is proved; every verifier computes the state the gates before the cut reach.
+/// Writes the cut (an index into the circuit's unitary gates) to `out_cut` and the tail's gate
+/// rows to `out_rows`.
+///
+/// Returns `1` when a cut is written, `0` when the circuit fits one leaf without a cut or its
+/// last gate alone is over `max_rows` (nothing is written), `-1` on an invalid argument (bad
+/// JSON, a mid-circuit circuit, a qubit out of range, more than 16 qubits), or `-99` on panic.
+///
+/// # Safety
+///
+/// `circuit_json` must be a null-terminated string; `out_cut` and `out_rows` must each point to
+/// a writable `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_tail_cut(
+    qubit_count: u32,
+    circuit_json: *const c_char,
+    max_rows: u64,
+    out_cut: *mut u64,
+    out_rows: *mut u64,
+) -> i32 {
+    use wqc_sv_stark::segment::{plan_tail, Segments};
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if out_cut.is_null() || out_rows.is_null() {
+            eprintln!("[Rust FFI] sv_tail_cut: null output");
+            return -1;
+        }
+        let Some(json) = cstr(circuit_json) else {
+            eprintln!("[Rust FFI] sv_tail_cut: null or non-UTF-8 circuit");
+            return -1;
+        };
+        let n = qubit_count as usize;
+        let planned =
+            parse_circuit(json).and_then(|c| match plan_tail(n, &c.gates, max_rows as usize)? {
+                Some(cut) if cut > 0 => {
+                    let rows = Segments::parse(json, n, &[cut])?.rows(1)?;
+                    Ok(Some((cut, rows)))
+                }
+                _ => Ok(None),
+            });
+        match planned {
+            Ok(Some((cut, rows))) => {
+                // SAFETY: checked non-null above; the caller passes one `u64` each.
+                unsafe {
+                    *out_cut = cut as u64;
+                    *out_rows = rows as u64;
+                }
+                1
+            }
+            Ok(None) => 0,
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_tail_cut: {err}");
+                -1
+            }
+        }
+    }));
+    result.unwrap_or(-99)
+}
+
+/// [`wqc_sv_leaf_new`] for segment `segment` of `circuit_json` cut at `cuts` (`cuts_len`
+/// positions; `wqc_sv_tail_cut` gives one, and the tail is segment 1): its leaf starts from the
+/// state the earlier segments reach, which this computes. Only the last segment samples (`shots > 0`); a segment before it
+/// must have `shots == 0`. The handle verifies with `wqc_sv_verify_leaf` and
+/// `wqc_sv_verify_sampling_leaf` as any other. Returns null on any error.
+///
+/// # Safety
+///
+/// `circuit_json` and `security_level` must be null-terminated strings, and `cuts` must point
+/// to `cuts_len` `u64`s (it may be null when `cuts_len` is 0).
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_segment_leaf_new(
+    qubit_count: u32,
+    circuit_json: *const c_char,
+    cuts: *const u64,
+    cuts_len: usize,
+    segment: u32,
+    classical_bit_count: u32,
+    shots: u64,
+    security_level: *const c_char,
+) -> *mut WqcSvLeaf {
+    use wqc_sv_stark::segment::Segments;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let (Some(json), Some(level)) = (cstr(circuit_json), cstr(security_level)) else {
+            eprintln!("[Rust FFI] sv_segment_leaf_new: null or non-UTF-8 argument");
+            return std::ptr::null_mut();
+        };
+        let Some(level) = wqc_sv_stark::SecurityLevel::parse(level) else {
+            eprintln!("[Rust FFI] sv_segment_leaf_new: unknown security level {level:?}");
+            return std::ptr::null_mut();
+        };
+        if cuts_len > 0 && cuts.is_null() {
+            eprintln!("[Rust FFI] sv_segment_leaf_new: null cuts");
+            return std::ptr::null_mut();
+        }
+        let cuts: Vec<usize> = if cuts_len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: the caller passes `cuts_len` values.
+            unsafe { std::slice::from_raw_parts(cuts, cuts_len) }
+                .iter()
+                .map(|&c| c as usize)
+                .collect()
+        };
+        let built = Segments::parse(json, qubit_count as usize, &cuts)
+            .and_then(|segs| segs.verifier(level, segment as usize, classical_bit_count, shots));
+        match built {
+            Ok(verifier) => Box::into_raw(Box::new(WqcSvLeaf(verifier))),
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_segment_leaf_new: {err}");
+                std::ptr::null_mut()
+            }
+        }
+    }));
+    result.unwrap_or(std::ptr::null_mut())
+}
+
 /// Frees a verifier from [`wqc_sv_leaf_new`]. Null is a no-op.
 ///
 /// # Safety
@@ -1643,6 +1760,69 @@ mod sv_tests {
             assert_eq!(verify_sampling(v, seed, &long_key, &proof), 0);
             assert_eq!(verify(v, IDS[2], digest(), &proof), 0);
             wqc_sv_leaf_free(v);
+        }
+    }
+
+    /// The tail cut, and the tail's verifier from the whole circuit and its cut.
+    #[test]
+    fn sv_segments_through_ffi() {
+        use wqc_sv_stark::segment::Segments;
+        // Six RYs on 3 qubits, each one rounding step of 4 rows; the CNOTs fold.
+        let gates: Vec<String> = (0..6)
+            .flat_map(|k| {
+                [
+                    format!(r#"{{"type":"RY","params":[{},{}]}}"#, k % 3, 0.3 + k as f64),
+                    format!(r#"{{"type":"CNOT","params":[{},{}]}}"#, k % 3, (k + 1) % 3),
+                ]
+            })
+            .collect();
+        let json = format!("[{}]", gates.join(","));
+        let plan = |json: &str, max_rows: u64| {
+            let (mut cut, mut rows) = (u64::MAX, u64::MAX);
+            let r = unsafe { wqc_sv_tail_cut(3, c(json).as_ptr(), max_rows, &mut cut, &mut rows) };
+            (r, cut, rows)
+        };
+        let (r, cut, rows) = plan(&json, 8);
+        assert_eq!((r, rows), (1, 8));
+        assert_eq!(plan(&json, 24).0, 0, "fits one leaf");
+        let ends_in_ry = format!("[{}]", gates[..11].join(","));
+        assert_eq!(plan(&ends_in_ry, 2).0, 0, "the last gate is over the limit");
+        let mid = r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"X","params":1}]"#;
+        assert_eq!(plan(mid, 8).0, -1);
+
+        let segs = Segments::parse(&json, 3, &[cut as usize]).unwrap();
+        let leaf = segs
+            .leaf(wqc_sv_stark::SecurityLevel::Low, 1, 0, 0)
+            .unwrap();
+        let p = leaf.prove(dispatch().context()).unwrap();
+        let start = segs.start(1).unwrap();
+        let digest = wqc_sv_stark::digest::terminal_digest(
+            &wqc_sv_stark::exec::execute_from(3, &segs.segments[1], Some(&start)).1,
+        );
+        let proof = encode_proof(&p.proof);
+        unsafe {
+            let level = c("low");
+            let new = |segment: u32| {
+                wqc_sv_segment_leaf_new(
+                    3,
+                    c(&json).as_ptr(),
+                    &cut,
+                    1,
+                    segment,
+                    0,
+                    0,
+                    level.as_ptr(),
+                )
+            };
+            let v = new(1);
+            assert!(!v.is_null());
+            assert_eq!(verify(v, IDS[2], digest, &proof), 1);
+            wqc_sv_leaf_free(v);
+            // The head's verifier, or a segment past the tail, does not take it.
+            let v0 = new(0);
+            assert_eq!(verify(v0, IDS[2], digest, &proof), 0);
+            wqc_sv_leaf_free(v0);
+            assert!(new(2).is_null());
         }
     }
 
