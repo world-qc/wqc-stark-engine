@@ -2697,7 +2697,10 @@ fn monomial_state_matches_execution() {
     }
     let rounds = parse_circuit(r#"[{"type":"H","params":0}]"#).unwrap().gates;
     assert_eq!(monomial_state(3, &rounds).unwrap(), None);
-    assert!(monomial_state(17, &[]).is_err(), "over MAX_QUBITS");
+    assert!(
+        monomial_state(MAX_QUBITS + 1, &[]).is_err(),
+        "over MAX_QUBITS"
+    );
 }
 
 /// The start of a segment, computed without keeping the head's rows, is the state the head's
@@ -2987,4 +2990,37 @@ fn an_older_sampling_leaf_proof_still_verifies() {
 #[should_panic(expected = "amplitudes")]
 fn execute_from_panics_on_a_short_initial_state() {
     execute_from(2, &[Gate::h(0)], Some(&[(S, 0); 3]));
+}
+
+/// Above n = 16 a node budgets 3 gate rows per extra basis state; at or below it, the rows.
+#[test]
+fn effective_rows_count_states_above_sixteen_qubits() {
+    use crate::leaf::effective_rows;
+    assert_eq!(effective_rows(8, 1024), 1024);
+    assert_eq!(effective_rows(16, 1 << 22), 1 << 22);
+    assert_eq!(effective_rows(17, 1 << 16), (1 << 16) + 3 * (1 << 16));
+    assert_eq!(
+        effective_rows(20, 1 << 19),
+        (1 << 19) + 3 * ((1 << 20) - (1 << 16))
+    );
+    assert_eq!(effective_rows(64, 0), u64::MAX);
+}
+
+/// A leaf over 16 qubits proves and verifies like any other: one rounding step on 17 qubits.
+#[test]
+fn a_leaf_on_seventeen_qubits() {
+    use crate::leaf::{gate_rows, Dispatch};
+    let n = 17;
+    let gates = vec![Gate::h(16), Gate::cnot(16, 0)];
+    assert_eq!(gate_rows(n, &gates).unwrap(), 1 << 16);
+    let leaf = build(SecurityLevel::Low, n, gates).unwrap();
+    let d = Dispatch {
+        circuit_id: "c",
+        sub_task_id: "s",
+        node_id: "n",
+        slice_id: "0",
+    };
+    let proof = leaf.prove(d.context()).unwrap();
+    let digest: [u64; 4] = std::array::from_fn(|i| proof.statement[4 + i].as_canonical_u64());
+    leaf.verify_dispatch(&proof.proof, &d, digest).unwrap();
 }

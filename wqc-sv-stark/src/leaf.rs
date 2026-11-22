@@ -427,6 +427,18 @@ pub fn verifier_peak_bytes(n: usize, rows: usize, shots: u64) -> u64 {
         .saturating_add(16 << 20)
 }
 
+/// Gate rows a node budgets for a leaf of `rows` gate rows on `n` qubits: `rows`, plus 3 per
+/// basis state above the 2^16 of n = 16. A prover's memory is about 4.7 KB per gate row plus
+/// 6.0 KB per basis state (11.5 KB with sampling), so a basis state weighs 1.3 to 2.5 gate rows;
+/// up to n = 16 the states fit the fixed part of a node's budget, as they always have.
+/// Measured on an 8-core Mac (live heap, normal tier): 8.7 GiB at n = 20 and 2^19 rows, 24.3
+/// GiB at 2^22 rows, 29.7 GiB with 1024 shots, against 18.8 GiB at n = 16 and 2^22 rows.
+/// Schedulers compare this, not `rows`, with a node's `sv_max_rows`. Saturates.
+pub fn effective_rows(n: usize, rows: usize) -> u64 {
+    let states = 1u64.checked_shl(n as u32).unwrap_or(u64::MAX);
+    (rows as u64).saturating_add(3u64.saturating_mul(states.saturating_sub(1 << 16)))
+}
+
 /// Domain tag of [`Dispatch::context`]. Its `V1` versions the context encoding only; it is
 /// unrelated to the leaf format's version.
 pub const CONTEXT_TAG: &[u8] = b"WQC_SV_CTX_V1";
