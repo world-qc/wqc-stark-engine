@@ -35,8 +35,10 @@ pub type F = Goldilocks;
 
 /// Largest supported qubit count. The gate tables have `2^(n−1)` rows per rounding step (runs
 /// of single-qubit gates fuse into one gate, and monomial gates fold away); at n = 16 and 64
-/// rounding steps a leaf takes about 33 s and 11 GB to prove at any [`SecurityLevel`].
-pub const MAX_QUBITS: usize = 16;
+/// rounding steps a leaf takes about 33 s and 11 GB to prove at any [`SecurityLevel`]. The
+/// boundary, digest and sampling tables have `2^n` rows, which a prover's memory feels above
+/// n = 16 ([`leaf::effective_rows`]): at n = 20 one rounding step takes about 9 GB.
+pub const MAX_QUBITS: usize = 20;
 
 /// Largest number of gate rows (rounding steps × `2^(n−1)`, see [`leaf::gate_rows`]) a leaf
 /// may have: 128 rounding steps at n = 16, about 20 GB to prove. The security estimates in

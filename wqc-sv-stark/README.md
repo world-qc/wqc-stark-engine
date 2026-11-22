@@ -62,7 +62,14 @@ circuits ship behind bit 6 (see [Mid-circuit measurement](#mid-circuit-measureme
 
 ## Limits
 
-- `1 ≤ n ≤ 16` qubits (`MAX_QUBITS`).
+- `1 ≤ n ≤ 20` qubits (`MAX_QUBITS`). The boundary, digest and sampling tables have `2^n` rows,
+  so above n = 16 the states, not only the gate rows, set a prover's memory: about 4.7 KB per
+  gate row plus 6.0 KB per basis state (11.5 KB with sampling). Measured (live heap, normal,
+  8-core Mac): n = 20 proves one rounding step (2^19 rows) in 51 s and 8.7 GiB, and 2^22 rows
+  in 203 s and 24.3 GiB (283 s and 29.7 GiB with 1024 shots), against 18.8 GiB at n = 16 and
+  2^22 rows; the proof stays about 300 KB and verifies in 10–32 ms. A node therefore budgets
+  `leaf::effective_rows(n, rows)`, the rows plus 3 per basis state above 2^16, against what it
+  can prove; up to n = 16 that is the rows.
 - At most `2^22` gate rows (`MAX_ROWS`): rounding steps × `2^(n−1)`, so 128 rounding steps at
   n = 16. `leaf::gate_rows(n, gates)` counts them without building the leaf (it is the work
   `W` a scheduler compares with what a node can prove); `build` rejects a circuit over the
@@ -391,7 +398,7 @@ and delegates everything verification uses to the leaf config's PCS. A test chec
 commitment against the leaf config's, and verifiers built either way accept the same proofs.
 At n = 16 the peak falls from about 0.94 KB to 0.37 KB per gate row (2^22 rows: 3.7 to 1.45
 GB); what remains is the framework's own copies of the preprocessed columns. The orchestrator
-reaches it through `wqc-stark-ffi` (`wqc_sv_leaf_rows`, `wqc_sv_max_rows`, `wqc_sv_leaf_new` /
+reaches it through `wqc-stark-ffi` (`wqc_sv_leaf_rows`, `wqc_sv_max_rows`, `wqc_sv_leaf_qubits`, `wqc_sv_effective_rows`, `wqc_sv_leaf_new` /
 `wqc_sv_leaf_free`, `wqc_sv_verify_leaf`, `wqc_sv_verify_sampling_leaf`).
 
 ### A task's root

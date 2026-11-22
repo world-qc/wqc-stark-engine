@@ -766,7 +766,7 @@ fn cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 ///
 /// Returns the row count (≥ 0), `-1` if the circuit has no v2 leaf (bad JSON, a gate on a
 /// measured qubit before its RESET, an IF of CCNOT or of a non-unitary gate, a gate or MEASURE
-/// qubit outside `qubit_count`, more than 16 qubits with ancillas), or `-99` on panic.
+/// qubit outside `qubit_count`, more than 20 qubits with ancillas), or `-99` on panic.
 ///
 /// # Safety
 ///
@@ -814,7 +814,7 @@ pub unsafe extern "C" fn wqc_sv_leaf_rows(qubit_count: u32, circuit_json: *const
 ///   number of observables (it may be null when `out_count` is 0).
 ///
 /// Returns `1` with the outputs written, `0` if a gate takes a rounding step, `-1` if an
-/// argument is invalid (bad JSON, mid-circuit, a qubit out of range, more than 16 qubits, an
+/// argument is invalid (bad JSON, mid-circuit, a qubit out of range, more than 20 qubits, an
 /// observable that does not fit), or `-99` on panic. On anything but `1` nothing is written.
 ///
 /// # Safety
@@ -929,6 +929,47 @@ pub extern "C" fn wqc_sv_verifier_peak_bytes(qubit_count: u32, rows: u64, shots:
 #[no_mangle]
 pub extern "C" fn wqc_sv_max_rows() -> i64 {
     wqc_sv_stark::MAX_ROWS as i64
+}
+
+/// The gate rows a node budgets for a v2 leaf of `rows` gate rows on `qubit_count` qubits
+/// (`leaf::effective_rows`): `rows`, plus 3 per basis state above 2^16. A scheduler compares
+/// it, not `rows`, with a node's `sv_max_rows`. Saturates at `u64::MAX`.
+#[no_mangle]
+pub extern "C" fn wqc_sv_effective_rows(qubit_count: u32, rows: u64) -> u64 {
+    wqc_sv_stark::leaf::effective_rows(qubit_count as usize, rows as usize)
+}
+
+/// The qubits of the v2 leaf `circuit_json` on `qubit_count` qubits becomes, as
+/// `wqc_sv_leaf_rows` reads it: the register plus one ancilla per RESET that needs one. This,
+/// not `qubit_count`, is the `n` of `wqc_sv_effective_rows`.
+///
+/// Returns the qubit count, `-1` if the circuit has no v2 leaf (as for `wqc_sv_leaf_rows`), or
+/// `-99` on panic.
+///
+/// # Safety
+///
+/// `circuit_json` must be a null-terminated string valid for the duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn wqc_sv_leaf_qubits(qubit_count: u32, circuit_json: *const c_char) -> i64 {
+    let result = catch_unwind(|| {
+        let Some(json) = cstr(circuit_json) else {
+            eprintln!("[Rust FFI] sv_leaf_qubits: null or non-UTF-8 circuit");
+            return -1;
+        };
+        let n = qubit_count as usize;
+        let qubits = parse_leaf(json, n).and_then(|c| {
+            gate_rows(c.qubits, &c.gates)?;
+            Ok(c.qubits)
+        });
+        match qubits {
+            Ok(q) => q as i64,
+            Err(err) => {
+                eprintln!("[Rust FFI] sv_leaf_qubits: {err}");
+                -1
+            }
+        }
+    });
+    result.unwrap_or(-99)
 }
 
 /// The results of a `statevector_scalar` or `expectation` v2 leaf from the final state the
@@ -1107,7 +1148,7 @@ pub unsafe extern "C" fn wqc_sv_leaf_new(
 ///
 /// Returns `1` when a cut is written, `0` when the circuit fits one leaf without a cut or its
 /// last gate alone is over `max_rows` (nothing is written), `-1` on an invalid argument (bad
-/// JSON, a mid-circuit circuit, a qubit out of range, more than 16 qubits), or `-99` on panic.
+/// JSON, a mid-circuit circuit, a qubit out of range, more than 20 qubits), or `-99` on panic.
 ///
 /// # Safety
 ///
@@ -1615,7 +1656,7 @@ mod sv_tests {
             assert_eq!(call(mid, 2), -1);
             let far = r#"[{"type":"MEASURE","params":{"qubit":9,"cbit":0}}]"#;
             assert_eq!(call(far, 2), -1);
-            assert_eq!(call("[]", 17), -1);
+            assert_eq!(call("[]", 21), -1);
             assert_eq!(call("not json", 2), -1);
             assert_eq!(
                 wqc_sv_monomial_outputs(
@@ -1641,7 +1682,7 @@ mod sv_tests {
             assert_eq!(wqc_sv_leaf_rows(16, c(BELL).as_ptr()), 2 << 15);
             assert_eq!(wqc_sv_leaf_rows(2, c(BELL_MEASURED).as_ptr()), 4);
             assert_eq!(wqc_sv_leaf_rows(1, c(BELL).as_ptr()), -1);
-            assert_eq!(wqc_sv_leaf_rows(17, c("[]").as_ptr()), -1);
+            assert_eq!(wqc_sv_leaf_rows(21, c("[]").as_ptr()), -1);
             assert_eq!(wqc_sv_leaf_rows(2, c("not json").as_ptr()), -1);
             assert_eq!(wqc_sv_leaf_rows(2, std::ptr::null()), -1);
             let far = r#"[{"type":"MEASURE","params":{"qubit":9,"cbit":0}}]"#;
@@ -1656,13 +1697,23 @@ mod sv_tests {
             let after =
                 r#"[{"type":"MEASURE","params":{"qubit":0,"cbit":0}},{"type":"H","params":0}]"#;
             assert_eq!(wqc_sv_leaf_rows(2, c(after).as_ptr()), -1);
-            // 16 qubits are the limit; a RESET that takes an ancilla makes 17.
+            // 20 qubits are the limit; a RESET that takes an ancilla makes 21.
             let full = r#"[{"type":"H","params":0},{"type":"RESET","params":0},
                 {"type":"H","params":0},{"type":"MEASURE","params":{"qubit":0,"cbit":0}}]"#;
-            assert_eq!(wqc_sv_leaf_rows(15, c(full).as_ptr()), 2 << 15);
-            assert_eq!(wqc_sv_leaf_rows(16, c(full).as_ptr()), -1);
+            assert_eq!(wqc_sv_leaf_rows(19, c(full).as_ptr()), 2 << 19);
+            assert_eq!(wqc_sv_leaf_rows(20, c(full).as_ptr()), -1);
+            assert_eq!(wqc_sv_leaf_qubits(19, c(full).as_ptr()), 20);
+            assert_eq!(wqc_sv_leaf_qubits(20, c(full).as_ptr()), -1);
+            assert_eq!(wqc_sv_leaf_qubits(2, c(mid).as_ptr()), 3);
+            assert_eq!(wqc_sv_leaf_qubits(2, c(BELL).as_ptr()), 2);
+            assert_eq!(wqc_sv_leaf_qubits(2, std::ptr::null()), -1);
         }
         assert_eq!(wqc_sv_max_rows(), 1 << 22);
+        assert_eq!(wqc_sv_effective_rows(16, 1 << 22), 1 << 22);
+        assert_eq!(
+            wqc_sv_effective_rows(20, 1 << 19),
+            (1 << 19) + 3 * ((1 << 20) - (1 << 16))
+        );
         // Above the measured peaks: 1.45 GB at 2^22 rows on 16 qubits, 0.75 GB at 2^21 with
         // 2^16 shots, 3.2 MB at n = 8.
         assert!(wqc_sv_verifier_peak_bytes(16, 1 << 22, 0) > 1_454 << 20);
